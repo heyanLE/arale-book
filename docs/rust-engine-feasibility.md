@@ -219,3 +219,57 @@ arale-ocr-cli        crate（bin）：说同一套 NDJSON 协议（--pages-file 
 剩下的全部风险集中在检测器那 500 行 OpenCV 后处理。
 所以「做成 Rust 库」是一个**工作量可控但收益只在体积/依赖**的项目，建议按 §5 分两步走——
 第一步（删 UniDic）立刻见效，第二步（Rust）值得做但不紧急。
+
+---
+
+## 7. 跨平台兼容性：Rust 会不会让 mac 和 win **都真的能用**？
+
+现状（诚实版）：
+
+| 平台 | 归档 | 验证程度 |
+|---|---|---|
+| macOS arm64 | 741 MiB | **本机真跑过**：整本 171 页 / 2232 块，装进应用走完队列 |
+| Windows x64 | 745 MiB | **交叉安装出来的**（在 macOS 上 `pip install --platform win_amd64`），**从没在 Windows 上运行过**；只做过静态核对 |
+
+刚补了一次**依赖体检**（扫包里 204 个 PE 文件的导入表，工具落在引擎仓库
+`tools/audit-win-deps.mjs`，也已接进 `build.mjs` 的 win32 收尾）：
+
+- ✔ 没有「既不在包里、也不是系统 DLL」的**硬缺失**；
+- ⚠ 但有 6 种「**装了才有**」的系统依赖，其中两条是真风险：
+  - `vcruntime140_threads.dll`（`torch_cpu.dll` 要）与 `msvcp140_atomic_wait.dll`（`torch_python.dll` 要）
+    ——**包里没有**，embedding CPython 只带 `vcruntime140.dll` / `vcruntime140_1.dll`。
+    没装 **VC++ 2015–2022 运行库**的机器上，torch 直接加载失败 → 整个引擎「不可用」；
+  - `mfplat.dll` / `mf.dll` / `mfreadwrite.dll`（`cv2.pyd` 要）——**Windows N / KN 版**（无媒体功能版）默认没有。
+
+### Rust 会改变什么
+
+| 现在（Python 包） | 换成 Rust |
+|---|---|
+| 交叉安装出来的 wheel 树：204 个 PE 文件 / 30 个自带 DLL | **1 个 exe** + 1 个 ONNX Runtime 库（或静态链接进去） |
+| CPython + `python312._pth` + pip 交叉安装 + cp312/win_amd64 ABI 匹配 | 没有 Python、没有 pip、没有 wheel ABI |
+| VC++ 运行库靠系统（上面两个 DLL 现在就缺） | Rust 默认静态链接 CRT → **不依赖 VC++ 运行库** |
+| `cv2.pyd` 静态导入 Media Foundation（N 版挂） | 不用 OpenCV，后处理自己实现 → 没有 MF 依赖 |
+| 平台差异散在 100+ 个二进制里 | 平台差异只剩「ONNX Runtime 的哪个二进制」+「目标三元组」 |
+
+**结论：是**。Rust 把「Windows 能不能用」从「靠祈祷」变成「靠构造」——它消掉的是**一整类依赖问题**
+（CRT、OpenCV、Python ABI、`.pth`、wheel 平台标签）。
+
+### 但 Rust 不解决这三件事
+
+1. **仍然必须在 Windows 上跑一次才算验证。** Rust 消除的是依赖风险，不是验证的必要性。
+   所以无论走不走 Rust，**一个 Windows CI 任务（windows-2022 runner：构建 + 2 页 OCR 冒烟）
+   都是必须的**——这是把「未验证」变成「已验证」最便宜的一步。
+2. **ONNX Runtime 每个平台一个二进制**（win-x64 / mac-arm64 / linux-x64）仍要各自打包；
+   签名与 SmartScreen 与 Rust 无关。
+3. **数值一致性要在两个平台各自验收**：ORT 的算子实现跨平台不保证逐位一致，
+   §4 的 golden 语料得在 Windows 上再跑一遍。
+
+### 比 Rust 便宜的中间路线（今天就能让 Windows 真能用）
+
+1. **在一个 Windows 机器或 CI 上原生构建归档**（`pip install torch --index-url https://download.pytorch.org/whl/cpu`，
+   不做交叉安装）→ 立刻消掉「交叉装出来的东西从没跑过」这个**最大的**风险。
+   `build.mjs --target win32-x64` 的装配逻辑可以复用，只差一个「原生安装」开关。
+2. **把 VC++ 运行库补进归档**（app-local 部署这几个 DLL，numpy/shapely 的 wheel 本来就是这么做的——
+   它们自带 `msvcp140-<hash>.dll` 私有副本），或让 NSIS 安装器静默装 `vc_redist.x64.exe`。
+   补完之后 `node build.mjs --audit <staging>` 上那两条会消失。
+3. README 写清 **N/KN 版 Windows 需要 Media Feature Pack**（或者接受这台机器上 cv2 用不了）。
