@@ -91,6 +91,9 @@ recognize(job, sink) → OcrPageOut[]      // job = 这本书的页清单 + 方�
 > 这两个归档已经能自动产出：`node vendor/ocr-manga-anki/build.mjs --target all`
 > （macOS arm64 + Windows x64，各自自带解释器与依赖，装完零外部依赖）。
 >
+> 分发关系（谁在哪个仓库、什么要上传、引擎与应用各认什么契约）见
+> [`docs/distribution.md`](docs/distribution.md)。
+>
 > 这条路已经**实测过一遍**：两个模型都能导出 ONNX（编码器/解码器/检测器 int8 合计 170 MB，
 > 数值差异 ~1e-5），分词器实测等价于「NFKC + 逐字查表」（真实语料 2241 条零差异，**不需要 MeCab
 > 与 248 MiB 的 UniDic**），剩下的风险集中在检测器那 500 行 OpenCV 后处理。全部数据、验收标准
