@@ -1543,8 +1543,13 @@ try {
     const popup = document.querySelector('.dict-popup');
     const word = popup?.querySelector('.wordcard-word')?.textContent
       ?? popup?.querySelector('.wordcard-word-input')?.value ?? null;
+    // ★ 松手之后、卡片还开着的时候高亮必须**还在**（用户要求：卡片关掉前一直保留）。
+    const afterUp = highlighted();
     document.querySelectorAll('.dict-popup .icon-btn[title^="关闭"]').forEach((x) => x.click());
-    return { during, word, blocks: blocks.length, pair: [from, to] };
+    await wait(250);
+    // 卡片关掉 → 高亮清干净，不能在页面上留下一块"再也点不掉"的底色。
+    const afterClose = highlighted();
+    return { during, afterUp, afterClose, word, blocks: blocks.length, pair: [from, to] };
   })()`);
   check(
     '★ 跨行划词：拖动跨到另一个方块，两块同时高亮（旧实现锁死在按下那一块上）',
@@ -1555,6 +1560,30 @@ try {
     '★ 跨行划词：取到的原文不含换行符（换行会被拼成一段连续的话）',
     typeof crossBlock.word === 'string' && crossBlock.word.length > 0 && !/[\r\n]/.test(crossBlock.word),
     JSON.stringify(crossBlock),
+  );
+  check(
+    '★ 划词高亮留到词卡关闭为止（松手后仍在，关卡片才清）',
+    crossBlock.afterUp >= 2 && crossBlock.afterClose === 0,
+    `松手后=${crossBlock.afterUp} 关卡片后=${crossBlock.afterClose}`,
+  );
+
+  // hover 只描边、不填底色：底色会和"已选中的划词高亮"撞在一起，而且会压住画面上的字。
+  // 直接加类读计算样式（React 的 mouseenter 走的也是这个类），不依赖合成事件。
+  const hoverStyle = await client.evaluate(`(() => {
+    const el = document.querySelector('.comic-text-block');
+    if (!el) return { skipped: 'no-block' };
+    el.classList.add('is-hovered');
+    const style = getComputedStyle(el);
+    const bg = style.backgroundColor;
+    const border = style.borderTopColor;
+    el.classList.remove('is-hovered');
+    const fill = bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent';
+    return { bg, border, fill, borderVisible: border !== 'rgba(0, 0, 0, 0)' };
+  })()`);
+  check(
+    '★ 文字层 hover 只有描边、没有底色',
+    hoverStyle.skipped === undefined && hoverStyle.fill === true && hoverStyle.borderVisible === true,
+    JSON.stringify(hoverStyle),
   );
 
   // 上一轮的拖动把弹窗关掉了，重新点一张出来继续下面的用例。

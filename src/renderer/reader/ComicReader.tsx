@@ -171,6 +171,13 @@ export function ComicReader({
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [textVersion, setTextVersion] = useState(0);
   const [textLayerOn, setTextLayerOn] = useState(true);
+  /**
+   * 上一次**划词**开出来的那张卡的 id。
+   *
+   * 只用来决定「页面上的划词高亮该不该继续留着」（见 `holdSelection`）。点击查词
+   * 不写它：点击本来就没有选区可留。
+   */
+  const [heldSelectionPopupId, setHeldSelectionPopupId] = useState<string | null>(null);
   /** 词卡弹窗 + 词卡夹的状态（点击、划词、pin、保存、LLM 分析都走它）。 */
 
   const cacheRef = useRef(new Map<number, PageText>());
@@ -556,17 +563,31 @@ export function ComicReader({
     async (payload: ComicTextSelection) => {
       const result = await call('查词', () => api.dict.lookup(payload.context, payload.start));
       if (!result) return;
-      wordCards.openPopup({
-        word: payload.text,
-        context: payload.context,
-        offset: payload.start,
-        length: payload.end - payload.start,
-        anchor: payload.anchor,
-        result,
-      });
+      // 记下这次划词开出来的卡片：**卡片还开着**就是页面高亮该留着的全部理由。
+      setHeldSelectionPopupId(
+        wordCards.openPopup({
+          word: payload.text,
+          context: payload.context,
+          offset: payload.start,
+          length: payload.end - payload.start,
+          anchor: payload.anchor,
+          result,
+        }),
+      );
     },
     [wordCards],
   );
+
+  /**
+   * 划词高亮是否继续留在页面上：那次划词的卡片还开着。
+   *
+   * 为什么由阅读器来判：高亮画在文字层，但「卡片关了没有」只有这里知道
+   * （卡片可能被关闭按钮、Esc、点击别处、换页四种路子关掉，全都在 hook 里改
+   * `popups`）。所以这里只把结论传下去，文字层不自己去猜。
+   */
+  const holdSelection =
+    heldSelectionPopupId !== null &&
+    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId);
 
   // ------------------------------------------------------------------
   // 键盘 / 菜单命令
@@ -764,6 +785,8 @@ export function ComicReader({
                     onSelect={(payload) => void handleSelect(payload)}
                     // 只在真的按着空格时让路——否则拖动永远是划词。
                     deferDragToPan={canPan && spaceHeld}
+                    // 划词后高亮留到卡片被关掉为止（点别处/换页/重划都会让位）。
+                    holdSelection={holdSelection}
                   />
                 )}
               </div>

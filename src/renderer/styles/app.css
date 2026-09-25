@@ -1601,10 +1601,18 @@ button:disabled {
   cursor: text;
 }
 
+/*
+ * 鼠标悬停：**只描边、不填底色**。
+ *
+ * 底色会和「已选中的划词高亮」撞车——两者都是盖在画面上的色块，用户分不清
+ * 「鼠标停在这儿」和「我选中了这几个字」。现在分工明确：
+ * hover = 一圈描边（提示这里可点可划），选区 = 文字底色块（表示已选中）。
+ * 而且 OCR 框正好套在文字上，半透明底色会把画面里那行字压灰。
+ */
 .comic-text-block:hover,
 .comic-text-block.is-hovered {
   border-color: var(--accent);
-  background: var(--accent-soft);
+  background: transparent;
 }
 
 /* --------------------------------------------------------------------------
@@ -2740,9 +2748,12 @@ button:disabled {
   /*
    * 就是「文字底色」：纯背景色、没有边框、没有描边 —— 和输入框里的选区同一个观感。
    *
-   * 刻意**不用**边框/圆角：hover 用的是「细边框 + 极淡底色」，用同一套视觉会让
+   * 刻意**不用**边框/圆角：hover 用的是「细边框、没有底色」，用同一套视觉会让
    * 「鼠标停在这」和「我选中了这几个字」分不清。这里靠**实色块**区分：
    * hover = 描边（提示可交互），选区 = 底色（表示已选中）。
+   *
+   * 划词松手后这块**不会立刻消失**：词卡还开着就一直画着（关掉卡片才清），
+   * 状态由 `ComicTextLayer` 的 `held` + 阅读器传来的 `holdSelection` 决定。
    */
   background: color-mix(in srgb, var(--accent) 42%, transparent);
   border: 0;

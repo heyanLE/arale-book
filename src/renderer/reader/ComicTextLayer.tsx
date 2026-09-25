@@ -18,7 +18,7 @@
  * 这也正是原来跨行划不动的原因（`start.block !== block` 直接 return）。
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
 import type { Box, PageText, TextBlock } from '@shared/types';
 import { boundaryAt, charIndexAt, charRangeRects } from '@core/comic/text-geometry';
@@ -84,6 +84,14 @@ export interface ComicTextLayerProps {
    * 用户无法建立预期（实测反馈就是「拖不动」）。
    */
   deferDragToPan: boolean;
+  /**
+   * 划词松手后，高亮是否**继续留在页面上**。
+   *
+   * 上层按「那次划词开出来的词卡还开着吗」来给这个值：开着就是 true。
+   * 松手即消失的话，用户看到的是「我刚框住的字闪了一下就没了，卡片飘在别处」——
+   * 找不到自己划的是哪一段。所以这里把区间留住，直到卡片被关掉。
+   */
+  holdSelection: boolean;
 }
 
 /** 拖动超过这个像素数才算划词，否则当点击。和阅读器的平移阈值同一个量级。 */
@@ -107,6 +115,7 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
     onLookup,
     onSelect,
     deferDragToPan,
+    holdSelection,
   } = props;
   const layerRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState<number | null>(null);
@@ -118,6 +127,28 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
    * 免得出现「状态里的区间」和「几何算出来的区间」两套真相。
    */
   const [drag, setDrag] = useState<{ anchor: SelectionPoint; focus: SelectionPoint } | null>(null);
+  /**
+   * 松手后**留住**的划词区间（词卡关掉前一直画着）。
+   *
+   * 连同 `text` 一起存：换页/换图后 `text` 是**另一个对象**，旧区间直接作废，
+   * 不会拿着上一页的方块下标去画下一页（固定住的词卡会跨页留着，这条路走得到）。
+   */
+  const [held, setHeld] = useState<{
+    text: PageText;
+    ranges: Map<number, SelectionRange>;
+  } | null>(null);
+  const holdRef = useRef(holdSelection);
+  /**
+   * 只在 `holdSelection` **由真变假**时清高亮（也就是词卡被关掉那一刻）。
+   *
+   * 不能写成 `if (!holdSelection) setHeld(null)`：初次挂载、以及「松手 → 词卡还在查」
+   * 这段时间 `holdSelection` 都还是 false，那样会把刚划出来的高亮立刻清掉——正是
+   * 要修的那个「高亮留不住」。
+   */
+  useEffect(() => {
+    if (holdRef.current && !holdSelection) setHeld(null);
+    holdRef.current = holdSelection;
+  }, [holdSelection]);
   const startRef = useRef<{
     index: number;
     boundary: number;
@@ -143,12 +174,16 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
    * 真相（`selectionRanges`），渲染与松手时的取词走同一个函数，不会出现「高亮画了
    * 三块、取词只取了一块」这种不一致。
    */
-  const dragRanges = useMemo(() => {
-    if (drag === null || text === null) return new Map<number, SelectionRange>();
-    return new Map(
-      selectionRanges(text.blocks, drag.anchor, drag.focus).map((range) => [range.index, range]),
-    );
-  }, [drag, text]);
+  const activeRanges = useMemo(() => {
+    // 正在拖 → 用拖动中的实时区间（它永远比留住的那份新）。
+    if (drag !== null && text !== null) {
+      return new Map(
+        selectionRanges(text.blocks, drag.anchor, drag.focus).map((range) => [range.index, range]),
+      );
+    }
+    if (held !== null && held.text === text) return held.ranges;
+    return new Map<number, SelectionRange>();
+  }, [drag, held, text]);
 
   /** 指针位置 → 原图像素坐标。 */
   const toImage = useCallback(
@@ -205,6 +240,8 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
       startRef.current = null;
       movedRef.current = false;
       lastFocusRef.current = null;
+      // 新的交互开始 → 上一次留住的高亮让位（点别处、重新划都算）。
+      setHeld(null);
       // 中键/其它键 → 交给画布去移动画面（不 stopPropagation）。
       if (onSelect === undefined || event.button !== 0) return;
       // 用户按着空格（明确想移动画面）→ 同样让路。
@@ -272,6 +309,10 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
         end: selection.end,
         text: selection.text,
       };
+      // 松手后留住的高亮：先按 hits 现算的那份，退化分支里再按单字改。
+      let heldRanges = new Map<number, SelectionRange>(
+        selection.ranges.map((range) => [range.index, range] as const),
+      );
 
       if (selection.ranges.length === 0 || selection.text.length === 0) {
         // 两端落在同一个字里（没跨过任何边界）→ 至少选中指针下那一个字，
@@ -284,8 +325,11 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
         const index = charIndexAt(target, point.x, point.y);
         const from = Math.max(0, Math.min(index, context.length - 1));
         payload = { context, start: from, end: from + 1, text: context.slice(from, from + 1) };
+        // 这一份高亮也要留住：不然「划一个字」是唯一一个松手后什么都不剩的情况。
+        heldRanges = new Map([[focus.block, { index: focus.block, from, to: from + 1 }]]);
       }
 
+      setHeld({ text, ranges: heldRanges });
       onSelect({ ...payload, anchor: anchorRectFor(start.hits, selection.ranges, event.currentTarget) });
     },
     [onSelect, resolvePoint, text, toImage],
@@ -319,7 +363,7 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
         const style = boxes[index];
         if (!style) return null;
         // 每一块各自画自己那一段：跨行划词时同一个 drag 会在多块上同时出现高亮。
-        const range = dragRanges.get(index);
+        const range = activeRanges.get(index);
         return (
           <div
             key={index}
