@@ -5,11 +5,11 @@
  *
  * 两个引擎都是这么给的：
  * - 系统 OCR（macOS Vision / Windows WinRT）按**行**返回文字与框；
- * - manga-anki 那条管线（`scripts/ocr-bridge.py`）按 `comictextdetector` 的
+ * - 扩展引擎（`arale_onnx_v1`）按 `comictextdetector` 的
  *   **行/列多边形**逐条裁切识别，一条一行。
  *
  * 所以这里给每个 block 打上 `singleLine: true` —— 这是**生产者的承诺**，几何层不必
- * 再去猜「这段文字排了几行几列」。曾经不是这样：manga-anki 那边整块识别一次当一条，
+ * 再去猜「这段文字排了几行几列」。曾经不是这样：引擎那边整块识别一次当一条，
  * 于是 40 个字的方块到底是 3 列还是 4 列只能靠面积猜，猜错就表现为划词偏移。
  *
  * 刻意**不做**「把同一列的相邻行合并成一个 block」：那要判断行距、列宽与换行语义，

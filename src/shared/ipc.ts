@@ -223,7 +223,7 @@ export interface AraleApi {
   /**
    * **扩展**：可下载安装的能力包。
    *
-   * 装的是几百 MB 的东西（比如 OCR 的 manga-anki 运行时），所以每一步都要能看见：
+   * 装的是几百 MB 的东西（比如 OCR 引擎的运行时与模型），所以每一步都要能看见：
    * `list()` 给出「有什么、多大、装了没」，`install()` 走 `extensions:progress` 事件
    * 报进度，下载完**必须**校验 sha256 才落盘。
    */

@@ -21,7 +21,7 @@ import type { OcrProgress, OcrProviderId, OcrQueueEntry } from '../src/shared/ty
 
 const LABELS: Record<OcrProviderId, string> = {
   system: '系统 OCR（macOS Vision）',
-  'manga-anki': 'manga-anki (mokuro)',
+  'arale_onnx_v1': 'arale_onnx_v1 (ONNX)',
 };
 
 function providerLabel(id: OcrProviderId): string {
@@ -73,15 +73,15 @@ test('空闲 + 已有文字层 → 「重新识别」', () => {
 });
 
 test('空闲时引擎选择器跟随用户选择，并显示对应名字', () => {
-  const state = ocrControlState(input({ providerOverride: 'manga-anki' }));
-  assert.equal(state.provider, 'manga-anki');
+  const state = ocrControlState(input({ providerOverride: 'arale_onnx_v1' }));
+  assert.equal(state.provider, 'arale_onnx_v1');
   assert.equal(state.frozen, false);
-  assert.match(state.title, /manga-anki/);
+  assert.match(state.title, /arale_onnx_v1/);
 });
 
 test('空闲时没选过 → 用设置里的默认引擎', () => {
-  const state = ocrControlState(input({ defaultProvider: 'manga-anki', providerOverride: null }));
-  assert.equal(state.provider, 'manga-anki');
+  const state = ocrControlState(input({ defaultProvider: 'arale_onnx_v1', providerOverride: null }));
+  assert.equal(state.provider, 'arale_onnx_v1');
 });
 
 test('没有「开始识别」回调时按钮禁用（不会点了没反应）', () => {
@@ -112,11 +112,11 @@ test('识别中且有进度 → 文案带上 done/total（保留旧版的信息�
 
 test('识别中：引擎**固化**为那条任务的引擎，即使队列里的与用户当前选择不同', () => {
   const state = ocrControlState(
-    input({ queueEntry: entry('manga-anki'), active: true, providerOverride: 'system' }),
+    input({ queueEntry: entry('arale_onnx_v1'), active: true, providerOverride: 'system' }),
   );
-  assert.equal(state.provider, 'manga-anki', '必须显示正在跑的那个引擎');
+  assert.equal(state.provider, 'arale_onnx_v1', '必须显示正在跑的那个引擎');
   assert.equal(state.frozen, true);
-  assert.match(state.providerTitle, /已锁定为「manga-anki/);
+  assert.match(state.providerTitle, /已锁定为「arale_onnx_v1/);
 });
 
 test('识别中但取消不可用 → 按钮禁用（而不是变成一个假的取消）', () => {
@@ -133,12 +133,12 @@ test('识别中但取消不可用 → 按钮禁用（而不是变成一个假的
 
 test('排队中 → 「取消排队（第 N 位）」，引擎同样固化', () => {
   const state = ocrControlState(
-    input({ queueEntry: entry('manga-anki'), active: false, queuePosition: 2 }),
+    input({ queueEntry: entry('arale_onnx_v1'), active: false, queuePosition: 2 }),
   );
   assert.equal(state.label, '取消排队（第 2 位）');
   assert.equal(state.isCancel, true);
   assert.equal(state.frozen, true);
-  assert.equal(state.provider, 'manga-anki');
+  assert.equal(state.provider, 'arale_onnx_v1');
   assert.match(state.title, /第 2 位/);
 });
 
@@ -162,7 +162,7 @@ test('排队中取消不可用 → 禁用', () => {
 
 test('不变量：只要在队列里就一定 frozen，且 label 一定是取消语义', () => {
   for (const active of [true, false]) {
-    for (const provider of ['system', 'manga-anki'] as const) {
+    for (const provider of ['system', 'arale_onnx_v1'] as const) {
       const state = ocrControlState(
         input({ queueEntry: entry(provider), active, queuePosition: 1 }),
       );

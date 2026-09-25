@@ -1,5 +1,5 @@
 /**
- * **扩展提供的 OCR 引擎**（目前是 manga-anki，将来可能是任何东西）。
+ * **扩展提供的 OCR 引擎**（目前是 arale_onnx_v1，将来可能是任何东西）。
  *
  * ## 这个文件刻意不知道 Python 的存在
  *
@@ -7,17 +7,17 @@
  *
  * ```json
  * {
- *   "id": "ocr-manga-anki", "version": "1.0.0", "kind": "ocr-engine",
- *   "provides": "manga-anki",
- *   "engine": { "label": "manga-anki（mokuro 管线）", "requirement": "…", "downloadSizeMb": 0 },
- *   "runner": { "program": "bin/ocr-run", "args": ["--manga-anki-root", ".", "--pages-file", "{pagesFile}"] }
+ *   "id": "ocr-arale_onnx_v1", "version": "0.1.0", "kind": "ocr-engine",
+ *   "provides": "arale_onnx_v1",
+ *   "engine": { "label": "arale_onnx_v1（ONNX 版）", "requirement": "…", "downloadSizeMb": 0 },
+ *   "runner": { "program": "bin/arale_onnx_v1", "args": ["--pages-file", "{pagesFile}"] }
  * }
  * ```
  *
  * 应用只做三件事：把页清单写成一个文件、按 `runner` spawn、按统一协议读 NDJSON。
  * **它不知道 runner 是 shell 脚本、是 Python、还是 Rust 二进制。**
  *
- * 这一点是刻意的：manga-anki 今天是一个 1.6 GB 的 Python 运行时（实测：site-packages
+ * 这一点是刻意的：引擎今天是一个自带 ONNX Runtime 与模型的归档（实测：int8 模型 132 MB +
  * 1077 MiB + 模型 500 MiB + 精简解释器 47 MiB，gzip 后 734 MiB），而它的两个模型
  * （comic-text-detector 的检测器 + manga-ocr 的 ViT/BERT 编解码器）都是标准
  * PyTorch 结构，理论上可以导出成 ONNX 用 Rust 直接跑。那样扩展会缩到「模型 + 一个

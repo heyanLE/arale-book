@@ -321,7 +321,7 @@ export function App(): JSX.Element {
     setExtensionProgress((prev) => ({ ...prev, [progress.id]: progress }));
   });
 
-  // 装完/卸完要**重新探测 OCR 引擎**：扩展的存在与否直接决定 manga-anki 可不可用。
+  // 装完/卸完要**重新探测 OCR 引擎**：扩展的存在与否直接决定 arale_onnx_v1 可不可用。
   useIpcEvent('extensions:changed', () => {
     void loadExtensions();
     void loadOcrCapability();

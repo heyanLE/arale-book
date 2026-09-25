@@ -4,7 +4,7 @@
  * ## 这一层留下的东西，以及为什么
  *
  * OCR 的引擎实现已经改成「插件」：`system`（操作系统自带，macOS Vision / Windows.Media.Ocr）
- * 与 `manga-anki`（下载得到的扩展）。两者都是**直接给出文字 + 框**的黑盒，
+ * 与 `arale_onnx_v1`（下载得到的扩展）。两者都是**直接给出文字 + 框**的黑盒，
  * 所以原先为 PP-OCRv5 准备的那套「裁剪 → 旋转 90° → 再识别 → 坐标换回原图」的前后处理
  * 全部删掉了。
  *
@@ -26,7 +26,7 @@ export interface OcrBox {
   /**
    * 这个框是不是竖排。
    *
-   * 由**引擎**尽量给出：manga-anki 的检测器会告诉我们，macOS Vision 不告诉，
+   * 由**引擎**尽量给出：ONNX 检测器会告诉我们，macOS Vision 不告诉，
    * 所以 Vision 那条路退回 [isVerticalBox] 的宽高比推断。谁更权威谁给。
    */
   vertical: boolean;
@@ -55,7 +55,7 @@ export function isVerticalBox(box: Box): boolean {
  * 引擎给的**一行**文字。
  *
  * 引擎只负责「文字 + 框 + 朝向」这三件事；**阅读顺序与成块不归它管**（那是漫画排版的
- * 知识，见 `blocksFromLines`）。这条边界是引擎能随便换实现的前提：manga-anki、系统 OCR、
+ * 知识，见 `blocksFromLines`）。这条边界是引擎能随便换实现的前提：arale_onnx_v1、系统 OCR、
  * 将来的 Rust/ONNX 就地替换，行为一致。
  */
 export interface OcrLine {

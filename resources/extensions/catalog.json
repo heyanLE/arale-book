@@ -3,31 +3,53 @@
   "generatedAt": "2026-01-01T00:00:00Z",
   "_comment": [
     "随包带的扩展清单：远端拉不到时的回退，也是新装应用的第一次体验。",
-    "远端真相源在仓库的 extensions/catalog.json（换内容不需要发版）。",
-    "sha256 是必填的：安装时校验不过就丢弃下载内容。placeholder 值表示",
-    "「归档还没发布」——安装会明确失败在校验那一步，而不是装进一个坏东西。",
-    "发布归档后把这里和远端清单的 urls / bytes / sha256 一起填真值。"
+    "远端真相源在引擎库仓库的 catalog.json（arale-book-ocr-manga），由引擎的构建脚本",
+    "（engines/arale_onnx_v1/build.mjs --target all）生成——上新版本不需要改应用。",
+    "",
+    "地址不写完整 URL，而是写「哪个 release 的哪个包」：release{repo, tag, assets}，",
+    "assets 按 <platform>-<arch> 分，由应用拼成",
+    "https://github.com/<repo>/releases/download/<tag>/<asset>。",
+    "一个能力**一条**条目（id 是安装身份，重复 id 会让整份清单作废），平台差异在 assets 里。",
+    "",
+    "sha256 必填：安装时校验不过就丢弃下载内容。空字符串表示「归档还没发布」——安装会",
+    "明确失败在校验那一步，而不是装进一个坏东西。"
   ],
   "extensions": [
     {
-      "id": "ocr-manga-anki",
-      "name": "manga-anki OCR（mokuro 管线）",
-      "summary": "comic-text-detector 检测 + manga-ocr 识别。质量明显好于系统 OCR，尤其竖排。自带 Python 运行时，装完不需要任何外部依赖。",
-      "version": "0.0.0",
+      "id": "ocr-arale_onnx_v1",
+      "name": "arale_onnx_v1（ONNX 版 OCR）",
+      "summary": "comic-text-detector 检测 + manga-ocr 识别，Rust 实现 + 自带 ONNX Runtime。竖排质量好，装完不需要任何外部依赖。",
+      "version": "0.1.0",
       "kind": "ocr-engine",
-      "provides": "manga-anki",
-      "platforms": ["darwin"],
-      "arch": ["arm64"],
-      "urls": [
-        "https://github.com/aralebook/extensions/releases/latest/download/ocr-manga-anki-macos-arm64.zip"
-      ],
+      "provides": "arale_onnx_v1",
+      "platforms": ["darwin", "win32"],
+      "arch": ["arm64", "x64"],
+      "release": {
+        "repo": "heyanLE/arale-book-ocr-manga",
+        "tag": "v0.1.0",
+        "assets": {
+          "darwin-arm64": {
+            "asset": "arale_onnx_v1-macos-arm64.zip",
+            "sha256": "",
+            "bytes": 0,
+            "installedBytes": 0
+          },
+          "win32-x64": {
+            "asset": "arale_onnx_v1-windows-x64.zip",
+            "sha256": "",
+            "bytes": 0,
+            "installedBytes": 0
+          }
+        }
+      },
+      "urls": [],
       "bytes": 0,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sha256": "",
       "installedBytes": 0,
       "license": "GPL-3.0",
-      "homepage": "https://github.com/aralebook/extensions",
+      "homepage": "https://github.com/heyanLE/arale-book-ocr-manga",
       "requires": [],
-      "notes": "实测打包后约 1.6 GB（模型权重 500 MB、site-packages 1077 MB、精简 CPython 47 MB），压缩约 734 MB。需要 macOS 14+ / Apple Silicon。"
+      "notes": "归档尚未发布：把 engines/arale_onnx_v1 构建出的两个 zip 传到 release v0.1.0，再把构建脚本生成的 catalog.json 覆盖本文件即可。"
     }
   ]
 }

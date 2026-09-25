@@ -16,7 +16,7 @@
 
 ```
 ① 应用            arale-book 仓库                   装机包几十 MB      用户下载（Release / 官网）
-② 引擎            arale-ocr-manga-anki 仓库          归档 741 MiB / 745 MiB
+② 引擎            arale-book-ocr-manga 仓库         归档 ≈170 MB（Rust/ONNX 版）
                                                      用户点「安装」时下载（应用从 catalog 拉）
 ③ 运行时与模型     第三方，任何仓库都不放               约 1.9 GB         只在【构建 ②】时需要
 ```
@@ -33,7 +33,7 @@
 |---|---|---|---|---|
 | 应用源码 | `src/` | ✔ | 1.1 MB | — |
 | 测试 | `tests/`（33 个文件） | ✔ | — | `npm test` / `npm run smoke` |
-| 脚本 | `scripts/`（含 `ocr-bridge.py`） | ✔ | — | 开发、构建、打包 |
+| 脚本 | `scripts/` | ✔ | — | 开发、构建、打包 |
 | 图标素材包（母图 + 各尺寸 + icns/ico） | `assets/arale-icons-v2/` | ✔ | 12 MB | 人 + `npm run icon` |
 | 打包图标（同步产物） | `build/icon.{icns,png,ico}` | ✔ | 4.6 MB | electron-builder |
 | 内嵌词典 ×3 | `resources/dictionaries/` | ✔ | 1.0 MB | 首次启动自动装进用户词典库 |
@@ -43,11 +43,11 @@
 | 系统 OCR 小工具 | `native/arale-vision-ocr/`（含 149 KB 二进制）、`native/arale-winrt-ocr.ps1` | ✔ | 164 KB | 运行时（extraResources） |
 | 本机演示库（含真实漫画） | `.arale-demo/` | ✘ | 444 MB | 开发自测 |
 
-### 在 `arale-ocr-manga-anki`（引擎仓库，**独立**）
+### 在 `arale-book-ocr-manga`（引擎库，**独立 + submodule**）
 
 | 东西 | 进 git | 体积 | 谁用 |
 |---|---|---|---|
-| `ocr-bridge.py`（NDJSON 桥，引擎的入口） | ✔ | 24 KB | 扩展 runner 调它 |
+| `arale_onnx_v1/`（Rust 引擎：Cargo 工程 + build.mjs） | ✔ | 源码 KB 级 | 扩展 runner 就是它编出的二进制 |
 | `build.mjs`（装配 + 打包） | ✔ | 52 KB | 构建归档 |
 | `launcher/ocr-run`、`README.md`、`LICENSE` | ✔ | 22 KB | 人 |
 | `dist/catalog-entry-*.json` | ✔（构建产物，含真 sha） | 1.6 KB | 粘进应用 catalog |
@@ -59,7 +59,7 @@
 |---|---|---|---|
 | 模型权重（manga-ocr-base + comictextdetector.pt） | 本地 manga_anki 检出 | 500 MB | 构建归档时打进去 |
 | Python venv / site-packages | 同上 | 1.4 GB | 同上 |
-| 归档中间产物 | `engines/manga-anki/{build,dist}`（本机还有一份旧的在 `vendor/`） | 1.6 G + 752 M | 构建缓存（可重跑） |
+| 归档中间产物 | `engines/arale_onnx_v1/{build,dist}` | 构建缓存（可重跑） |
 | Swift 模块缓存 | `.vision-build/` | 961 MB | 构建 Vision 小工具 |
 
 ---
@@ -72,8 +72,8 @@
                  │      │                                                                        │
                  │      ├─ engine = system    ──▶ spawn  native/arale-vision-ocr（Swift）        │
                  │      │                             或 powershell arale-winrt-ocr.ps1           │
-                 │      └─ engine = extension ──▶ spawn  <userData>/extensions/ocr-manga-anki/     │
-                 │                                     python/bin/python3 ocr-bridge.py            │
+                 │      └─ engine = extension ──▶ spawn  <userData>/extensions/ocr-arale_onnx_v1/  │
+                 │                                     bin/arale_onnx_v1（自带 ONNX Runtime）    │
                  │                    ▲                                                          │
                  │                    └── NDJSON（meta/page/probe/fatal）逐行                          │
                  │                                                                              │
@@ -99,7 +99,7 @@
 **版本与兼容的现状（老实说）**
 
 - 扩展**清单**有 `schemaVersion: 1`，不认识就拒绝加载；
-- `manga.json` 里记了引擎签名（`manga-anki:v1`）；
+- `manga.json` 里记了引擎签名（`arale_onnx_v1:v1`）；
 - 但 **NDJSON 协议本身没有版本字段**：旧归档 + 新应用时，只能靠「认不出的行忽略掉」自然退化——不会崩，但也没有显式协商。如果这套东西要长期对外分发，**建议在 `meta` 行加 `protocol: 1`**，应用不认就明确报错（现在是靠巧合而不是靠约定）。
 
 ---
@@ -113,9 +113,9 @@
 最小动作（三步，都不需要改代码逻辑）：
 
 ```
-① 建一个放清单+归档的仓库（或就用 arale-ocr-manga-anki 的 Releases）
+① 建一个放清单+归档的仓库（就用 arale-book-ocr-manga 的 Releases）
 ② 改 DEFAULT_CATALOG_URL（或让用户设 ARALE_EXTENSIONS_CATALOG_URL 指向你的清单）
-③ 把 engines/manga-anki/dist/catalog-entry-{darwin-arm64,win32-x64}.json
+③ 把构建脚本生成的库根 catalog.json（release{repo,tag,assets}）
    的内容粘进 catalog.json 的 extensions 数组（sha256/bytes 是构建时写出的真值）
 ```
 
@@ -137,6 +137,6 @@
 ├── dictionaries/               用户词典（内嵌的三部装在这里）
 ├── cards.json                  词卡
 ├── settings.json / positions.json
-├── extensions/ocr-manga-anki/  装好的引擎：python/ + engine/ + .models/ + extension.json ≈ 1.5 GB
+├── extensions/ocr-arale_onnx_v1/  装好的引擎：bin/ + models/ + ONNX Runtime + extension.json
 └── llm.json                    LLM 配置（**apiKey 明文**，只在主进程读；IPC 只回「有没有 key」）
 ```

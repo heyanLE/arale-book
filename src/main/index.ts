@@ -160,10 +160,10 @@ async function bootstrap(): Promise<void> {
       // 系统 OCR 随应用走，零下载。
       // 搜索目录由 paths.ts 给（打包布局 → 开发布局 → cwd），引擎自己挑平台文件名。
       new SystemOcrEngine({ toolDirs: systemOcrToolDirs() }),
-      // manga-anki 是下载出来的扩展；应用侧完全不知道它是 Python。
+      // 扩展引擎（arale_onnx_v1）是下载出来的；应用侧完全不知道它是 Rust 还是别的什么。
       new ExtensionOcrEngine({
-        extensionId: 'ocr-manga-anki',
-        engineId: 'manga-anki',
+        extensionId: 'ocr-arale_onnx_v1',
+        engineId: 'arale_onnx_v1',
         extensions,
       }),
     ],

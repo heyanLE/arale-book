@@ -886,7 +886,7 @@ export function ComicReader({
             onChange={(event) => {
               const next = event.target.value as OcrProviderId;
               setOcrProvider(next);
-              // 按书记住：这本用 manga-anki、那本用系统 OCR 是常态。
+              // 按书记住：这本用 arale_onnx_v1、那本用系统 OCR 是常态。
               patchBook({ ocrProvider: next });
             }}
           >

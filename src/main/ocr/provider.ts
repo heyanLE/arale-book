@@ -24,7 +24,7 @@
  *
  * 两个实现：
  * - `system`：操作系统自带的 OCR（macOS Vision / Windows.Media.Ocr），随应用走、零下载。
- * - `manga-anki`：下载安装的扩展（comic-text-detector + manga-ocr），质量更好但体积大。
+ * - `arale_onnx_v1`：下载安装的扩展（comic-text-detector + manga-ocr 的 Rust/ONNX 实现）。
  */
 
 import type { BookRecord, OcrEngineStatus, OcrProviderId } from '../../shared/types';

@@ -106,7 +106,7 @@ function makeEngine(
     async status(): Promise<OcrEngineStatus> {
       return {
         id,
-        label: id === 'system' ? '系统 OCR' : 'manga-anki',
+        label: id === 'system' ? '系统 OCR' : 'arale_onnx_v1',
         available: true,
         ready: true,
         reason: null,
@@ -159,7 +159,7 @@ function makeService(
     getBook: (id) => byId.get(id) ?? null,
     engines: [
       makeEngine('system', runs, options),
-      makeEngine('manga-anki', runs, { ...options, status: { label: 'manga-anki (mokuro)' } }),
+      makeEngine('arale_onnx_v1', runs, { ...options, status: { label: 'arale_onnx_v1 (ONNX)' } }),
     ],
     extensionsDir: path.join(root, 'extensions'),
     settingsFile,
@@ -314,18 +314,18 @@ test('引擎在**入队时**定下：排队期间改默认引擎不影响已排�
   const ocr = makeService(books, runs, { perPageMs: 12 });
 
   ocr.start(books[0]!.id); // system，立刻开跑
-  const second = ocr.start(books[1]!.id, { provider: 'manga-anki' });
-  assert.equal(second.provider, 'manga-anki');
-  assert.equal(queueOf(ocr).pending[0]?.provider, 'manga-anki');
+  const second = ocr.start(books[1]!.id, { provider: 'arale_onnx_v1' });
+  assert.equal(second.provider, 'arale_onnx_v1');
+  assert.equal(queueOf(ocr).pending[0]?.provider, 'arale_onnx_v1');
 
   // 排队期间用户去设置里换成内置。
   await ocr.selectProvider('system');
-  assert.equal(queueOf(ocr).pending[0]?.provider, 'manga-anki', '队列里那条不该跟着变');
+  assert.equal(queueOf(ocr).pending[0]?.provider, 'arale_onnx_v1', '队列里那条不该跟着变');
 
   await ocr.drain();
   assert.deepEqual(
     runs.map((run) => run.provider),
-    ['system', 'manga-anki'],
+    ['system', 'arale_onnx_v1'],
   );
 });
 
@@ -458,7 +458,7 @@ test('排队中的书被删掉：给出明确失败，队列继续往下走', as
 test('引擎抛异常 → 记成失败，队列不卡住', async () => {
   const books = [makeBook('A'), makeBook('B')];
   const runs: Run[] = [];
-  const good = makeEngine('manga-anki', runs, { perPageMs: 5 });
+  const good = makeEngine('arale_onnx_v1', runs, { perPageMs: 5 });
   const bad: OcrEngine = {
     id: 'system',
     async status(): Promise<OcrEngineStatus> {
@@ -488,7 +488,7 @@ test('引擎抛异常 → 记成失败，队列不卡住', async () => {
   });
 
   ocr.start(books[0]!.id, { provider: 'system' });
-  ocr.start(books[1]!.id, { provider: 'manga-anki' });
+  ocr.start(books[1]!.id, { provider: 'arale_onnx_v1' });
   await ocr.drain();
 
   assert.match((await ocr.wait(books[0]!.id))?.error ?? '', /模型文件损坏/);

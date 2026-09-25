@@ -446,7 +446,8 @@ export interface ChapterContent {
  * **系统引擎**（`system`）：**操作系统自己**的 OCR——macOS 走 Vision，Windows 走
  * `Windows.Media.Ocr`。随应用走、零下载、零额外依赖，开箱可用。
  *
- * **扩展引擎**（`manga-anki`）：下载安装的扩展，内含 mokuro 管线
+ * **扩展引擎**（`arale_onnx_v1`）：下载安装的扩展，是 comic-text-detector + manga-ocr
+ * 的 Rust/ONNX 实现（原 Python 版 manga-anki 已弃用）
  * （comic-text-detector + manga-ocr）。质量明显更好，但实测打包后 ~1.6 GB，
  * 所以做成可选扩展而不是随包分发。它现在**不是**「指着用户本机某个 checkout」，
  * 而是从扩展清单里装出来的一个自洽包。
@@ -454,7 +455,7 @@ export interface ChapterContent {
  * 曾经的 `builtin`（PP-OCRv5 / onnxruntime-node）已删除：它需要为竖排做旋转补偿，
  * 真实漫画上逐行命中只有 23%，而体积（onnxruntime 三个平台的二进制）还不小。
  */
-export type OcrProviderId = 'system' | 'manga-anki';
+export type OcrProviderId = 'system' | 'arale_onnx_v1';
 
 /** 某个引擎的能力与就绪状态。 */
 export interface OcrEngineStatus {
@@ -547,7 +548,7 @@ export interface OcrJobResult {
  * 队列里的一条任务。
  *
  * 为什么要队列而不是「谁点谁立刻跑」：两个引擎都是**独占 CPU 的重活**——内置引擎要
- * 加载 ONNX 模型并逐页推理，manga-anki 还要拉起一整套 Python 管线。同时跑两卷只会
+ * 加载 ONNX 模型并逐页推理，扩展引擎还要拉起自带运行时。同时跑两卷只会
  * 让两卷都变慢，而且内存翻倍。串行执行 + 一个全局进度入口，用户点几次就排几本，
  * 不用盯着哪一本先点在前面。
  */

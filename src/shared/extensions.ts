@@ -4,7 +4,7 @@
  * ## 为什么需要这一层
  *
  * 有些能力**不该随安装包分发**：
- * - OCR 的 manga-anki 管线是一个 1.6 GB 的 Python 运行时（实测），装进 .app 会让
+ * - OCR 引擎是一个自带运行时与模型的归档（实测 ≈170 MB），装进 .app 会让
  *   所有用户都先下 700 MB，而绝大多数人根本不跑 OCR；
  * - 它是 macOS 14+ / Apple Silicon 专用，别的平台装了也没用；
  * - 它有独立的上游与版本节奏，跟着应用一起发版是错配。
@@ -38,6 +38,48 @@ export type ExtensionPlatform = 'darwin' | 'win32' | 'linux';
 /** 支持的 CPU 架构（与 `process.arch` 同口径，做一次映射）。 */
 export type ExtensionArch = 'arm64' | 'x64';
 
+/**
+ * 一个平台归档：包名 + 校验信息。
+ *
+ * 校验信息跟着**包**走而不是跟着条目走，因为同一个 release 里 mac 与 win 是两个不同的
+ * 归档、sha256 与体积都不同（这是「一个 release 传两个包」的必然结果）。
+ */
+export interface ExtensionAsset {
+  /** 资产文件名，如 `arale_onnx_v1-macos-arm64.zip`。只能是文件名，不能带路径。 */
+  asset: string;
+  /** 这个包的 sha256（小写十六进制）。空字符串 = 尚未发布，安装会被拒绝。 */
+  sha256: string;
+  /** 这个包的字节数（显示「要下多大」）。 */
+  bytes: number;
+  /** 解包后大概占多少（显示用）。缺省沿用条目顶层的 `installedBytes`。 */
+  installedBytes?: number;
+}
+
+/**
+ * 归档放在**哪个 release、哪个包**里。
+ *
+ * 清单不写完整 URL 而是写这三件事，理由：GitHub Releases 的地址格式是死的
+ * （`https://github.com/<repo>/releases/download/<tag>/<asset>`），把它**拼**出来比让清单
+ * 自己写 URL 更不容易错——换 owner、换 release 名只改一个字段，也不会出现
+ * 「清单里指向一个不存在的组织」这种只有到用户点安装时才会暴露的错误。
+ *
+ * 一个 release 可以同时放两个平台的包（mac + win），两条清单条目共用同一个 `tag`、
+ * 只有 `asset` 不同——这正是「按平台传两个包」的表达方式。
+ */
+export interface ExtensionRelease {
+  /** `owner/repo`，如 `heyanLE/arale-book-ocr-manga`。 */
+  repo: string;
+  /** release 名（GitHub 上是 tag 名），如 `v0.1.0`。 */
+  tag: string;
+  /**
+   * 按 `<platform>-<arch>` 给平台包（`darwin-arm64` / `win32-x64` / `linux-x64`…）。
+   *
+   * **一个能力一条清单条目**（id 是安装身份，重复 id 会让整份清单作废），
+   * 平台差异放在这里——这正是「同一个 release 里传 mac 与 win 两个包」的表达方式。
+   */
+  assets: Record<string, ExtensionAsset>;
+}
+
 /** 清单里的一条扩展。 */
 export interface ExtensionEntry {
   /** 稳定标识，也是安装目录名。**改它等于换一个扩展**。 */
@@ -59,8 +101,15 @@ export interface ExtensionEntry {
   /** 支持的架构。空数组 = 全架构。 */
   arch: ExtensionArch[];
   /**
+   * 归档放在哪个 release 的哪个包里。**与 `urls` 二选一**（见 [downloadUrlsOf]）。
+   * 两条都给时 `urls` 优先（用来配镜像）。
+   */
+  release?: ExtensionRelease;
+  /**
    * 下载地址，按顺序回退。**多个是有意的**：上游是 GitHub Releases 时经常
    * 直连超时（本机实测过），配一个镜像能显著提高成功率。
+   *
+   * 能从 `release` 拼出来时这里就留空——别把同一个地址写两遍。
    */
   urls: string[];
   /** 归档字节数，用于显示「要下多大」。 */
@@ -166,4 +215,77 @@ export interface ExtensionManifest {
   };
   license?: string;
   homepage?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 地址：清单只写「哪个 release 的哪个包」，URL 在这里拼（纯函数，可单测）
+// ---------------------------------------------------------------------------
+
+/** 平台键：`darwin-arm64` / `win32-x64` / `linux-x64`。与 `process.platform`+`process.arch` 同口径。 */
+export function platformKey(platform: string, arch: string): string {
+  return `${platform}-${arch}`;
+}
+
+/** GitHub Release 资产的固定地址格式。 */
+export function releaseAssetUrl(repo: string, tag: string, asset: string): string {
+  return `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;
+}
+
+/** 最终去哪下、下下来的东西应该长什么样。 */
+export interface ResolvedDownload {
+  /** 按顺序回退的地址；空数组 = 清单里根本没给这个平台的地址。 */
+  urls: string[];
+  /** 期望的 sha256（空字符串 = 未发布，安装会被拒绝）。 */
+  sha256: string;
+  bytes: number;
+  installedBytes: number;
+  /** 地址是从哪儿来的（UI 显示出处用）。 */
+  source: 'release' | 'urls' | 'none';
+}
+
+/**
+ * 解析「这个平台到底下哪个包」。
+ *
+ * 规则（**顺序是刻意的**）：
+ * 1. `release.assets[<platform>-<arch>]` 命中 → 用它的 asset 拼地址、用它自己的 sha256/bytes；
+ * 2. 没命中 → 退回条目顶层的 `urls` + `sha256` + `bytes`（单平台归档、或自建镜像）；
+ * 3. 都没有 → 地址为空，调用方明确报错（而不是拿去下载一个 undefined）。
+ *
+ * 为什么 `urls` 不能盖过 release：`urls` 是「镜像/自建源」这类**显式**配置，而 release 是
+ * 默认分发路径。两者都给时，镜像应当**排在前**但仍带上 release 的校验值——所以这里
+ * 采用「有 urls 就先用 urls，校验值仍取 release.assets 里的」的组合。
+ */
+export function resolveDownload(
+  entry: Pick<ExtensionEntry, 'urls' | 'release' | 'sha256' | 'bytes' | 'installedBytes'>,
+  platform: string,
+  arch: string,
+): ResolvedDownload {
+  const asset = entry.release?.assets?.[platformKey(platform, arch)];
+  const fromRelease =
+    entry.release !== undefined && asset !== undefined
+      ? [releaseAssetUrl(entry.release.repo, entry.release.tag, asset.asset)]
+      : [];
+  const urls = [...entry.urls, ...fromRelease];
+  const sha256 = asset?.sha256 ?? entry.sha256;
+  const bytes = asset?.bytes ?? entry.bytes;
+  return {
+    urls,
+    sha256,
+    bytes,
+    installedBytes: asset?.installedBytes ?? entry.installedBytes,
+    source: urls.length === 0 ? 'none' : entry.urls.length > 0 ? 'urls' : 'release',
+  };
+}
+
+/** 给人看的一句话出处（UI 用）。 */
+export function describeRelease(
+  release: ExtensionRelease | undefined,
+  platform: string,
+  arch: string,
+): string {
+  if (release === undefined) return '';
+  const asset = release.assets?.[platformKey(platform, arch)];
+  return asset === undefined
+    ? `${release.repo} ${release.tag}`
+    : `${release.repo} ${release.tag} · ${asset.asset}`;
 }

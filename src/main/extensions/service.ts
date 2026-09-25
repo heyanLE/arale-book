@@ -29,26 +29,32 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type {
+  ExtensionAsset,
   ExtensionCatalog,
+  ExtensionRelease,
   ExtensionEntry,
   ExtensionManifest,
   ExtensionProgress,
   ExtensionStatus,
   InstalledExtension,
 } from '../../shared/extensions';
-import { EXTENSION_MANIFEST_FILE } from '../../shared/extensions';
+import { EXTENSION_MANIFEST_FILE, resolveDownload } from '../../shared/extensions';
 import { NativeCommandError, extractArchive, isNativeAvailable } from '../native/sidecar';
 import { DownloadCancelledError, DownloadError, downloadToFile } from './download';
 
 /**
  * 默认清单地址。
  *
- * 指向仓库里的一个**纯数据文件**（不需要发版就能更新清单）。换地址的办法有两条，
- * 按优先级：构造参数 `catalogUrl` > 环境变量 `ARALE_EXTENSIONS_CATALOG_URL`。
- * 后者是给开发和自建镜像用的——把清单托管到自己域名下只需设一个环境变量。
+ * 指向**引擎库仓库**里的一个纯数据文件（`arale-book-ocr-manga/catalog.json`）：
+ * 清单由引擎的构建脚本生成（`node engines/arale_onnx_v1/build.mjs --target all`），
+ * 每个引擎一条、按平台分条目；归档本身放在 GitHub Release 里，清单只写
+ * 「哪个 release、哪个包」（`release: {repo, tag, asset}`），地址由应用拼。
+ *
+ * 换地址的办法有两条，按优先级：构造参数 `catalogUrl` > 环境变量
+ * `ARALE_EXTENSIONS_CATALOG_URL`。后者是给开发和自建镜像用的。
  */
 export const DEFAULT_CATALOG_URL =
-  'https://raw.githubusercontent.com/aralebook/extensions/main/catalog.json';
+  'https://raw.githubusercontent.com/heyanLE/arale-book-ocr-manga/main/catalog.json';
 
 /** 应用认得的清单格式版本。不认就拒绝加载，而不是半懂不懂地解析。 */
 export const EXTENSION_SCHEMA_VERSION = 1;
@@ -262,10 +268,17 @@ export class ExtensionService {
       const support = this.supportOf(entry);
       if (!support.supported) return { ok: false, error: support.reason ?? '当前平台不支持这个扩展' };
 
-      if (entry.sha256 === '' || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
-        return { ok: false, error: '清单里这个扩展没有有效的 sha256，拒绝安装' };
+      // ★ 一个能力一条条目，包按平台选：这里才决定「mac 下哪个 zip、win 下哪个 zip」。
+      const download = resolveDownload(entry, process.platform, process.arch);
+      if (download.urls.length === 0) {
+        return { ok: false, error: `清单里这个扩展没有 ${process.platform}-${process.arch} 的包` };
       }
-      if (entry.urls.length === 0) return { ok: false, error: '清单里这个扩展没有下载地址' };
+      if (download.sha256 === '' || !/^[0-9a-f]{64}$/.test(download.sha256)) {
+        return {
+          ok: false,
+          error: `清单里这个扩展的 ${process.platform}-${process.arch} 包还没有发布（sha256 为空），拒绝安装`,
+        };
+      }
       if (!isNativeAvailable()) {
         return {
           ok: false,
@@ -284,17 +297,17 @@ export class ExtensionService {
       fs.mkdirSync(staging, { recursive: true });
 
       const archive = path.join(staging, 'download.zip');
-      this.progress(id, 'downloading', 0, entry.bytes);
+      this.progress(id, 'downloading', 0, download.bytes);
 
       let lastError: string | null = null;
       let downloaded: { bytes: number; sha256: string } | null = null;
-      for (const url of entry.urls) {
+      for (const url of download.urls) {
         try {
           downloaded = await downloadToFile({
             url,
             dest: archive,
             onProgress: (received, total) =>
-              this.progress(id, 'downloading', received, total > 0 ? total : entry.bytes),
+              this.progress(id, 'downloading', received, total > 0 ? total : download.bytes),
             isCancelled: () => this.cancelled.has(id),
           });
           break;
@@ -316,12 +329,12 @@ export class ExtensionService {
       }
 
       this.progress(id, 'verifying', downloaded.bytes, downloaded.bytes);
-      if (downloaded.sha256 !== entry.sha256) {
+      if (downloaded.sha256 !== download.sha256) {
         return {
           ok: false,
           error: [
             '下载内容的 sha256 与清单不一致，已丢弃。',
-            `期望 ${entry.sha256}`,
+            `期望 ${download.sha256}`,
             `实际 ${downloaded.sha256}`,
           ].join(' '),
         };
@@ -343,7 +356,7 @@ export class ExtensionService {
       }
       fs.rmSync(archive, { force: true });
 
-      const validated = validateUnpacked(unpacked, entry);
+      const validated = validateUnpacked(unpacked, { ...entry, bytes: download.bytes });
       if (!validated.ok) return { ok: false, error: validated.error };
 
       // 可执行位：归档里不保证有（zip 的权限位各家工具写法不一），显式补上。
@@ -419,6 +432,63 @@ export class ExtensionService {
 // 校验
 // ---------------------------------------------------------------------------
 
+/**
+ * 解析 `release: {repo, tag, assets: {"darwin-arm64": {asset, sha256, bytes}}}`。
+ *
+ * 严格：`asset` 只能是**文件名**（带 `/`、`\` 或 `..` 一律拒绝——清单是远端来的，
+ * 不能让它在地址里塞路径）；`repo` 必须是 `owner/repo` 形状；`tag` 不能空；
+ * `assets` 至少一条，键必须是 `<platform>-<arch>` 形状。
+ */
+export function parseRelease(
+  value: unknown,
+  id: string,
+): ExtensionRelease | null | { error: string } {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { error: `${id} 的 release 不是对象` };
+  }
+  const record = value as Record<string, unknown>;
+  const repo = str(record['repo']);
+  const tag = str(record['tag']);
+  if (repo === null || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+    return { error: `${id} 的 release.repo 必须是 owner/repo 形状` };
+  }
+  if (tag === null) return { error: `${id} 的 release 缺 tag（release 名）` };
+
+  const rawAssets = record['assets'];
+  if (typeof rawAssets !== 'object' || rawAssets === null || Array.isArray(rawAssets)) {
+    return { error: `${id} 的 release 缺 assets（每个平台一个包）` };
+  }
+  const assets: Record<string, ExtensionAsset> = {};
+  for (const [key, item] of Object.entries(rawAssets as Record<string, unknown>)) {
+    if (!/^[a-z0-9]+-[a-z0-9_]+$/.test(key)) {
+      return { error: `${id} 的 release.assets 键必须是 <platform>-<arch> 形状：${key}` };
+    }
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return { error: `${id} 的 release.assets.${key} 不是对象` };
+    }
+    const assetRecord = item as Record<string, unknown>;
+    const asset = str(assetRecord['asset']);
+    if (asset === null) return { error: `${id} 的 release.assets.${key} 缺 asset（包名）` };
+    if (asset.includes('/') || asset.includes('\\') || asset.includes('..')) {
+      return { error: `${id} 的 release.assets.${key}.asset 只能是文件名，不能带路径：${asset}` };
+    }
+    const sha256 = str(assetRecord['sha256']) ?? '';
+    if (sha256 !== '' && !/^[0-9a-f]{64}$/.test(sha256)) {
+      return { error: `${id} 的 release.assets.${key}.sha256 不是 64 位十六进制` };
+    }
+    const installedBytes = num(assetRecord['installedBytes']);
+    assets[key] = {
+      asset,
+      sha256,
+      bytes: num(assetRecord['bytes']),
+      ...(installedBytes > 0 ? { installedBytes } : {}),
+    };
+  }
+  if (Object.keys(assets).length === 0) return { error: `${id} 的 release.assets 是空的` };
+  return { repo, tag, assets };
+}
+
 export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalog } | { ok: false; error: string } {
   let raw: unknown;
   try {
@@ -454,7 +524,11 @@ export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalo
       return { ok: false, error: `${id} 缺 name / version / provides / kind` };
     }
     const urls = strArray(entry['urls']);
-    if (urls.length === 0) return { ok: false, error: `${id} 没有 download 地址` };
+    const release = parseRelease(entry['release'], id);
+    if (release instanceof Object && 'error' in release) return { ok: false, error: release.error };
+    if (urls.length === 0 && release === null) {
+      return { ok: false, error: `${id} 既没有 urls 也没有 release{repo,tag,assets}，没有下载地址` };
+    }
 
     extensions.push({
       id,
@@ -462,6 +536,7 @@ export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalo
       version,
       kind: kind === 'ocr-engine' ? 'ocr-engine' : 'ocr-engine',
       provides,
+      ...(release !== null ? { release } : {}),
       summary: str(entry['summary']) ?? '',
       platforms: strArray(entry['platforms']) as ExtensionEntry['platforms'],
       arch: strArray(entry['arch']) as ExtensionEntry['arch'],

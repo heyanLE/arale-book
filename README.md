@@ -41,7 +41,8 @@
 - **词卡**：可固定（同时开多张）、可改标题、可保存到这本书的**词卡夹**、可交给 LLM 分析。
   从短划到长时，当前词包含的已分析词会各占一栏。
 - **文字识别（可选）**：**系统 OCR**（macOS Vision / Windows.Media.Ocr，零下载）或
-  **manga-anki**（下载安装的扩展，质量更好）。识别是**串行队列**，右下角统一进度入口。
+  **arale_onnx_v1**（下载安装的扩展，comic-text-detector + manga-ocr 的 Rust/ONNX 实现，质量更好）。
+  识别是**串行队列**，右下角统一进度入口。
 - **分词（可选）**：按当前词典给一本书切词并生成词表，可反复重新生成。
 - **扩展**：体积大或平台相关的能力做成可下载安装的包（远端清单 + sha256 校验 + 流式下载）。
 
@@ -65,7 +66,7 @@ npm start
 
 ### 一套引擎无关的 OCR 协议，换来「换实现不用改应用」
 
-三种 OCR 来源（macOS Vision、Windows.Media.Ocr、manga-anki 扩展）说**同一种 NDJSON**：
+三种 OCR 来源（macOS Vision、Windows.Media.Ocr、`arale_onnx_v1` 扩展）说**同一种 NDJSON**：
 
 ```
 {"kind":"meta","engine":"…","languages":[…],"requested":[…]}
@@ -84,11 +85,12 @@ recognize(job, sink) → OcrPageOut[]      // job = 这本书的页清单 + 方�
 
 于是扩展的 `runner` 就是一个进程协议，应用完全不知道它是 shell、Python 还是二进制——
 
-> manga-anki 今天是一个 1.6 GB 的 Python 包（实测：site-packages 1077 MB + 模型 500 MB +
-> 精简 CPython 47 MB，gzip 后 734 MB）。它的两个模型都是标准 PyTorch，理论上可以导出 ONNX
-> 用 Rust 直接跑。届时**只需换一个归档、改一份 `extension.json`**，应用一行都不用动。
+> 引擎今天是一个 Rust 二进制 + ONNX 模型 + 自带 ONNX Runtime 的归档（目标 ≈170 MB，
+> 对比原来那套 1.6 GB 的 Python 运行时：CPython + torch + UniDic 全部不再需要）。
+> 实现换代时**只需换一个归档、改一份 `extension.json`**，应用一行都不用动——
+> 原 Python 版（`engines/legacy/python-manga-anki/`）已经这样被替换掉了。
 >
-> 这两个归档已经能自动产出：`node engines/manga-anki/build.mjs --target all`
+> 这两个归档由 `node engines/arale_onnx_v1/build.mjs --target all` 产出
 > （macOS arm64 + Windows x64，各自自带解释器与依赖，装完零外部依赖）。
 > 引擎库是**这个仓库的 submodule**（[`engines/`](engines/README.md) → `arale-book-ocr-manga`）：
 > 一个仓库放多个引擎，各引擎自带构建脚本与发布条目；应用只认协议，不认实现。
@@ -108,7 +110,7 @@ mokuro 的 `block` 是**区域级**的：一个气泡、一段旁白，内部还
 「整块识别一次」拿到的是一坨没有分隔符的文字，行列结构彻底丢失。阅读器于是只能靠
 `sqrt(W·H/N)` 猜这段文字排成了几行几列，猜错就是**划词高亮与文字对不上**。
 
-所以 `scripts/ocr-bridge.py` 改成按 `comictextdetector` 给的行/列多边形**逐条裁、逐条识别**，
+所以引擎改成按 `comictextdetector` 给的行/列多边形**逐条裁、逐条识别**，
 一个文字行/列一个 block（实测检测器本来就给了这些多边形：竖排 3 列就是 3 个 34×216 的窄高矩形）。
 成块时打上 `single_line`（落盘为同名字段），几何层拿到它就直接线性映射、不再猜：
 
@@ -252,11 +254,10 @@ native/
 ├── arale-vision-ocr/   macOS 系统 OCR（Swift + Vision）
 └── arale-winrt-ocr.ps1 Windows 系统 OCR（PowerShell + Windows.Media.Ocr）
 
-engines/                **submodule**：OCR 引擎库（多引擎；目前只有 manga-anki）
+engines/                **submodule**：OCR 引擎库（多引擎）
 ├── README.md           引擎清单 + 「一个引擎必须满足什么」
-└── manga-anki/         桥 + 构建脚本（`node engines/manga-anki/build.mjs --target all`）
-scripts/ocr-bridge.py   manga-anki 管线的桥（应用仓库这份是历史副本，真相源在 engines/manga-anki/）
-vendor/ocr-manga-anki/  本机构建缓存（gitignore）：中间产物与 dist/*.zip
+├── arale_onnx_v1/      **Rust/ONNX 引擎**（当前唯一发布的）：Cargo 工程 + 构建脚本
+└── legacy/             已弃用的 Python 实现（留档，不发布）
 
 assets/arale-icons-v2/  图标素材包（母图 + 各尺寸 PNG + icns/ico + 提示词）
 build/                  图标导出件（`npm run icon` 生成）：icon.icns / icon.png / icon.ico
@@ -292,11 +293,11 @@ ARALE_SMOKE_OCR=1 npm run smoke   # 额外打开真 OCR 用例
 - **只验证了 macOS arm64**。Windows 的 `arale-winrt-ocr.ps1` 写好但**没在 Windows 上跑过**。
 - **系统 OCR 在 macOS 上可能不可用**：`.accurate` 依赖系统按需下载的文字识别资源，
   开发机上实测就遇到了（自检会明确报出来，不会让你白跑一本）。
-- **manga-anki 扩展的归档尚未发布**：随包清单里的条目是占位 sha256，安装会明确失败在校验那一步。
+- **扩展引擎的归档尚未发布**：随包清单里的条目 sha256 为空，安装会明确失败在校验那一步。
 - `.zip` / `.cbz` 整体读入内存，单个 >2 GB 的包会被拒绝（`.rar`/`.7z` 走流式，无此限制）。
 - 词典只支持 Yomitan 格式；MDX / StarDict / DSL 未实现。`kanji_bank` 不读（v1 只做词语查询）。
 - 漫画 OCR 的准确率还不够：内置通用检测器在真实漫画上逐行命中约 23%，
-  所以质量要靠 manga-anki 那套漫画专用管线。
+  所以质量要靠 `arale_onnx_v1` 那套漫画专用管线。
 - 左侧栏的「系列 / 作者」分面目前共用同一个 `search` 字段，所以天然只能单选，
   且选中后看起来像在搜索框里打了字。要真正的多选需要独立的 `{kind, value}` 过滤字段。
 - 没有云同步、没有联网元数据刮削、单窗口。

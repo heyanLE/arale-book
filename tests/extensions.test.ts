@@ -17,7 +17,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { ExtensionService, parseCatalog, parseManifest, resolveInside } from '../src/main/extensions/service';
+import {
+  ExtensionService,
+  parseCatalog,
+  parseManifest,
+  parseRelease,
+  resolveInside,
+} from '../src/main/extensions/service';
+import { platformKey, releaseAssetUrl, resolveDownload } from '../src/shared/extensions';
 
 function makeRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'arale-ext-'));
@@ -28,11 +35,11 @@ function makeRoot(): string {
 // ---------------------------------------------------------------------------
 
 const VALID_ENTRY = {
-  id: 'ocr-manga-anki',
-  name: 'manga-anki OCR',
+  id: 'ocr-arale_onnx_v1',
+  name: 'arale_onnx_v1 OCR',
   version: '1.0.0',
   kind: 'ocr-engine',
-  provides: 'manga-anki',
+  provides: 'arale_onnx_v1',
   summary: 'mokuro 管线',
   platforms: ['darwin'],
   arch: ['arm64'],
@@ -55,7 +62,7 @@ test('parseCatalog: 接受合法清单', () => {
   assert.equal(parsed.ok, true);
   if (!parsed.ok) return;
   assert.equal(parsed.catalog.extensions.length, 1);
-  assert.equal(parsed.catalog.extensions[0]?.provides, 'manga-anki');
+  assert.equal(parsed.catalog.extensions[0]?.provides, 'arale_onnx_v1');
   assert.deepEqual(parsed.catalog.extensions[0]?.urls, ['https://example.com/a.zip']);
 });
 
@@ -91,7 +98,7 @@ test('parseCatalog: 没有下载地址 → 拒绝', () => {
   const parsed = parseCatalog(catalog([{ ...VALID_ENTRY, urls: [] }]));
   assert.equal(parsed.ok, false);
   if (parsed.ok) return;
-  assert.match(parsed.error, /download/);
+  assert.match(parsed.error, /下载地址/);
 });
 
 test('parseCatalog: extensions 不是数组 → 拒绝', () => {
@@ -113,13 +120,13 @@ test('parseCatalog: sha256 缺失时**仍然解析成功**，由安装时拒绝'
 // ---------------------------------------------------------------------------
 
 test('resolveInside: 正常相对路径解析到根内', () => {
-  const root = '/tmp/ext/ocr-manga-anki';
+  const root = '/tmp/ext/ocr-arale_onnx_v1';
   assert.equal(resolveInside(root, 'bin/ocr-run'), path.join(root, 'bin/ocr-run'));
   assert.equal(resolveInside(root, './bin/../bin/ocr-run'), path.join(root, 'bin/ocr-run'));
 });
 
 test('resolveInside: 拒绝越界、绝对路径与空路径', () => {
-  const root = '/tmp/ext/ocr-manga-anki';
+  const root = '/tmp/ext/ocr-arale_onnx_v1';
   for (const evil of [
     '../evil.sh',
     '../../../../bin/sh',
@@ -132,9 +139,9 @@ test('resolveInside: 拒绝越界、绝对路径与空路径', () => {
 });
 
 test('resolveInside: 前缀相同但不是子目录的路径要被拒绝', () => {
-  // `/tmp/ext/ocr-manga-ankievil` 以 `/tmp/ext/ocr-manga-anki` 开头，
+  // `/tmp/ext/ocr-arale_onnx_v1evil` 以 `/tmp/ext/ocr-arale_onnx_v1` 开头，
   // 朴素的 startsWith 检查会放它过去。
-  const root = '/tmp/ext/ocr-manga-anki';
+  const root = '/tmp/ext/ocr-arale_onnx_v1';
   assert.equal(resolveInside(root, '../ocr-manga-ankievil/x'), null);
 });
 
@@ -144,11 +151,11 @@ test('resolveInside: 前缀相同但不是子目录的路径要被拒绝', () =>
 
 test('parseManifest: 接受带 runner 的自描述', () => {
   const parsed = parseManifest({
-    id: 'ocr-manga-anki',
+    id: 'ocr-arale_onnx_v1',
     version: '1.0.0',
     kind: 'ocr-engine',
-    provides: 'manga-anki',
-    engine: { label: 'manga-anki', requirement: '需要 1.6 GB 磁盘', downloadSizeMb: 0 },
+    provides: 'arale_onnx_v1',
+    engine: { label: 'arale_onnx_v1', requirement: '需要 1.6 GB 磁盘', downloadSizeMb: 0 },
     runner: { program: 'bin/ocr-run', args: ['--pages-file', '{pagesFile}'], env: { FOO: '1' } },
   });
   assert.equal(parsed.ok, true);
@@ -236,7 +243,7 @@ test('install: 没有有效 sha256 → 拒绝安装（这是安全红线）', as
   fs.writeFileSync(bundled, catalog([{ ...VALID_ENTRY, sha256: '太短' }]), 'utf8');
   const service = new ExtensionService({ root: path.join(root, 'ext'), bundledCatalogFile: bundled });
 
-  const result = await service.install('ocr-manga-anki');
+  const result = await service.install('ocr-arale_onnx_v1');
   assert.equal(result.ok, false);
   assert.match(result.error ?? '', /sha256/);
 });
@@ -248,7 +255,7 @@ test('install: 平台不支持 → 拒绝，且不去联网（所以这里能秒
   fs.writeFileSync(bundled, catalog([{ ...VALID_ENTRY, platforms: [onlyWindows] }]), 'utf8');
   const service = new ExtensionService({ root: path.join(root, 'ext'), bundledCatalogFile: bundled });
 
-  const result = await service.install('ocr-manga-anki');
+  const result = await service.install('ocr-arale_onnx_v1');
   assert.equal(result.ok, false);
   assert.match(result.error ?? '', /只支持/);
 });
@@ -259,7 +266,7 @@ test('remove: 不存在的扩展也返回成功（幂等），并清掉记录', 
   fs.writeFileSync(bundled, catalog([VALID_ENTRY]), 'utf8');
   const service = new ExtensionService({ root: path.join(root, 'ext'), bundledCatalogFile: bundled });
 
-  const result = service.remove('ocr-manga-anki');
+  const result = service.remove('ocr-arale_onnx_v1');
   assert.equal(result.ok, true);
   assert.deepEqual(service.installed(), []);
 });
@@ -276,4 +283,116 @@ test('installDir: id 里的路径分隔符被净化，不能借 id 跳目录', (
     `安装目录必须落在扩展根内：${dir}`,
   );
   assert.ok(!dir.includes('..'), dir);
+});
+
+// ---------------------------------------------------------------------------
+// 清单只写「哪个 release 的哪个包」，地址由应用拼（一个能力一条条目，平台差异在 assets 里）
+// ---------------------------------------------------------------------------
+
+/** 一个「Release 分发」的条目：没有 urls，只有 release.assets。 */
+const RELEASE_ENTRY = {
+  ...VALID_ENTRY,
+  platforms: ['darwin', 'win32'],
+  arch: ['arm64', 'x64'],
+  urls: [],
+  bytes: 0,
+  sha256: '',
+  release: {
+    repo: 'heyanLE/arale-book-ocr-manga',
+    tag: 'v0.1.0',
+    assets: {
+      'darwin-arm64': { asset: 'arale_onnx_v1-macos-arm64.zip', sha256: 'b'.repeat(64), bytes: 170_000_000 },
+      'win32-x64': { asset: 'arale_onnx_v1-windows-x64.zip', sha256: 'c'.repeat(64), bytes: 175_000_000 },
+    },
+  },
+};
+
+test('parseCatalog: 没有 urls 但有 release{repo,tag,assets} → 接受（这才是默认分发形态）', () => {
+  const parsed = parseCatalog(catalog([RELEASE_ENTRY]));
+  assert.equal(parsed.ok, true, parsed.ok ? '' : parsed.error);
+  if (!parsed.ok) return;
+  const entry = parsed.catalog.extensions[0];
+  assert.equal(entry?.release?.tag, 'v0.1.0');
+  assert.deepEqual(Object.keys(entry?.release?.assets ?? {}).sort(), ['darwin-arm64', 'win32-x64']);
+});
+
+test('resolveDownload: 按平台挑包，URL 与校验值都跟包走', () => {
+  const entry = { urls: [], release: RELEASE_ENTRY.release, sha256: '', bytes: 0, installedBytes: 0 };
+  const mac = resolveDownload(entry, 'darwin', 'arm64');
+  assert.equal(mac.source, 'release');
+  assert.deepEqual(mac.urls, [
+    'https://github.com/heyanLE/arale-book-ocr-manga/releases/download/v0.1.0/arale_onnx_v1-macos-arm64.zip',
+  ]);
+  assert.equal(mac.sha256, 'b'.repeat(64), 'sha256 跟着**这个包**，不是条目顶层的');
+  assert.equal(mac.bytes, 170_000_000);
+
+  const win = resolveDownload(entry, 'win32', 'x64');
+  assert.match(win.urls[0] ?? '', /windows-x64\.zip$/);
+  assert.equal(win.sha256, 'c'.repeat(64));
+
+  // 没有这个平台的包 → 明确「没有地址」，而不是拿去下载 undefined
+  const linux = resolveDownload(entry, 'linux', 'x64');
+  assert.deepEqual(linux.urls, []);
+  assert.equal(linux.source, 'none');
+});
+
+test('resolveDownload: 手写的 urls 是镜像，排在 release 前面，但校验值仍取这个平台的包', () => {
+  const entry = {
+    urls: ['https://mirror.example.com/a.zip'],
+    release: RELEASE_ENTRY.release,
+    sha256: '',
+    bytes: 0,
+    installedBytes: 0,
+  };
+  const resolved = resolveDownload(entry, 'darwin', 'arm64');
+  assert.equal(resolved.source, 'urls');
+  assert.deepEqual(resolved.urls, [
+    'https://mirror.example.com/a.zip',
+    'https://github.com/heyanLE/arale-book-ocr-manga/releases/download/v0.1.0/arale_onnx_v1-macos-arm64.zip',
+  ]);
+  assert.equal(resolved.sha256, 'b'.repeat(64));
+});
+
+test('resolveDownload: 没有 release 的老条目仍然能用（顶层 urls + sha256）', () => {
+  const resolved = resolveDownload(
+    { urls: ['https://example.com/a.zip'], sha256: 'd'.repeat(64), bytes: 5, installedBytes: 9 },
+    'darwin',
+    'arm64',
+  );
+  assert.deepEqual(resolved.urls, ['https://example.com/a.zip']);
+  assert.equal(resolved.sha256, 'd'.repeat(64));
+  assert.equal(resolved.installedBytes, 9);
+});
+
+test('releaseAssetUrl / platformKey: 形状稳定（改它们等于改分发地址）', () => {
+  assert.equal(
+    releaseAssetUrl('o/r', 'v1', 'a b.zip'),
+    'https://github.com/o/r/releases/download/v1/a%20b.zip',
+  );
+  assert.equal(platformKey('darwin', 'arm64'), 'darwin-arm64');
+  assert.equal(platformKey('win32', 'x64'), 'win32-x64');
+});
+
+test('parseRelease: 坏形状逐个拒绝（远端清单是不可信输入）', () => {
+  const bad = (value: unknown) => parseRelease(value, 'x');
+  assert.deepEqual(bad('nope'), { error: 'x 的 release 不是对象' });
+  assert.match(String((bad({ tag: 'v1', assets: { 'darwin-arm64': { asset: 'a.zip' } } }) as { error: string }).error), /owner\/repo/);
+  assert.match(String((bad({ repo: 'o/r', assets: { 'darwin-arm64': { asset: 'a.zip' } } }) as { error: string }).error), /缺 tag/);
+  assert.match(String((bad({ repo: 'o/r', tag: 'v1' }) as { error: string }).error), /缺 assets/);
+  // 包名不能带路径（清单是远端来的，地址里不许塞路径）
+  for (const asset of ['../evil.zip', 'a/b.zip', 'a\\b.zip']) {
+    const result = bad({ repo: 'o/r', tag: 'v1', assets: { 'darwin-arm64': { asset } } });
+    assert.match(String((result as { error: string }).error), /只能是文件名/, asset);
+  }
+  assert.match(
+    String((bad({ repo: 'o/r', tag: 'v1', assets: { BADKEY: { asset: 'a.zip' } } }) as { error: string }).error),
+    /<platform>-<arch>/,
+  );
+  assert.match(
+    String((bad({ repo: 'o/r', tag: 'v1', assets: { 'darwin-arm64': { asset: 'a.zip', sha256: 'xyz' } } }) as { error: string }).error),
+    /sha256/,
+  );
+  // 空 sha 是**允许**的：表示「归档还没发布」，由安装时拒绝（而不是清单解析失败）
+  const pending = bad({ repo: 'o/r', tag: 'v1', assets: { 'darwin-arm64': { asset: 'a.zip', sha256: '' } } });
+  assert.equal(Array.isArray(pending) ? false : 'assets' in (pending as object), true);
 });

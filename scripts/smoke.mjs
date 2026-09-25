@@ -831,19 +831,57 @@ try {
     Array.isArray(extList?.statuses) && typeof extList?.source === 'string',
     JSON.stringify({ count: extList?.statuses?.length, source: extList?.source }),
   );
-  const ankiEntry = extList?.statuses?.find((item) => item.entry.id === 'ocr-manga-anki');
+  const ankiEntry = extList?.statuses?.find((item) => item.entry.id === 'ocr-arale_onnx_v1');
   check(
-    '随包清单里有 manga-anki 扩展（离线也有东西可装）',
+    '随包清单里有 arale_onnx_v1 扩展（离线也有东西可装）',
     ankiEntry !== undefined,
     JSON.stringify(extList?.statuses?.map((item) => item.entry.id)),
   );
+  // ★ 分发链路的新契约：清单只写「哪个 release 的哪个包」（release{repo,tag,assets}），
+  //   地址由应用拼；一个能力一条条目，平台差异在 assets 里。
+  const entry = ankiEntry?.entry;
+  const platformEntry = entry?.release?.assets?.[`${process.platform}-${process.arch}`];
   check(
-    '扩展条目带 sha256 与下载地址（安全红线：没有校验就不许装）',
-    typeof ankiEntry?.entry?.sha256 === 'string' &&
-      ankiEntry.entry.sha256.length === 64 &&
-      (ankiEntry.entry.urls?.length ?? 0) > 0,
-    JSON.stringify({ sha256: ankiEntry?.entry?.sha256?.slice(0, 12), urls: ankiEntry?.entry?.urls }),
+    '★ 清单用 release{repo,tag,assets} 声明下载来源，且当前平台有对应的包',
+    typeof entry?.release?.repo === 'string' &&
+      entry.release.repo.includes('/') &&
+      typeof entry.release.tag === 'string' &&
+      entry.release.tag.length > 0 &&
+      typeof platformEntry?.asset === 'string' &&
+      platformEntry.asset.length > 0,
+    JSON.stringify({
+      repo: entry?.release?.repo ?? null,
+      tag: entry?.release?.tag ?? null,
+      key: `${process.platform}-${process.arch}`,
+      asset: platformEntry?.asset ?? null,
+      assets: entry?.release ? Object.keys(entry.release.assets) : null,
+    }),
   );
+  check(
+    '★ 包名只能是文件名（清单是远端来的，不许在地址里塞路径）',
+    typeof platformEntry?.asset === 'string' && !platformEntry.asset.includes('/') &&
+      !platformEntry.asset.includes('\\'),
+    JSON.stringify({ asset: platformEntry?.asset }),
+  );
+  // 安全红线：sha256 要么是 64 位十六进制，要么是空（= 归档还没发布）。
+  // 空的时候**必须**点不动安装，而不是装进一个没校验的东西。
+  const assetSha = platformEntry?.sha256;
+  check(
+    '★ sha256 形状正确（64 位十六进制，或空表示未发布）',
+    typeof assetSha === 'string' && (assetSha === '' || /^[0-9a-f]{64}$/.test(assetSha)),
+    JSON.stringify({ sha256: typeof assetSha === 'string' ? assetSha.slice(0, 12) : null }),
+  );
+  if (assetSha === '') {
+    const refused = await client.evaluate(
+      `window.arale.extensions.install(${JSON.stringify('ocr-arale_onnx_v1')})`,
+    );
+    check(
+      '★ 归档未发布（sha 为空）时安装被明确拒绝，且不去联网',
+      refused?.ok === false && /sha256|发布/.test(String(refused?.error)),
+      JSON.stringify(refused),
+    );
+  }
+
   check(
     '本机（macOS arm64）判为可安装',
     ankiEntry?.supported === true,
@@ -947,39 +985,39 @@ try {
     JSON.stringify(cap?.providers?.map((p) => p.id)),
   );
 
-  const mangaAnki = cap?.providers?.find((p) => p.id === 'manga-anki');
-  // manga-anki 现在是一个**扩展**：没装就必须明确说「去装扩展」，而不是含糊地
+  const onnxEngine = cap?.providers?.find((p) => p.id === 'arale_onnx_v1');
+  // 扩展引擎现在是一个可下载的**扩展**：没装就必须明确说「去装扩展」，而不是含糊地
   // 说「不可用」。这条断言同时守着「扩展装了但没被引擎认出来」这种回归。
-  const ankiExtension = mangaAnki?.extension;
+  const ankiExtension = onnxEngine?.extension;
   check(
-    'manga-anki 引擎声明了它来自哪个扩展',
-    ankiExtension?.id === 'ocr-manga-anki',
+    '扩展引擎声明了它来自哪个扩展',
+    ankiExtension?.id === 'ocr-arale_onnx_v1',
     JSON.stringify(ankiExtension),
   );
   if (ankiExtension?.installed === true) {
-    check('扩展已装 → manga-anki 可用', mangaAnki?.available === true, JSON.stringify(mangaAnki));
+    check('扩展已装 → 引擎可用', onnxEngine?.available === true, JSON.stringify(onnxEngine));
   } else {
     check(
-      '扩展没装 → manga-anki 不可用且提示去装扩展',
-      mangaAnki?.available === false && /扩展/.test(mangaAnki?.reason ?? ''),
-      JSON.stringify({ available: mangaAnki?.available, reason: mangaAnki?.reason }),
+      '扩展没装 → 引擎不可用且提示去装扩展',
+      onnxEngine?.available === false && /扩展/.test(onnxEngine?.reason ?? ''),
+      JSON.stringify({ available: onnxEngine?.available, reason: onnxEngine?.reason }),
     );
   }
 
   // 切引擎并确认持久化（换回 system 再验证一次，避免污染后续断言）。
-  const switched = await client.evaluate(`window.arale.ocr.selectProvider('manga-anki')`);
-  check('能切换默认引擎', switched?.selected === 'manga-anki', String(switched?.selected));
+  const switched = await client.evaluate(`window.arale.ocr.selectProvider('arale_onnx_v1')`);
+  check('能切换默认引擎', switched?.selected === 'arale_onnx_v1', String(switched?.selected));
   const back = await client.evaluate(`window.arale.ocr.selectProvider('system')`);
   check('切回系统引擎', back?.selected === 'system', String(back?.selected));
 
   // 真跑一次外部引擎：默认跳过（要十几秒 + 依赖本机 manga_anki 环境），
   // 用 ARALE_SMOKE_OCR=1 打开。这是唯一能证明「双引擎」不是摆设的检查。
-  if (process.env.ARALE_SMOKE_OCR === '1' && mangaAnki?.available === true) {
-    section('manga-anki OCR 引擎（真跑）');
+  if (process.env.ARALE_SMOKE_OCR === '1' && onnxEngine?.available === true) {
+    section('扩展 OCR 引擎（真跑）');
     const started = await client.evaluate(
-      `window.arale.ocr.start(${JSON.stringify(comicId)}, { force: true, provider: 'manga-anki' })`,
+      `window.arale.ocr.start(${JSON.stringify(comicId)}, { force: true, provider: 'arale_onnx_v1' })`,
     );
-    check('manga-anki 任务已启动', started?.ok === true, JSON.stringify(started));
+    check('扩展引擎任务已启动', started?.ok === true, JSON.stringify(started));
 
     let done = null;
     for (let i = 0; i < 200; i += 1) {
@@ -987,23 +1025,23 @@ try {
       if (done && done.error !== '正在识别中…') break;
       await delay(500);
     }
-    check('manga-anki 任务正常结束', done?.ok === true, JSON.stringify(done));
+    check('扩展引擎任务正常结束', done?.ok === true, JSON.stringify(done));
 
     const text = await client.evaluate(`window.arale.book.pageText(${JSON.stringify(comicId)}, 0)`);
     const lines = (text?.blocks ?? []).map((b) => b.lines?.[0]);
     check(
-      'manga-anki 认出了第 1 页的日文',
+      '扩展引擎认出了第 1 页的日文',
       lines.length > 0 && lines.some((line) => /[\u3040-\u30ff\u4e00-\u9fff]/.test(line ?? '')),
       JSON.stringify(lines),
     );
   } else if (process.env.ARALE_SMOKE_OCR === '1') {
-    section('manga-anki OCR 引擎（真跑，已跳过）');
-    // 不判失败：manga-anki 现在是**扩展**，本机没装它当然跑不了。真跑用例的前提是
+    section('扩展 OCR 引擎（真跑，已跳过）');
+    // 不判失败：引擎现在是**扩展**，本机没装它当然跑不了。真跑用例的前提是
     // 「先装扩展」，那是环境准备，不是代码缺陷。如实说出来，不假装验证过。
     check(
-      '跳过真跑：先装 ocr-manga-anki 扩展',
+      '跳过真跑：先装 ocr-arale_onnx_v1 扩展',
       true,
-      mangaAnki?.reason ?? '未探测到',
+      onnxEngine?.reason ?? '未探测到',
     );
   }
 
@@ -1014,8 +1052,8 @@ try {
   // 真跑要挑一个**不需要先装扩展**的引擎：system 随应用走，装完即用。
   const quickEngine = queueEngines?.providers?.find((p) => p.id === 'system' && p.available)
     ? 'system'
-    : queueEngines?.providers?.find((p) => p.id === 'manga-anki' && p.available)
-      ? 'manga-anki'
+    : queueEngines?.providers?.find((p) => p.id === 'arale_onnx_v1' && p.available)
+      ? 'arale_onnx_v1'
       : null;
 
   if (process.env.ARALE_SMOKE_OCR !== '1') {
@@ -1030,7 +1068,7 @@ try {
     // 同样跳过而不是失败：两个引擎都不可用是**这台机器的状态**（系统 OCR 资源缺失、
     // 扩展没装），不是回归。真正能跑的环境中这条会执行到。
     check(
-      '跳过真跑：需要系统 OCR 可用，或已装 manga-anki 扩展',
+      '跳过真跑：需要系统 OCR 可用，或已装扩展引擎',
       true,
       JSON.stringify(queueEngines?.providers?.map((p) => ({ id: p.id, ok: p.available }))),
     );
