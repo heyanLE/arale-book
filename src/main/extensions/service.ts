@@ -1,0 +1,663 @@
+/**
+ * 扩展服务：**清单 + 下载器 + 安装记录**。
+ *
+ * 目录布局（`<userData>/extensions/`）：
+ * ```
+ *   catalog.json          ← 远端清单的本地缓存（离线时用）
+ *   installed.json        ← 本机装了什么（真相源）
+ *   <extId>/              ← 解包后的扩展
+ *     extension.json      ← 扩展自描述（必须存在）
+ *   .staging/             ← 下载与解包过程中的临时文件
+ * ```
+ *
+ * ## 安装是「先落到一边，再改名」
+ *
+ * 下载、校验、解包全部在 `.staging/` 里做，**最后一步才 rename 到 `<extId>/`**。
+ * 中间任何一步失败（网络断、sha256 不符、归档里少了 self-description）都不会在扩展目录
+ * 里留下半成品——那种半成品最糟：`status()` 会看到目录存在于是报告「已安装」，
+ * 而启动 runner 时才发现缺文件，用户看到的是一句莫名其妙的 spawn ENOENT。
+ *
+ * rename 是原子的（同一个文件系统内），所以「要么完全没有，要么完整」。
+ *
+ * ## 内置清单是回退，不是第二真相源
+ *
+ * 远端清单拿不到时用随包带的那份。它不是「备份」，而是**新装应用的第一次体验**：
+ * 第一次打开就得看得见有什么可装，不能因为 GitHub 不可达而让扩展页面一片空白。
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+import type {
+  ExtensionCatalog,
+  ExtensionEntry,
+  ExtensionManifest,
+  ExtensionProgress,
+  ExtensionStatus,
+  InstalledExtension,
+} from '../../shared/extensions';
+import { EXTENSION_MANIFEST_FILE } from '../../shared/extensions';
+import { NativeCommandError, extractArchive, isNativeAvailable } from '../native/sidecar';
+import { DownloadCancelledError, DownloadError, downloadToFile } from './download';
+
+/**
+ * 默认清单地址。
+ *
+ * 指向仓库里的一个**纯数据文件**（不需要发版就能更新清单）。换地址的办法有两条，
+ * 按优先级：构造参数 `catalogUrl` > 环境变量 `ARALE_EXTENSIONS_CATALOG_URL`。
+ * 后者是给开发和自建镜像用的——把清单托管到自己域名下只需设一个环境变量。
+ */
+export const DEFAULT_CATALOG_URL =
+  'https://raw.githubusercontent.com/aralebook/extensions/main/catalog.json';
+
+/** 应用认得的清单格式版本。不认就拒绝加载，而不是半懂不懂地解析。 */
+export const EXTENSION_SCHEMA_VERSION = 1;
+
+export interface ExtensionServiceOptions {
+  /** 扩展根目录（`<userData>/extensions`）。 */
+  root: string;
+  /** 随包带的清单（`<resources>/extensions/catalog.json`）。 */
+  bundledCatalogFile: string;
+  /** 远端清单地址覆盖。 */
+  catalogUrl?: string;
+  /** 进度广播。 */
+  onProgress?: (progress: ExtensionProgress) => void;
+  /** 安装/卸载完成后回调（UI 刷新 + 引擎重新探测）。 */
+  onChanged?: () => void;
+}
+
+export class ExtensionService {
+  /** 正在安装的扩展：同一时刻只允许一个（并发下 700 MB 只会互相拖慢）。 */
+  private readonly installing = new Set<string>();
+  private readonly cancelled = new Set<string>();
+
+  constructor(private readonly options: ExtensionServiceOptions) {}
+
+  // -------------------------------------------------------------------------
+  // 路径
+  // -------------------------------------------------------------------------
+
+  root(): string {
+    return this.options.root;
+  }
+
+  catalogCacheFile(): string {
+    return path.join(this.options.root, 'catalog.json');
+  }
+
+  installedFile(): string {
+    return path.join(this.options.root, 'installed.json');
+  }
+
+  stagingDir(): string {
+    return path.join(this.options.root, '.staging');
+  }
+
+  /** 某个扩展的安装目录（**不保证存在**）。 */
+  installDir(id: string): string {
+    return path.join(this.options.root, safeId(id));
+  }
+
+  isInstalling(id: string): boolean {
+    return this.installing.has(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // 清单
+  // -------------------------------------------------------------------------
+
+  /**
+   * 当前可用的清单：优先用远端缓存，没有就用随包带的那份。
+   *
+   * 读不到任何清单时返回**空清单**而不是抛：扩展功能整体失效不该让应用起不来。
+   */
+  loadCatalog(): { catalog: ExtensionCatalog; source: 'cache' | 'bundled' | 'none'; error: string | null } {
+    const cached = readCatalogFile(this.catalogCacheFile());
+    if (cached.ok) return { catalog: cached.catalog, source: 'cache', error: null };
+    const bundled = readCatalogFile(this.options.bundledCatalogFile);
+    if (bundled.ok) return { catalog: bundled.catalog, source: 'bundled', error: null };
+    return {
+      catalog: { schemaVersion: EXTENSION_SCHEMA_VERSION, generatedAt: '', extensions: [] },
+      source: 'none',
+      error: bundled.error ?? cached.error ?? '找不到扩展清单',
+    };
+  }
+
+  /**
+   * 从远端拉一份新清单并缓存。
+   *
+   * 拉不到**不抛**：离线是常态，缓存 + 内置清单足够用。返回值里说明结果，UI 显示一行
+   * 「清单更新失败（用本地缓存）」比弹一个错误框合适。
+   */
+  async refreshCatalog(): Promise<{ ok: boolean; count: number; error: string | null; source: 'remote' | 'cache' }> {
+    const url = this.options.catalogUrl ?? process.env['ARALE_EXTENSIONS_CATALOG_URL'] ?? DEFAULT_CATALOG_URL;
+    const dest = path.join(this.stagingDir(), 'catalog.json');
+    fs.mkdirSync(this.stagingDir(), { recursive: true });
+
+    try {
+      await downloadToFile({ url, dest, throttleMs: 1000 });
+      const text = fs.readFileSync(dest, 'utf8');
+      const parsed = parseCatalog(text);
+      if (!parsed.ok) {
+        fs.rmSync(dest, { force: true });
+        return { ok: false, count: 0, error: `远端清单格式不对：${parsed.error}`, source: 'cache' };
+      }
+      // 校验通过才覆盖缓存：一份坏清单会让扩展页面直接空掉。
+      fs.mkdirSync(this.options.root, { recursive: true });
+      fs.renameSync(dest, this.catalogCacheFile());
+      return { ok: true, count: parsed.catalog.extensions.length, error: null, source: 'remote' };
+    } catch (error) {
+      fs.rmSync(dest, { force: true });
+      const reason =
+        error instanceof DownloadCancelledError
+          ? '已取消'
+          : error instanceof DownloadError
+            ? `${error.message}（${error.detail.replace(/\n/g, ' ')}）`
+            : error instanceof Error
+              ? error.message
+              : String(error);
+      return { ok: false, count: 0, error: reason, source: 'cache' };
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 状态
+  // -------------------------------------------------------------------------
+
+  installed(): InstalledExtension[] {
+    const raw = readJson<unknown>(this.installedFile(), []);
+    if (!Array.isArray(raw)) return [];
+    const out: InstalledExtension[] = [];
+    for (const item of raw) {
+      if (typeof item !== 'object' || item === null) continue;
+      const record = item as Record<string, unknown>;
+      const id = record['id'];
+      const version = record['version'];
+      if (typeof id !== 'string' || typeof version !== 'string') continue;
+      out.push({
+        id,
+        version,
+        installedAt: typeof record['installedAt'] === 'number' ? record['installedAt'] : 0,
+        dir: this.installDir(id),
+        sha256: typeof record['sha256'] === 'string' ? record['sha256'] : '',
+        bytes: typeof record['bytes'] === 'number' ? record['bytes'] : 0,
+      });
+    }
+    return out;
+  }
+
+  /** 清单 + 本机状态拼成 UI 直接渲染的行。 */
+  list(): { statuses: ExtensionStatus[]; source: 'cache' | 'bundled' | 'none'; error: string | null } {
+    const { catalog, source, error } = this.loadCatalog();
+    const byId = new Map(this.installed().map((item) => [item.id, item]));
+
+    const statuses = catalog.extensions.map<ExtensionStatus>((entry) => {
+      const installed = byId.get(entry.id) ?? null;
+      const support = this.supportOf(entry);
+      return {
+        entry,
+        installed,
+        // 「有新版」只比字符串相等，不比语义版本高低：清单里出现一个更低的版本号
+        // 时也提示，因为那通常意味着上游在回滚，用户应该跟上。
+        updateAvailable: installed !== null && installed.version !== entry.version,
+        supported: support.supported,
+        unsupportedReason: support.reason,
+      };
+    });
+    return { statuses, source, error };
+  }
+
+  private supportOf(entry: ExtensionEntry): { supported: boolean; reason: string | null } {
+    const platform = currentPlatform();
+    const arch = currentArch();
+    if (platform === null) {
+      return { supported: false, reason: `不支持的平台：${process.platform}` };
+    }
+    if (entry.platforms.length > 0 && !entry.platforms.includes(platform)) {
+      return { supported: false, reason: `这个扩展只支持：${entry.platforms.join(' / ')}` };
+    }
+    if (entry.arch.length > 0 && (arch === null || !entry.arch.includes(arch))) {
+      return {
+        supported: false,
+        reason: `这个扩展只支持：${entry.arch.join(' / ')}（当前 ${process.arch}）`,
+      };
+    }
+    return { supported: true, reason: null };
+  }
+
+  /** 已安装扩展的自描述（runner 靠它启动）。 */
+  readManifest(id: string): ExtensionManifest | null {
+    const file = path.join(this.installDir(id), EXTENSION_MANIFEST_FILE);
+    const raw = readJson<unknown>(file, null);
+    if (raw === null) return null;
+    const parsed = parseManifest(raw);
+    return parsed.ok ? parsed.manifest : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // 安装 / 卸载
+  // -------------------------------------------------------------------------
+
+  cancel(id: string): void {
+    this.cancelled.add(id);
+  }
+
+  /**
+   * 安装（或升级）一个扩展。
+   *
+   * **永不抛**：所有失败都变成 `{ ok:false, error }`，UI 直接显示。抛出去的话中间
+   * 那几十次进度事件之后用户只会看到一个 `Error: ...`，而哪一步失败了看不出来。
+   */
+  async install(id: string): Promise<{ ok: boolean; error: string | null }> {
+    if (this.installing.has(id)) return { ok: false, error: '这个扩展正在安装中' };
+    this.installing.add(id);
+    this.cancelled.delete(id);
+
+    const staging = path.join(this.stagingDir(), safeId(id));
+    try {
+      const { catalog } = this.loadCatalog();
+      const entry = catalog.extensions.find((item) => item.id === id);
+      if (entry === undefined) return { ok: false, error: `清单里没有这个扩展：${id}` };
+
+      const support = this.supportOf(entry);
+      if (!support.supported) return { ok: false, error: support.reason ?? '当前平台不支持这个扩展' };
+
+      if (entry.sha256 === '' || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
+        return { ok: false, error: '清单里这个扩展没有有效的 sha256，拒绝安装' };
+      }
+      if (entry.urls.length === 0) return { ok: false, error: '清单里这个扩展没有下载地址' };
+      if (!isNativeAvailable()) {
+        return {
+          ok: false,
+          error: '缺少原生解包组件，无法解压扩展（先运行 `npm run build:native`）',
+        };
+      }
+
+      // 依赖先装。深度 1 就够——扩展之间不该形成依赖树。
+      for (const dep of entry.requires) {
+        if (this.installed().some((item) => item.id === dep)) continue;
+        const nested = await this.install(dep);
+        if (!nested.ok) return { ok: false, error: `依赖 ${dep} 安装失败：${nested.error}` };
+      }
+
+      fs.rmSync(staging, { recursive: true, force: true });
+      fs.mkdirSync(staging, { recursive: true });
+
+      const archive = path.join(staging, 'download.zip');
+      this.progress(id, 'downloading', 0, entry.bytes);
+
+      let lastError: string | null = null;
+      let downloaded: { bytes: number; sha256: string } | null = null;
+      for (const url of entry.urls) {
+        try {
+          downloaded = await downloadToFile({
+            url,
+            dest: archive,
+            onProgress: (received, total) =>
+              this.progress(id, 'downloading', received, total > 0 ? total : entry.bytes),
+            isCancelled: () => this.cancelled.has(id),
+          });
+          break;
+        } catch (error) {
+          if (error instanceof DownloadCancelledError) {
+            return { ok: false, error: '已取消' };
+          }
+          lastError =
+            error instanceof DownloadError
+              ? `${error.message} @ ${url}`
+              : error instanceof Error
+                ? `${error.message} @ ${url}`
+                : String(error);
+          // 换下一个镜像继续试。
+        }
+      }
+      if (downloaded === null) {
+        return { ok: false, error: `下载失败：${lastError ?? '没有可用的下载地址'}` };
+      }
+
+      this.progress(id, 'verifying', downloaded.bytes, downloaded.bytes);
+      if (downloaded.sha256 !== entry.sha256) {
+        return {
+          ok: false,
+          error: [
+            '下载内容的 sha256 与清单不一致，已丢弃。',
+            `期望 ${entry.sha256}`,
+            `实际 ${downloaded.sha256}`,
+          ].join(' '),
+        };
+      }
+
+      this.progress(id, 'extracting', downloaded.bytes, downloaded.bytes);
+      const unpacked = path.join(staging, 'unpacked');
+      fs.mkdirSync(unpacked, { recursive: true });
+      try {
+        await extractArchive(archive, unpacked, false);
+      } catch (error) {
+        return {
+          ok: false,
+          error:
+            error instanceof NativeCommandError
+              ? `解压失败：${error.message}`
+              : `解压失败：${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      fs.rmSync(archive, { force: true });
+
+      const validated = validateUnpacked(unpacked, entry);
+      if (!validated.ok) return { ok: false, error: validated.error };
+
+      // 可执行位：归档里不保证有（zip 的权限位各家工具写法不一），显式补上。
+      // 少了它 runner 会以 EACCES 失败，而错误信息里看不出是权限问题。
+      chmodExecutable(unpacked, validated.manifest);
+
+      // 最后一步：原子换入。
+      const target = this.installDir(id);
+      const backup = `${target}.old`;
+      fs.rmSync(backup, { recursive: true, force: true });
+      if (fs.existsSync(target)) fs.renameSync(target, backup);
+      fs.renameSync(unpacked, target);
+      fs.rmSync(backup, { recursive: true, force: true });
+
+      this.recordInstalled({
+        id,
+        version: entry.version,
+        installedAt: Date.now(),
+        dir: target,
+        sha256: downloaded.sha256,
+        bytes: downloaded.bytes,
+      });
+
+      this.progress(id, 'done', downloaded.bytes, downloaded.bytes);
+      this.options.onChanged?.();
+      return { ok: true, error: null };
+    } catch (error) {
+      this.progress(id, 'failed', 0, 0, error instanceof Error ? error.message : String(error));
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      this.installing.delete(id);
+      this.cancelled.delete(id);
+      fs.rmSync(staging, { recursive: true, force: true });
+    }
+  }
+
+  /** 卸载。目录删掉、记录删掉——不保留「卸载残留」。 */
+  remove(id: string): { ok: boolean; error: string | null } {
+    if (this.installing.has(id)) return { ok: false, error: '正在安装中，先等它结束' };
+    const target = this.installDir(id);
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+    } catch (error) {
+      return { ok: false, error: `删除失败：${error instanceof Error ? error.message : String(error)}` };
+    }
+    this.recordInstalled(null, id);
+    this.options.onChanged?.();
+    return { ok: true, error: null };
+  }
+
+  private progress(
+    id: string,
+    phase: ExtensionProgress['phase'],
+    received: number,
+    total: number,
+    message = '',
+  ): void {
+    this.options.onProgress?.({ id, phase, received, total, message });
+  }
+
+  /** 写安装记录。`record` 为 null 时删除该 id。 */
+  private recordInstalled(record: InstalledExtension | null, removeId?: string): void {
+    const all = this.installed().filter((item) => item.id !== (record?.id ?? removeId));
+    if (record !== null) all.push(record);
+    fs.mkdirSync(this.options.root, { recursive: true });
+    // 直接覆写：这份记录坏了最多是「扩展看起来没装」，重装一次就好，
+    // 不值得为它引入更复杂的恢复逻辑。
+    fs.writeFileSync(this.installedFile(), JSON.stringify(all, null, 2), 'utf8');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 校验
+// ---------------------------------------------------------------------------
+
+export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalog } | { ok: false; error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text) as unknown;
+  } catch (error) {
+    return { ok: false, error: `不是合法 JSON：${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (typeof raw !== 'object' || raw === null) return { ok: false, error: '顶层不是对象' };
+  const record = raw as Record<string, unknown>;
+  if (record['schemaVersion'] !== EXTENSION_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      error: `schemaVersion 是 ${String(record['schemaVersion'])}，本应用只认 ${EXTENSION_SCHEMA_VERSION}`,
+    };
+  }
+  const list = record['extensions'];
+  if (!Array.isArray(list)) return { ok: false, error: 'extensions 不是数组' };
+
+  const extensions: ExtensionEntry[] = [];
+  const seen = new Set<string>();
+  for (const [index, item] of list.entries()) {
+    if (typeof item !== 'object' || item === null) return { ok: false, error: `第 ${index} 项不是对象` };
+    const entry = item as Record<string, unknown>;
+    const id = str(entry['id']);
+    if (id === null) return { ok: false, error: `第 ${index} 项缺 id` };
+    if (seen.has(id)) return { ok: false, error: `id 重复：${id}` };
+    seen.add(id);
+    const name = str(entry['name']);
+    const version = str(entry['version']);
+    const provides = str(entry['provides']);
+    const kind = str(entry['kind']);
+    if (name === null || version === null || provides === null || kind === null) {
+      return { ok: false, error: `${id} 缺 name / version / provides / kind` };
+    }
+    const urls = strArray(entry['urls']);
+    if (urls.length === 0) return { ok: false, error: `${id} 没有 download 地址` };
+
+    extensions.push({
+      id,
+      name,
+      version,
+      kind: kind === 'ocr-engine' ? 'ocr-engine' : 'ocr-engine',
+      provides,
+      summary: str(entry['summary']) ?? '',
+      platforms: strArray(entry['platforms']) as ExtensionEntry['platforms'],
+      arch: strArray(entry['arch']) as ExtensionEntry['arch'],
+      urls,
+      bytes: num(entry['bytes']),
+      sha256: str(entry['sha256']) ?? '',
+      installedBytes: num(entry['installedBytes']),
+      license: str(entry['license']) ?? '',
+      homepage: str(entry['homepage']) ?? '',
+      requires: strArray(entry['requires']),
+      notes: str(entry['notes']) ?? '',
+    });
+  }
+  return {
+    ok: true,
+    catalog: {
+      schemaVersion: EXTENSION_SCHEMA_VERSION,
+      generatedAt: str(record['generatedAt']) ?? '',
+      extensions,
+    },
+  };
+}
+
+export function parseManifest(
+  raw: unknown,
+): { ok: true; manifest: ExtensionManifest } | { ok: false; error: string } {
+  if (typeof raw !== 'object' || raw === null) return { ok: false, error: '不是对象' };
+  const record = raw as Record<string, unknown>;
+  const id = str(record['id']);
+  const version = str(record['version']);
+  const provides = str(record['provides']);
+  if (id === null || version === null || provides === null) {
+    return { ok: false, error: '缺 id / version / provides' };
+  }
+
+  let engine: ExtensionManifest['engine'];
+  const rawEngine = record['engine'];
+  if (typeof rawEngine === 'object' && rawEngine !== null) {
+    const item = rawEngine as Record<string, unknown>;
+    engine = {
+      label: str(item['label']) ?? id,
+      requirement: str(item['requirement']) ?? '',
+      downloadSizeMb: num(item['downloadSizeMb']),
+    };
+  }
+
+  let runner: ExtensionManifest['runner'];
+  const rawRunner = record['runner'];
+  if (typeof rawRunner === 'object' && rawRunner !== null) {
+    const item = rawRunner as Record<string, unknown>;
+    const program = str(item['program']);
+    if (program === null) return { ok: false, error: 'runner 缺 program' };
+    runner = {
+      program,
+      args: strArray(item['args']),
+      env: strRecord(item['env']),
+    };
+  }
+
+  return {
+    ok: true,
+    manifest: {
+      id,
+      version,
+      kind: 'ocr-engine',
+      provides,
+      engine,
+      runner,
+      license: str(record['license']) ?? undefined,
+      homepage: str(record['homepage']) ?? undefined,
+    },
+  };
+}
+
+/** 解包结果校验：自描述必须在、id/version 必须与清单一致、runner 不能指向目录外。 */
+function validateUnpacked(
+  unpacked: string,
+  entry: ExtensionEntry,
+): { ok: true; manifest: ExtensionManifest } | { ok: false; error: string } {
+  const manifestFile = path.join(unpacked, EXTENSION_MANIFEST_FILE);
+  if (!fs.existsSync(manifestFile)) {
+    return { ok: false, error: `归档里缺 ${EXTENSION_MANIFEST_FILE}，这不是一个扩展包` };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as unknown;
+  } catch (error) {
+    return {
+      ok: false,
+      error: `${EXTENSION_MANIFEST_FILE} 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  const parsed = parseManifest(raw);
+  if (!parsed.ok) return { ok: false, error: `${EXTENSION_MANIFEST_FILE} 不合格：${parsed.error}` };
+  if (parsed.manifest.id !== entry.id) {
+    return { ok: false, error: `归档自报 id 是 ${parsed.manifest.id}，清单里是 ${entry.id}` };
+  }
+  if (parsed.manifest.version !== entry.version) {
+    return {
+      ok: false,
+      error: `归档自报 version 是 ${parsed.manifest.version}，清单里是 ${entry.version}`,
+    };
+  }
+  if (parsed.manifest.runner !== undefined) {
+    const program = resolveInside(unpacked, parsed.manifest.runner.program);
+    if (program === null) {
+      return { ok: false, error: `runner 路径越出扩展目录：${parsed.manifest.runner.program}` };
+    }
+    if (!fs.existsSync(program)) {
+      return { ok: false, error: `runner 不存在：${parsed.manifest.runner.program}` };
+    }
+  }
+  return { ok: true, manifest: parsed.manifest };
+}
+
+/**
+ * 把一个相对路径解析到 `root` 内；越界返回 null。
+ *
+ * 这是**安全边界**：`extension.json` 来自下载的归档，如果它能写
+ * `"program": "../../../../bin/sh"`，那么清单被篡改就能让应用执行系统上的任意程序。
+ * 校验用 `path.resolve` 之后的前缀比较（而不是字符串查找 `..`），因为符号链接与
+ * 混合分隔符都能绕过朴素的字符串检查。
+ */
+export function resolveInside(root: string, rel: string): string | null {
+  if (rel === '' || path.isAbsolute(rel)) return null;
+  const resolvedRoot = path.resolve(root);
+  const target = path.resolve(resolvedRoot, rel);
+  if (target !== resolvedRoot && !target.startsWith(resolvedRoot + path.sep)) return null;
+  return target;
+}
+
+/** 补上可执行位。Windows 不需要（也是不支持的模式位）。 */
+function chmodExecutable(unpacked: string, manifest: ExtensionManifest): void {
+  if (process.platform === 'win32') return;
+  const program = manifest.runner?.program;
+  if (program === undefined) return;
+  const abs = resolveInside(unpacked, program);
+  if (abs === null) return;
+  try {
+    fs.chmodSync(abs, 0o755);
+  } catch {
+    /* 补不上就让 runner 报 EACCES——那时用户至少能看到权限错误 */
+  }
+}
+
+function currentPlatform(): ExtensionEntry['platforms'][number] | null {
+  const value = process.platform;
+  return value === 'darwin' || value === 'win32' || value === 'linux' ? value : null;
+}
+
+function currentArch(): ExtensionEntry['arch'][number] | null {
+  const value = process.arch;
+  return value === 'arm64' || value === 'x64' ? value : null;
+}
+
+/** 扩展 id 会成为目录名，所以只允许保守的字符集（防止 `../x` 之类）。 */
+function safeId(id: string): string {
+  const cleaned = id.replace(/[^A-Za-z0-9._-]/g, '_');
+  return cleaned === '' || cleaned.startsWith('.') ? `ext_${cleaned.replace(/\./g, '_')}` : cleaned;
+}
+
+function readCatalogFile(
+  file: string,
+): { ok: true; catalog: ExtensionCatalog } | { ok: false; error: string } {
+  try {
+    return parseCatalog(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return { ok: false, error: `读不到清单：${file}` };
+  }
+}
+
+function readJson<T>(file: string, fallback: T): T {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function str(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+function strArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function strRecord(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item === 'string') out[key] = item;
+  }
+  return out;
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}

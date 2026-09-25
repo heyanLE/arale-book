@@ -1,0 +1,51 @@
+{
+  "name": "aralebook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "あられブック (ARaLeBook) — desktop-only Calibre-style manager and reader for comics and novels, with Japanese segmentation and click-to-lookup popup dictionary.",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "build:main": "tsc -p tsconfig.main.json && node scripts/bundle-preload.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/tests/*.test.js\"",
+    "test:only": "node --test \"dist-test/tests/*.test.js\"",
+    "smoke": "node scripts/smoke.mjs",
+    "samples": "node scripts/make-samples.mjs",
+    "test:all": "npm test && npm run smoke",
+    "screenshot": "node scripts/screenshot.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "build:all": "npm run build && npm run build:native && npm run build:vision-ocr",
+    "native:test": "cd native/arale-native && cargo test",
+    "test:native": "node scripts/test-native.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "pack": "node scripts/pack.mjs",
+    "pack:dir": "node scripts/pack.mjs --dir",
+    "verify:package": "node scripts/verify-package.mjs",
+    "build:vision-ocr": "node scripts/build-vision-ocr.mjs",
+    "icon:export": "node scripts/make-icon.mjs --export"
+  },
+  "dependencies": {
+    "7z-wasm": "1.2.0",
+    "fast-xml-parser": "^4.5.1",
+    "fflate": "^0.8.2",
+    "node-unrar-js": "2.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.9",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

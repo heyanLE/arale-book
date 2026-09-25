@@ -1,0 +1,37 @@
+{
+  "comment": [
+    "随包内嵌的小词典：装一次就永久可用，不需要用户做任何决定。",
+    "判断标准是「离线可用的价值 ÷ 安装包体积」——这三部加起来只有 1 MB，",
+    "而 JMdict(22MB)/Jitendex(37MB)/Pixiv(30MB) 那种走扩展下载。",
+    "sha256 用于「同一个文件被改过」时重新导入，以及构建时的完整性校验。"
+  ],
+  "dictionaries": [
+    {
+      "file": "aozora-jukugo-freq.zip",
+      "title": "青空文庫熟語",
+      "description": "青空文庫の熟語頻度（rank ベース）",
+      "source": "https://raw.githubusercontent.com/MarvNC/yomitan-dictionaries/master/dl/%5BFreq%5D%20Aozora%20Bunko.zip",
+      "license": "CC-BY-SA-4.0",
+      "bytes": 899404,
+      "sha256": "116009c3034d97a16b257fda10f2138067815986c954bffbb5c93aad60faa867"
+    },
+    {
+      "file": "surasura-giseigo.zip",
+      "title": "surasura 擬声語",
+      "description": "日本語の擬声語・擬態語辞典（約 1400 語）",
+      "source": "https://raw.githubusercontent.com/MarvNC/yomitan-dictionaries/master/dl/%5BMonolingual%5D%20surasura.zip",
+      "license": "CC-BY-SA-4.0",
+      "bytes": 104920,
+      "sha256": "f8d882b8db922e9638d4d577885c0e939266a15d285c0807c5117ee59d13f56e"
+    },
+    {
+      "file": "fukugougo-kigen.zip",
+      "title": "複合語起源",
+      "description": "複合語の由来",
+      "source": "https://raw.githubusercontent.com/MarvNC/yomitan-dictionaries/master/dl/%5BOther%5D%20%E8%A4%87%E5%90%88%E8%AA%9E%E8%B5%B7%E6%BA%90.zip",
+      "license": "CC-BY-SA-4.0",
+      "bytes": 5280,
+      "sha256": "4e15250659268f5470fd5e8ab848fc9b259c94876d3027716481f9f83303f4b8"
+    }
+  ]
+}

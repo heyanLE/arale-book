@@ -1,0 +1,37 @@
+node_modules/
+dist/
+dist-test/
+.npm-cache/
+.electron-cache/
+.home/
+.probe/
+.smoke-userdata/
+.screenshot-userdata/
+# Rust 工具链与原生产物：体积大、可重建，不进仓库
+# （`Cargo.lock` **要**提交：这是个应用不是库，锁文件决定了 sidecar 那堆压缩包解析库
+#   的具体版本，安全相关的东西不能漂）
+.rust/
+native/*/target/
+*.log
+.DS_Store
+
+# 打包产物
+release/
+.models-probe/
+.electron-builder-cache/
+.arale-demo/
+
+# OCR 扩展归档：1.5 GB 级可重建产物，由 vendor/ocr-manga-anki/build.mjs 现场生成
+vendor/ocr-manga-anki/
+
+# 打包图标：`npm run icon` 从 assets/arale-icons-v2 同步过来，但**要进仓库**——
+# 克隆下来就能 `npm run pack`，而且 tests/icons.test.ts 会断言它们与素材包一致。
+build/*
+!build/icon.icns
+!build/icon.png
+!build/icon.ico
+
+# Swift 模块缓存（实测 961 MB）与一次性探针脚本（PP-OCR 时代留下的 onnx 探针）
+.vision-build/
+.probe-det*.mjs
+*.ses

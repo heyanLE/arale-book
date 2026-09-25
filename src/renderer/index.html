@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      外壳页面的 CSP。
+
+      为什么必须有：渲染进程虽然被 `nodeIntegration:false` + `sandbox:true` 关住了，
+      但一个没有 CSP 的页面依然可以被注入的内容拉走（`<img src=http://…>` 做信标、
+      加载远程脚本）。这条 CSP 把外壳钉在本地资源上。
+
+      几个必须放行的东西，改之前先想清楚：
+      - `style-src 'unsafe-inline'`：React 的 `style={{…}}` 就是内联 style 属性；
+      - `frame-src arale:`：阅读器 iframe 加载的是 `arale://` 协议（见 shared/types.ts
+        里 ChapterContent 的说明）；
+      - `img-src arale: data:`：书架封面、漫画页图都从 `arale://` 来；data: 给内联图标。
+      `script-src 'self'` 足够——产物里没有 eval，也没有远程脚本。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' arale: data:; font-src 'self' data:; connect-src 'self' arale:; frame-src arale:; media-src arale: data:; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <title>あられブック (ARaLeBook)</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

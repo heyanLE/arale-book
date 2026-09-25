@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-01-01T00:00:00Z",
+  "_comment": [
+    "随包带的扩展清单：远端拉不到时的回退，也是新装应用的第一次体验。",
+    "远端真相源在仓库的 extensions/catalog.json（换内容不需要发版）。",
+    "sha256 是必填的：安装时校验不过就丢弃下载内容。placeholder 值表示",
+    "「归档还没发布」——安装会明确失败在校验那一步，而不是装进一个坏东西。",
+    "发布归档后把这里和远端清单的 urls / bytes / sha256 一起填真值。"
+  ],
+  "extensions": [
+    {
+      "id": "ocr-manga-anki",
+      "name": "manga-anki OCR（mokuro 管线）",
+      "summary": "comic-text-detector 检测 + manga-ocr 识别。质量明显好于系统 OCR，尤其竖排。自带 Python 运行时，装完不需要任何外部依赖。",
+      "version": "0.0.0",
+      "kind": "ocr-engine",
+      "provides": "manga-anki",
+      "platforms": ["darwin"],
+      "arch": ["arm64"],
+      "urls": [
+        "https://github.com/aralebook/extensions/releases/latest/download/ocr-manga-anki-macos-arm64.zip"
+      ],
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "installedBytes": 0,
+      "license": "GPL-3.0",
+      "homepage": "https://github.com/aralebook/extensions",
+      "requires": [],
+      "notes": "实测打包后约 1.6 GB（模型权重 500 MB、site-packages 1077 MB、精简 CPython 47 MB），压缩约 734 MB。需要 macOS 14+ / Apple Silicon。"
+    }
+  ]
+}

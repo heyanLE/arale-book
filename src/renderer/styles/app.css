@@ -1,0 +1,3028 @@
+/* ==========================================================================
+   aralebook —— 渲染进程全部样式
+   --------------------------------------------------------------------------
+   设计目标：Calibre / Qt 桌面应用，不是网页。
+   - 中性灰、12–13px UI 字号、1px 细边框、24–28px 紧凑行高；
+   - 不要大圆角卡片、不要落地页式阴影；阴影只留给弹窗与菜单（它们真的浮在上面）；
+   - 所有颜色都是 :root 上的 CSS 变量，深色主题在 [data-theme="dark"] 覆盖。
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. 设计令牌
+   -------------------------------------------------------------------------- */
+
+:root {
+  --ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN',
+    'Noto Sans CJK SC', 'Noto Sans JP', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --mono-font: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* 表面 */
+  --bg: #efefef;
+  --bg-panel: #f6f6f6;
+  --bg-content: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #e6e6e6;
+  --bg-active: #dcdcdc;
+  --bg-selected: #f0d9d2;
+  --bg-selected-dim: #e3e3e3;
+  --bg-stripe: #fafafa;
+  --bg-code: #f3f3f3;
+
+  /* 文字 */
+  --text: #1b1b1b;
+  --text-dim: #575757;
+  --text-faint: #8b8b8b;
+  --text-inverse: #ffffff;
+
+  /* 线条 */
+  --border: #c9c9c9;
+  --border-soft: #dedede;
+  --border-strong: #a5a5a5;
+
+  /* 强调 */
+  --accent: #b8442c;
+  --accent-hover: #cf5539;
+  --accent-soft: rgba(184, 68, 44, 0.13);
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.12);
+  --warn: #8a6d00;
+
+  /* 阅读区 */
+  --book-bg: #ffffff;
+  --comic-bg: #2a2a2a;
+  /* 加载遮罩（半透明，盖住阅读区而不是整页） */
+  --overlay: rgba(255, 255, 255, 0.74);
+
+  /* 尺寸 */
+  --row-h: 24px;
+  --row-h-list: 24px;
+  --toolbar-h: 34px;
+  --statusbar-h: 22px;
+  --ui-size: 12px;
+  --ui-size-sm: 11px;
+  --radius: 2px;
+
+  --shadow-popup: 0 6px 18px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.18);
+  --shadow-menu: 0 4px 12px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.2);
+
+  color-scheme: light;
+}
+
+/* 深色主题：JS 会把解析结果写到 <html data-theme>（见 lib/reader-settings.ts）。
+   下面的 @media 只是 JS 未执行时的兜底，值必须与这里保持一致。 */
+[data-theme='dark'] {
+  --bg: #1f1f1f;
+  --bg-panel: #252526;
+  --bg-content: #1b1b1b;
+  --bg-elevated: #2d2d30;
+  --bg-input: #1a1a1a;
+  --bg-hover: #333336;
+  --bg-active: #3d3d41;
+  --bg-selected: #4a2b23;
+  --bg-selected-dim: #333336;
+  --bg-stripe: #202021;
+  --bg-code: #232324;
+
+  --text: #e2e2e2;
+  --text-dim: #a8a8a8;
+  --text-faint: #7c7c7c;
+  --text-inverse: #101010;
+
+  --border: #3c3c40;
+  --border-soft: #303034;
+  --border-strong: #55555b;
+
+  --accent: #e07155;
+  --accent-hover: #ef8266;
+  --accent-soft: rgba(224, 113, 85, 0.18);
+  --danger: #e06c60;
+  --danger-soft: rgba(224, 108, 96, 0.18);
+  --warn: #d9b444;
+
+  --book-bg: #1b1b1b;
+  --comic-bg: #131313;
+  --overlay: rgba(27, 27, 27, 0.74);
+
+  --shadow-popup: 0 6px 20px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-menu: 0 4px 14px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #1f1f1f;
+    --bg-panel: #252526;
+    --bg-content: #1b1b1b;
+    --bg-elevated: #2d2d30;
+    --bg-input: #1a1a1a;
+    --bg-hover: #333336;
+    --bg-active: #3d3d41;
+    --bg-selected: #4a2b23;
+    --bg-selected-dim: #333336;
+    --bg-stripe: #202021;
+    --bg-code: #232324;
+
+    --text: #e2e2e2;
+    --text-dim: #a8a8a8;
+    --text-faint: #7c7c7c;
+    --text-inverse: #101010;
+
+    --border: #3c3c40;
+    --border-soft: #303034;
+    --border-strong: #55555b;
+
+    --accent: #e07155;
+    --accent-hover: #ef8266;
+    --accent-soft: rgba(224, 113, 85, 0.18);
+    --danger: #e06c60;
+    --danger-soft: rgba(224, 108, 96, 0.18);
+    --warn: #d9b444;
+
+    --book-bg: #1b1b1b;
+    --comic-bg: #131313;
+    --overlay: rgba(27, 27, 27, 0.74);
+
+    --shadow-popup: 0 6px 20px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-menu: 0 4px 14px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   2. 基础重置
+   -------------------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--ui-font);
+  font-size: var(--ui-size);
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+  /* 桌面应用：整窗不滚动，滚动只发生在内层面板里。 */
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 工具类 */
+.mono {
+  font-family: var(--mono-font);
+  font-size: var(--ui-size-sm);
+}
+
+.cell-ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  padding: 24px;
+}
+
+.placeholder-error {
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   3. 通用控件
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(var(--bg-elevated), var(--bg-panel));
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+.btn-sm {
+  height: 22px;
+  padding: 0 7px;
+  font-size: var(--ui-size-sm);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.input,
+.select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.input:focus,
+.select:focus {
+  border-color: var(--accent);
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.select {
+  padding-right: 4px;
+}
+
+.range {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+
+.check input {
+  accent-color: var(--accent);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.field-label {
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+/* --------------------------------------------------------------------------
+   4. 应用骨架
+   -------------------------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* 错误横幅：打断性失败才用它，日常回执走状态栏。 */
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.error-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: var(--text-inverse);
+  font-size: 11px;
+  font-weight: 700;
+  flex: none;
+}
+
+.error-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-banner-close {
+  padding: 0 4px;
+  color: inherit;
+  font-size: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   5. 工具栏
+   -------------------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--toolbar-h);
+  padding: 0 6px;
+  background: linear-gradient(var(--bg-panel), var(--bg));
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  user-select: none;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar-title {
+  font-weight: 600;
+  color: var(--text);
+  max-width: 46vw;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding-left: 2px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 3px;
+  flex: none;
+}
+
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.tool-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-soft);
+}
+
+.tool-btn.is-active {
+  background: var(--bg-active);
+  border-color: var(--border);
+}
+
+.toolbar-spinner,
+.statusbar-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: arale-spin 0.7s linear infinite;
+  flex: none;
+}
+
+@keyframes arale-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 分段控件（网格/列表切换） */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.seg-btn {
+  height: 22px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border);
+}
+
+.seg-btn:hover {
+  background: var(--bg-hover);
+}
+
+.seg-btn.is-active {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+/* 分段控件里的方向箭头：稍微淡一点，别跟标签抢注意力，但当前项要高亮出来。 */
+.seg-arrow {
+  opacity: 0.6;
+  font-family: var(--mono-font);
+}
+
+.seg-btn.is-active .seg-arrow {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   6. 状态栏
+   -------------------------------------------------------------------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--statusbar-h);
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+  flex: none;
+  user-select: none;
+}
+
+.statusbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.statusbar-left {
+  flex: 0 1 30%;
+  min-width: 0;
+}
+
+.statusbar-center {
+  flex: 1;
+  justify-content: center;
+}
+
+.statusbar-right {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.statusbar-path {
+  color: var(--text-faint);
+  max-width: 100%;
+}
+
+.statusbar-msg {
+  color: var(--text-dim);
+  max-width: 100%;
+}
+
+.statusbar-stat {
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   6.0 品牌标记 あられブック / ARaLeBook
+   -------------------------------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border-soft);
+  user-select: none;
+  flex: none;
+}
+
+/* ブランドマーク＝アプリ素材のアバター（`assets/arale-icons-v2/avatar/64.png`）。
+   以前は「あ」の文字を朱色グラデの角丸に載せていたが、素材パックができたので画像にした。
+   - 背景・文字色は**持たせない**：素材自体が朱色の角丸板を持っているので、CSS で
+     もう一枚敷くと角の丸みが二重になる；
+   - `box-shadow` ではなく `filter: drop-shadow()`：角は透過なので、箱の影だと
+     透明な角にも四角い影が落ちる；
+   - サイズは 22 CSS px 固定（64px 素材なので 3x 画面でも甘くならない）。 */
+.brand-mark {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.08;
+}
+
+.brand-ja {
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+.brand-en {
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* 窄窗口下只留徽标，别把工具栏挤爆。 */
+@media (max-width: 900px) {
+  .brand-text { display: none; }
+}
+
+/* --------------------------------------------------------------------------
+   7. 书库三栏
+   -------------------------------------------------------------------------- */
+
+.library {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.library-side {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+}
+
+.library-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-content);
+}
+
+.library-detail {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+}
+
+/* 分隔条：视觉上只有 1px 线，热区给足 5px，否则很难拖。 */
+.splitter {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  background: transparent;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+}
+
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border);
+}
+
+.splitter:hover::after,
+.splitter:active::after {
+  background: var(--accent);
+  width: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   8. 侧栏
+   -------------------------------------------------------------------------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0 8px;
+}
+
+.sidebar-section {
+  margin-bottom: 6px;
+}
+
+.sidebar-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 2px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.sidebar-clear {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--row-h);
+  padding: 0 8px 0 14px;
+  color: var(--text);
+  text-align: left;
+}
+
+.sidebar-item:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-item.is-active {
+  background: var(--bg-selected);
+  color: var(--text);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .sidebar-item.is-active {
+  color: var(--text);
+}
+
+.sidebar-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-item-count {
+  color: var(--text-faint);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  flex: none;
+}
+
+.sidebar-footer {
+  flex: none;
+  padding: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* --------------------------------------------------------------------------
+   9. 筛选条
+   -------------------------------------------------------------------------- */
+
+.filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.filterbar .select {
+  flex: none;
+}
+
+.library-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   10. 书列表（list / grid 两种模式）
+   -------------------------------------------------------------------------- */
+
+.bookgrid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+}
+
+.bookgrid-list {
+  --list-cols: minmax(150px, 2.4fr) minmax(96px, 1.4fr) minmax(88px, 1.2fr) 62px 48px 84px;
+}
+
+.bookgrid-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-faint);
+}
+
+.bookgrid-empty-title {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.bookgrid-empty-hint {
+  font-size: var(--ui-size-sm);
+}
+
+/* ---- 列表模式 ---- */
+
+.book-list-head {
+  display: grid;
+  grid-template-columns: var(--list-cols);
+  gap: 6px;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.book-row {
+  display: grid;
+  grid-template-columns: var(--list-cols);
+  gap: 6px;
+  align-items: center;
+  height: var(--row-h-list);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: default;
+  user-select: none;
+}
+
+.book-row:nth-child(even) {
+  background: var(--bg-stripe);
+}
+
+.book-row:hover {
+  background: var(--bg-hover);
+}
+
+.book-row.is-selected {
+  background: var(--bg-selected);
+}
+
+.book-row.is-cursor {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.book-row .col {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.row-thumb {
+  width: 14px;
+  height: 20px;
+  object-fit: cover;
+  border: 1px solid var(--border-soft);
+  flex: none;
+}
+
+.vol-chip {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-code);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.format-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-code);
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: none;
+}
+
+.format-epub {
+  border-color: #7ea6c8;
+  color: #2f6b96;
+}
+
+.format-comic {
+  border-color: #c8a37e;
+  color: #8a6132;
+}
+
+[data-theme='dark'] .format-epub {
+  border-color: #46698c;
+  color: #8fc0e8;
+}
+
+[data-theme='dark'] .format-comic {
+  border-color: #8c6a46;
+  color: #e0b689;
+}
+
+/* ---- 网格模式 ---- */
+
+.bookgrid-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 12px 10px;
+  padding: 10px;
+  align-content: start;
+}
+
+.book-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: default;
+  user-select: none;
+  min-width: 0;
+}
+
+.book-tile:hover {
+  background: var(--bg-hover);
+}
+
+.book-tile.is-selected {
+  background: var(--bg-selected);
+  border-color: var(--accent);
+}
+
+.book-tile.is-cursor {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.book-tile-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border: 1px solid var(--border);
+  background: var(--bg-code);
+  overflow: hidden;
+}
+
+.cover-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(160deg, var(--bg-code), var(--bg-hover));
+  color: var(--text-faint);
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.book-tile-title {
+  font-size: var(--ui-size-sm);
+  line-height: 1.3;
+}
+
+.book-tile-sub {
+  font-size: 10px;
+  color: var(--text-faint);
+  line-height: 1.3;
+}
+
+/* --------------------------------------------------------------------------
+   11. 书籍详情面板
+   -------------------------------------------------------------------------- */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-weight: 600;
+  flex: none;
+}
+
+.detail-header-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.detail-cover-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.detail-cover {
+  width: auto;
+  max-width: 100%;
+  max-height: 240px;
+  border: 1px solid var(--border);
+  background: var(--bg-code);
+}
+
+.detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.detail-sub {
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.detail-fields {
+  display: grid;
+  grid-template-columns: 68px 1fr;
+  gap: 2px 6px;
+  margin: 0 0 10px;
+  align-items: baseline;
+}
+
+.detail-label {
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+}
+
+.detail-value {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.detail-block {
+  margin-bottom: 10px;
+}
+
+.detail-block-title {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.detail-hint {
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+}
+
+.detail-desc {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 5px 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-code);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--ui-size-sm);
+  line-height: 1.5;
+}
+
+.detail-path {
+  padding: 4px 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-code);
+  color: var(--text-dim);
+  word-break: break-all;
+  white-space: normal;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+.detail-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.detail-actions-stack {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag-chip {
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-code);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.tag-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   12. 右键菜单（自绘，不用 Electron 原生菜单）
+   -------------------------------------------------------------------------- */
+
+.ctxmenu {
+  position: fixed;
+  z-index: 400;
+  min-width: 172px;
+  padding: 3px 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu);
+  user-select: none;
+}
+
+.ctxmenu-item {
+  display: block;
+  width: 100%;
+  height: 24px;
+  padding: 0 14px;
+  text-align: left;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ctxmenu-item:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.ctxmenu-item.is-danger {
+  color: var(--danger);
+}
+
+.ctxmenu-item.is-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--text-inverse);
+}
+
+.ctxmenu-sep {
+  height: 1px;
+  margin: 3px 0;
+  background: var(--border-soft);
+}
+
+/* --------------------------------------------------------------------------
+   13. 阅读器外壳
+   -------------------------------------------------------------------------- */
+
+.reader {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-content);
+}
+
+.reader-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.reader-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.15;
+}
+
+.reader-title {
+  font-weight: 600;
+  max-width: 40vw;
+}
+
+.reader-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 10px;
+  max-width: 40vw;
+}
+
+.reader-header-spacer {
+  flex: 1;
+}
+
+.reader-progress {
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.reader-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.reader-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--overlay);
+  color: var(--text-dim);
+}
+
+.reader-overlay-error {
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+   14. EPUB 阅读器
+   -------------------------------------------------------------------------- */
+
+.epub-reader {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.epub-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--book-bg);
+}
+
+.epub-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--book-bg);
+}
+
+.epub-footer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  flex: none;
+}
+
+.epub-chapter-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  padding: 0 6px;
+}
+
+.epub-scale {
+  min-width: 40px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+/* 目录抽屉 */
+.toc-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-menu);
+}
+
+.toc-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  flex: none;
+}
+
+.toc-drawer-header > span {
+  flex: 1;
+}
+
+.toc-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc-item {
+  display: block;
+  width: 100%;
+  padding: 3px 10px 3px 8px;
+  text-align: left;
+  color: var(--text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.toc-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.toc-item.is-active {
+  background: var(--bg-selected);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   15. 漫画阅读器
+   -------------------------------------------------------------------------- */
+
+.comic-reader {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.comic-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--comic-bg);
+  touch-action: none;
+}
+
+.comic-viewport.can-pan {
+  cursor: grab;
+}
+
+.comic-viewport.can-pan:active {
+  cursor: grabbing;
+}
+
+.comic-spread {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* transform 由 JS 写（平移量），这里不要加过渡，否则拖动会有橡皮筋感。 */
+}
+
+/* 翻页动画层：`.comic-spread` 的 transform 归平移量，动画只碰这一层。 */
+.comic-slide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  /* 动画由 Web Animations 驱动；这里不加 transition，否则会跟动画叠加出橡皮筋。 */
+  will-change: transform, opacity;
+}
+
+.comic-page-slot {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+}
+
+.comic-page-img {
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.comic-pan-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #eee;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.comic-footer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  flex: none;
+}
+
+.comic-page-label {
+  min-width: 74px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.comic-zoom {
+  min-width: 42px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.comic-text-hint {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+/* ---- OCR 文字层 ---- */
+/* 父层 pointer-events:none + 子块 auto：块与块之间的缝不会吃掉图片上的操作。 */
+.comic-text-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.comic-text-block {
+  position: absolute;
+  pointer-events: auto;
+  /* color:transparent —— 命中层是隐形的，只负责吃事件；具体文字仍由图片呈现。 */
+  color: transparent;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 1px;
+  overflow: hidden;
+  /* 竖排由内联 style 覆盖成 vertical-rl。 */
+  writing-mode: horizontal-tb;
+  line-height: 1.15;
+  cursor: text;
+}
+
+.comic-text-block:hover,
+.comic-text-block.is-hovered {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* --------------------------------------------------------------------------
+   16. 词典弹窗
+   -------------------------------------------------------------------------- */
+
+.dict-popup {
+  position: fixed;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  width: 392px;
+  max-width: min(92vw, 620px);
+  /* 词卡要**长**得下：一张卡上可能挂着好几条分析（A、AB、ABC 一路划下来），
+     70vh 会让第三条正好卡在折叠线上。弹窗自己按内容长高，放不下时由
+     `.dict-popup-body` 统一滚动（定位逻辑会把整卡翻到锚点上方）。 */
+  max-height: min(88vh, 900px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popup);
+  overflow: hidden;
+}
+
+.dict-popup-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  flex: none;
+}
+
+.dict-popup-term {
+  font-weight: 600;
+  max-width: 150px;
+}
+
+.dict-popup-count {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.dict-popup-spacer {
+  flex: 1;
+}
+
+.dict-popup-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+}
+
+.dict-section + .dict-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.dict-term-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dict-expression {
+  font-size: 1.35em;
+  font-weight: 700;
+}
+
+.dict-reading {
+  color: var(--text-dim);
+}
+
+.dict-dict-title {
+  color: var(--text-faint);
+  font-size: 0.85em;
+}
+
+.dict-tags,
+.dict-freqs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.dict-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 0.8em;
+  background: var(--bg-code);
+}
+
+.dict-tag-def {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dict-freq {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.8em;
+}
+
+.dict-deinflect {
+  margin-top: 4px;
+  color: var(--warn);
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.dict-glossary {
+  margin-top: 4px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.dict-glossary ul,
+.dict-glossary ol {
+  margin: 2px 0;
+  padding-left: 18px;
+}
+
+.dict-glossary li {
+  margin: 1px 0;
+}
+
+.dict-glossary div + div {
+  margin-top: 3px;
+}
+
+.dict-glossary table {
+  border-collapse: collapse;
+}
+
+.dict-glossary td,
+.dict-glossary th {
+  border: 1px solid var(--border-soft);
+  padding: 1px 4px;
+}
+
+.dict-glossary ruby rt {
+  font-size: 0.7em;
+  color: var(--text-faint);
+}
+
+.dict-glossary img {
+  max-width: 100%;
+}
+
+.dict-empty {
+  padding: 10px 4px;
+  text-align: center;
+}
+
+.dict-empty-title {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.dict-empty-hint {
+  color: var(--text-faint);
+  font-size: 0.92em;
+}
+
+/* --------------------------------------------------------------------------
+   17. 设置面板
+   -------------------------------------------------------------------------- */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-content);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.settings-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.settings-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 5px;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 20px;
+  max-width: 940px;
+}
+
+.settings-card {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 8px 10px 10px;
+  margin-bottom: 12px;
+}
+
+.settings-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.settings-card-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.settings-card-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 5px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.settings-row:first-of-type {
+  border-top: 0;
+}
+
+.settings-label {
+  flex: none;
+  width: 108px;
+  color: var(--text-dim);
+}
+
+.settings-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+
+/* 只放一个数字/短词的下拉（如配对偏移 0-4）：不该占满整行，把说明文字挤没。 */
+.settings-select-num {
+  flex: none;
+  width: 64px;
+}
+
+/* 选项文字较长的下拉（如「RTL 从右到左」）：64px 会把文字截成「RTL 从…」，
+   用户看不到完整选项。给它一个够放下最长选项的宽度。 */
+.settings-select-wide {
+  flex: none;
+  width: 190px;
+}
+
+.settings-hint {
+  margin: 6px 0 0;
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+  line-height: 1.5;
+}
+
+.dict-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.dict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.dict-row.is-disabled .dict-title,
+.dict-row.is-disabled .dict-meta {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.dict-toggle {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.dict-toggle input {
+  accent-color: var(--accent);
+}
+
+.dict-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.dict-title {
+  font-weight: 600;
+}
+
+.dict-meta {
+  color: var(--text-faint);
+}
+
+/* ==========================================================================
+   分词视图 あられブック
+   --------------------------------------------------------------------------
+   这是「离线批处理产物」的浏览界面，不是阅读界面：信息密度要接近表格，
+   所以行高压到 22px、字重克制，跟书库列表保持同一套节奏。
+   ========================================================================== */
+
+.segment-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-content);
+}
+
+.segment-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  flex: none;
+}
+
+.segment-heading {
+  min-width: 0;
+  flex: 1;
+}
+
+.segment-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.segment-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+
+.segment-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.segment-progress {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  flex: none;
+}
+
+.segment-progress-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.segment-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.segment-progress-text {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.segment-empty {
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+.segment-empty-title {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.segment-empty-hint {
+  max-width: 46em;
+  margin: 0 auto;
+}
+
+.segment-error {
+  margin: 10px 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.segment-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex: none;
+}
+
+.segment-search {
+  flex: 1;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.segment-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.segment-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.segment-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 24px;
+}
+
+.segment-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.segment-row:nth-child(even) {
+  background: var(--bg-stripe);
+}
+
+.segment-row:hover {
+  background: var(--bg-hover);
+}
+
+.segment-word {
+  font-weight: 600;
+  min-width: 6em;
+  flex: none;
+}
+
+.segment-count {
+  color: var(--text-dim);
+  flex: none;
+  min-width: 3.5em;
+}
+
+.segment-surfaces {
+  color: var(--text-faint);
+  font-size: 11px;
+  min-width: 0;
+  flex: 1;
+}
+
+.segment-chip {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-code);
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.segment-more {
+  padding: 8px 12px 24px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* 设置页里的单选项行 */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+.settings-row:hover {
+  background: var(--bg-hover);
+}
+
+.settings-row.is-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.settings-row input[type='radio'] {
+  margin-top: 2px;
+  flex: none;
+}
+
+.settings-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-row-title {
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+.settings-row-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.settings-note {
+  margin: 6px 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.settings-path {
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+.select-sm {
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+/* ==========================================================================
+   设置页的分组标题
+   --------------------------------------------------------------------------
+   三个组（通用 / 漫画 / 小说）是**载体维度**的划分，不是功能维度：用户想知道
+   「改这个会影响漫画还是小说」。所以组标题要比卡片标题更重、更靠外，
+   用一条横线把它和上面的卡片切开，读起来像目录。
+   ========================================================================== */
+
+.settings-group {
+  margin: 22px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+/* 第一个组标题不需要上间距（上面已经有 body 的 padding）。 */
+.settings-group:first-child {
+  margin-top: 0;
+}
+
+/* 组标题用主色的小方块做前缀，比纯文字更容易扫读。 */
+.settings-group::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 11px;
+  margin-right: 7px;
+  vertical-align: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+/* 「图片小说」角标：载体是 EPUB、阅读方式是漫画。用中性色而不是强调色 ——
+   它是个说明，不是告警。 */
+.format-chip.format-note {
+  background: var(--bg-code);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* 详情面板里的「值」是个按钮时（如阅读方式的切换）。做成下划线链接的样子，
+   既明显可点、又不会在字段列表里显得像主操作按钮。 */
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-btn:hover {
+  color: var(--accent-hover);
+}
+
+
+/* --------------------------------------------------------------------------
+   17.3 OCR 队列（右下角全局入口）
+   -------------------------------------------------------------------------- */
+
+/*
+ * 为什么用浮层而不是塞进状态栏的行内：队列弹层要显示书名、进度条和两个按钮，
+ * 塞进 22px 高的状态栏会把它撑变形。停靠条本身就在状态栏右手边，弹层向上展开。
+ */
+.ocr-dock {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ocr-dock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 17px;
+  padding: 0 7px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--ui-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ocr-dock-pill:hover,
+.ocr-dock-pill.is-open {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.ocr-dock-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: arale-ocr-spin 0.9s linear infinite;
+}
+
+@keyframes arale-ocr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 排队中（还没开跑）没有旋转的必要，圆点更合适。 */
+.ocr-dock-pill.is-idle .ocr-dock-spinner {
+  animation: none;
+  border-top-color: currentColor;
+  opacity: 0.5;
+}
+
+.ocr-dock-progress,
+.ocr-dock-pending {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.ocr-dock-caret {
+  font-size: 8px;
+  opacity: 0.75;
+}
+
+.ocr-dock-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 600;
+  width: 310px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popup);
+  text-align: left;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.ocr-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+}
+
+.ocr-dock-title {
+  font-weight: 600;
+}
+
+.ocr-dock-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.ocr-dock-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ocr-queue-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.ocr-queue-item.is-active {
+  background: var(--accent-soft);
+}
+
+.ocr-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ocr-queue-badge {
+  flex: none;
+  min-width: 34px;
+  padding: 0 4px;
+  height: 15px;
+  line-height: 15px;
+  text-align: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  font-size: 10px;
+}
+
+.ocr-queue-badge.is-waiting {
+  background: var(--bg-selected-dim);
+  color: var(--text-dim);
+}
+
+.ocr-queue-title {
+  min-width: 0;
+  font-weight: 600;
+}
+
+.ocr-queue-meta {
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.ocr-queue-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.ocr-queue-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.ocr-queue-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.ocr-dock-note {
+  margin: 0;
+  padding: 5px 8px;
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+  line-height: 1.5;
+}
+
+/* 识别中时引擎选择器被锁定：淡化 + 禁止手型，让「不能改」这件事看得见。 */
+.select.is-frozen {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ocr-dock-spinner {
+    animation: none;
+  }
+  .ocr-queue-bar-fill {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   17.4 扩展（设置页里的下载/安装卡片）
+   -------------------------------------------------------------------------- */
+
+/* 扩展行比其他设置行高得多（三行文字 + 进度条 + 按钮），所以单独一个变体。 */
+.settings-row-block {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-row-block .settings-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-row-block.is-busy {
+  background: var(--accent-soft);
+}
+
+.ext-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  padding-top: 1px;
+}
+
+.ext-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 3px;
+}
+
+.ext-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+
+.ext-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+/* 校验 / 解包阶段没有百分比可显示，用一个流动的色块表示「在工作」。 */
+.ext-progress-fill.is-verifying,
+.ext-progress-fill.is-extracting,
+.ext-progress-fill.is-resolving {
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover), var(--accent));
+  animation: arale-ext-sweep 1.2s ease-in-out infinite;
+}
+
+.ext-progress-fill.is-done {
+  background: var(--accent);
+}
+
+.ext-progress-fill.is-failed {
+  background: var(--danger);
+}
+
+@keyframes arale-ext-sweep {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.ext-progress-text {
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.settings-warn {
+  color: var(--warn);
+}
+
+.settings-err {
+  color: var(--danger);
+  word-break: break-word;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ext-progress-fill.is-verifying,
+  .ext-progress-fill.is-extracting,
+  .ext-progress-fill.is-resolving {
+    animation: none;
+  }
+  .ext-progress-fill {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   16.1 词卡（释义 + LLM 分析 + 保存）
+   -------------------------------------------------------------------------- */
+
+/* 固定住的卡换一个边框色，让「哪几张不会自己消失」一眼看得出来。 */
+.dict-popup.is-pinned {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-popup), 0 0 0 1px var(--accent-soft);
+}
+
+/* 顶部的词是**可点的按钮**（点一下变输入框），所以要把它做成不像按钮的样子。 */
+.wordcard-word {
+  font-weight: 600;
+  font-size: var(--ui-size);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0 3px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.wordcard-word:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.wordcard-word-input {
+  font-weight: 600;
+  font-size: var(--ui-size);
+  width: 160px;
+  padding: 0 3px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+/* 「划词」标记：说明这张卡是按用户框住的原文精确查的。 */
+.wordcard-mode {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.icon-btn.is-active {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+/* 多部词典命中时的切换标签。 */
+.wordcard-dicts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 5px 0 6px;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 4px;
+}
+
+.wordcard-dict-tab {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.wordcard-dict-tab:hover {
+  background: var(--bg-hover);
+}
+
+.wordcard-dict-tab.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-inverse);
+}
+
+/* ---- LLM 分析栏 ---- */
+.wordcard-llm {
+  margin-top: 10px;
+  padding-top: 8px;
+  /* 分栏之间要有看得见的分隔——之前用 --border-soft，在浅色主题下几乎看不见，
+     几栏内容糊成一片，用户分不清哪一栏是哪一栏。 */
+  border-top: 1px solid var(--border);
+}
+
+.wordcard-llm-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wordcard-llm-title {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.wordcard-llm-hint {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+}
+
+/* 模型输出按纯文本渲染（不 innerHTML），所以换行要靠 pre-wrap 保住。 */
+.wordcard-llm-text {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  /* **不**各自滚动：一栏一个小滚动条会让人以为「到底了」，而下面其实还有别的分析。
+     整卡往下长，滚交给 `.dict-popup-body`。 */
+  max-height: none;
+  overflow: visible;
+}
+
+.wordcard-llm-meta {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+}
+
+.wordcard-llm-error {
+  margin-top: 4px;
+  color: var(--danger);
+  font-size: var(--ui-size-sm);
+  word-break: break-word;
+}
+
+.wordcard-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.wordcard-count {
+  color: var(--text-faint);
+  font-size: var(--ui-size-sm);
+}
+
+/* ---- 划词高亮（漫画文字层） ---- */
+/* 方块本身是空的命中区，没有文字节点，所以选区高亮只能自己画。</br> */
+.comic-select-rect {
+  position: absolute;
+  /*
+   * 就是「文字底色」：纯背景色、没有边框、没有描边 —— 和输入框里的选区同一个观感。
+   *
+   * 刻意**不用**边框/圆角：hover 用的是「细边框 + 极淡底色」，用同一套视觉会让
+   * 「鼠标停在这」和「我选中了这几个字」分不清。这里靠**实色块**区分：
+   * hover = 描边（提示可交互），选区 = 底色（表示已选中）。
+   */
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  border: 0;
+  border-radius: 0;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   16.2 词卡夹（右侧列表）
+   -------------------------------------------------------------------------- */
+
+.wordcard-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+}
+
+.wordcard-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.wordcard-panel-title {
+  font-weight: 600;
+}
+
+.wordcard-panel-count {
+  color: var(--text-dim);
+}
+
+.wordcard-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wordcard-item {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.wordcard-item:hover {
+  background: var(--bg-hover);
+}
+
+.wordcard-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 6px 5px 8px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+}
+
+.wordcard-item-word {
+  font-weight: 600;
+}
+
+.wordcard-item-dict {
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.wordcard-item-source {
+  color: var(--text-faint);
+  font-size: 10px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wordcard-item-note {
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.wordcard-item-chip {
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.wordcard-item-remove {
+  flex: none;
+  align-self: center;
+  margin-right: 4px;
+}
+
+/* ---- LLM 配置表单 ---- */
+.llm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.llm-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.llm-actions {
+  align-items: center;
+}
+
+.llm-prompt {
+  /* `.input` 是固定 24px 高的单行控件，textarea 继承它会被压成一条缝 ——
+     提示词是七八行的东西，必须显式放开高度并用 min-height 保证可读。 */
+  height: auto;
+  min-height: 148px;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: var(--ui-size-sm);
+  line-height: 1.6;
+  resize: vertical;
+  margin: 4px 0;
+}
+
+/* 按住空格时换成「可抓取」光标，让「这次拖动是移动画面」看得见。 */
+.comic-viewport.can-pan.is-panning {
+  cursor: grab;
+}
+
+.comic-viewport.can-pan.is-panning:active {
+  cursor: grabbing;
+}
+
+/* 顶部词旁边的编辑按钮：常驻但低调，hover 时才明显——不跟词本身抢注意力。 */
+.wordcard-edit {
+  opacity: 0.55;
+  flex: none;
+}
+
+.wordcard-edit:hover {
+  opacity: 1;
+}
+
+/* ---- 词卡里的逐词分析列表 ---- */
+.wordcard-llm-item {
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--bg-stripe);
+}
+
+/* 当前词还没分析的那一栏：虚线框，和「已经有结果」的实线框区分开。 */
+.wordcard-llm-item.is-new {
+  border-style: dashed;
+  background: transparent;
+}
+
+.wordcard-llm-item-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.wordcard-llm-word {
+  font-weight: 600;
+}
+
+.wordcard-llm-item .wordcard-llm-text {
+  margin-top: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   6.4 沉浸模式：工具栏浮在阅读区上，按边缘带显隐
+   -------------------------------------------------------------------------- */
+
+/*
+ * 关键：**浮层，不是折叠**。
+ *
+ * 之前是把工具栏 transform 出去、把 reader-header/footer `display:none` —— 两者都会
+ * 改变布局，于是"显示/隐藏工具栏"会让画面跳一下。沉浸模式要的是**阅读区恒定满窗**，
+ * 所以这里把四条栏全部 `position: fixed` 覆盖在内容上：它们进不了文档流，阅读区
+ * 从头到尾就是整个窗口大小，显隐只是浮层的透明度与位移。
+ */
+.app.is-immersive .app-main {
+  /* 让位：四条栏都不再占位，阅读区直接顶到窗口上下边。 */
+  height: 100vh;
+}
+
+.app.is-immersive .toolbar,
+.app.is-immersive .statusbar,
+.app.is-immersive .reader-header,
+.app.is-immersive .comic-footer,
+.app.is-immersive .epub-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.app.is-immersive .toolbar,
+.app.is-immersive .reader-header {
+  top: 0;
+}
+
+.app.is-immersive .statusbar,
+.app.is-immersive .comic-footer,
+.app.is-immersive .epub-footer {
+  bottom: 0;
+}
+
+/* reader-header 紧贴在 toolbar 下面（两条都在顶部时不能重叠）。 */
+.app.is-immersive .reader-header {
+  top: var(--toolbar-h);
+}
+
+.app.is-immersive .comic-footer,
+.app.is-immersive .epub-footer {
+  bottom: var(--statusbar-h);
+}
+
+/* 默认收起：向上/向下移出视野，并且不可点 —— 否则鼠标扫过顶部会误触看不见的按钮。 */
+.app.is-immersive:not(.chrome-top) .toolbar,
+.app.is-immersive:not(.chrome-top) .reader-header {
+  transform: translateY(-120%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app.is-immersive:not(.chrome-bottom) .statusbar,
+.app.is-immersive:not(.chrome-bottom) .comic-footer,
+.app.is-immersive:not(.chrome-bottom) .epub-footer {
+  transform: translateY(120%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app.is-immersive .toolbar,
+  .app.is-immersive .statusbar,
+  .app.is-immersive .reader-header,
+  .app.is-immersive .comic-footer,
+  .app.is-immersive .epub-footer {
+    transition: none;
+  }
+}
+
+/* 顶栏里那个词卡夹计数小徽标。 */
+.reader-badge {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  font-size: 10px;
+}
+
+/* 词典那一栏里多部词典/多条释义之间也要有分隔。 */
+.dict-section + .dict-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* 顶栏右侧那两个开关按钮：和进度文字之间留一点距离。 */
+.reader-header .btn + .btn {
+  margin-left: 4px;
+}

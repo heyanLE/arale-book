@@ -1,0 +1,130 @@
+# electron-builder 打包配置 —— あられブック / ARaLeBook
+#
+# 三条容易踩的线，改之前先读：
+#
+# 1. **原生可执行文件必须是真文件**。asar 里的东西没法被 `exec`，所以
+#    `arale-native`（解包器）与 `arale-vision-ocr`（macOS 系统 OCR）都走 extraResources
+#    落到 `Contents/Resources/native/` 下——那正好是 `main/paths.ts` 的
+#    `nativeToolDir()` 会去找的位置。
+# 2. **扩展清单要跟进去**。`<resources>/extensions/catalog.json` 是离线/首启的回退
+#    （`bundledExtensionsCatalog()`）。缺了它扩展页面在没网时是一片空白。
+# 3. **`data/ja-transforms.json` 要跟进去**。日语去屈折数据是运行时按目录向上找的，
+#    缺了它「食べました → 食べる」这类查询会在启动后第一次查词时抛异常。
+# 4. **OCR 引擎扩展不进包**。manga-anki 那套是 1.6 GB（实测）的独立归档，用户按需下载——
+#
+# 产物名用 ASCII（ARaLeBook），显示名用日文（CFBundleDisplayName）。
+# 这样 `app.getPath('userData')` 落在 `~/Library/Application Support/ARaLeBook`，
+# 路径里不带非 ASCII；而 Dock / 访达里显示的是「あられブック」。
+
+appId: com.aralebook.app
+productName: ARaLeBook
+copyright: ARaLeBook
+
+directories:
+  output: release
+  buildResources: build
+
+# 用 node_modules 里**已经解压好的** Electron，而不是让 electron-builder 去
+# GitHub Releases 下载。本机实测 `github.com/.../releases/download/...` 不可达
+# （HTML 页能开，但 release 二进制超时），而 node_modules/electron/dist 里那份
+# 正好就是 electron-v44.4.5-darwin-arm64 解压后的布局（Electron.app + version）。
+# 换平台/换 Electron 版本时这里要跟着改。
+electronDist: node_modules/electron/dist
+
+# 默认排除开发依赖；下面再把不该进包的目录剔掉。
+files:
+  - '**/*'
+  # 工具链与缓存：加起来一个多 GB，绝不能进包
+  - '!.rust/**'
+  - '!.npm-cache/**'
+  - '!.home/**'
+  - '!.probe/**'
+  - '!release/**'
+  - '!build/**'
+  - '!.models-probe/**'
+  # 非运行时内容
+  - '!native/**'
+  - '!scripts/**'
+  - '!tests/**'
+  - '!dist-test/**'
+  - '!docs/**'
+  - '!screenshots/**'
+  - '!samples/**'
+  - '!**/*.map'
+  - '!**/*.ts'
+  - '!**/*.tsx'
+  - '!**/node_modules/**/{test,__tests__,tests,example,examples,docs,doc}/**'
+  - '!**/node_modules/**/*.{md,markdown,txt}'
+  - '!**/node_modules/**/.bin/**'
+  - '!.git/**'
+  - '!*.log'
+  # 注意：**不能**在这里按平台剔 onnxruntime 之类的东西写进 `mac:` / `win:` 段的
+  # `files:` —— 平台级 files 会**替换**顶层 files 而不是合并，那样 `.rust/`（1GB
+  # 工具链）会被整个打进包（实测 22MB → 1.2GB）。
+
+# 真文件（不可进 asar）：原生工具 + 扩展清单。
+extraResources:
+  - from: native/arale-native/target/release/arale-native
+    to: native/arale-native
+  # macOS 系统 OCR 小工具（`npm run build:vision-ocr` 产出）。缺了它系统 OCR 引擎
+  # 会以「找不到组件」判为不可用——不会崩，但那个引擎就用不了了。
+  - from: native/arale-vision-ocr/arale-vision-ocr
+    to: native/arale-vision-ocr
+  # Windows 系统 OCR（PowerShell + Windows.Media.Ocr）。到 Windows 上打包时要确认它
+  # 跟着走；本机是 macOS，这条路径没有被验证过。
+  - from: native/arale-winrt-ocr.ps1
+    to: native/arale-winrt-ocr.ps1
+  # 随包带的扩展清单（远端拉不到时的回退）。
+  - from: resources/extensions
+    to: extensions
+  # 随包内嵌的小词典（~1 MB）：首次启动自动装入用户的词典库。
+  # 缺了它只是少了内置词典，应用照常启动（`installBundledDictionaries` 读不到清单就返回空）。
+  - from: resources/dictionaries
+    to: dictionaries
+
+# 全是纯 JS 依赖，没有需要按 Electron ABI 重编的原生模块。
+npmRebuild: false
+
+mac:
+  category: public.app-category.books
+  icon: build/icon.icns
+  darkModeSupport: true
+  # 本机没有 Developer ID 证书 → 不签名。用户首次打开需要右键 →「打开」，
+  # 或者 `xattr -dr com.apple.quarantine /Applications/ARaLeBook.app`。
+  identity: null
+  # 只让 electron-builder 出 `.app` 和 `.zip`。
+  #
+  # **不要**把 `dmg` 加回来：dmg 目标会去 GitHub Releases 下 `dmgbuild-bundle-*.tar.gz`，
+  # 而本机实测 `github.com/.../releases/download/...` 不可达（HTML 能开、release 二进制超时）。
+  # DMG 由 `scripts/make-dmg.mjs` 用系统自带的 hdiutil 打，零下载。
+  target:
+    - target: zip
+      arch: [arm64]
+  extendInfo:
+    CFBundleDisplayName: あられブック
+    CFBundleName: ARaLeBook
+    LSMinimumSystemVersion: '11.0'
+    NSHumanReadableCopyright: ARaLeBook
+
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # 素材包里带的是**多尺寸内嵌**的 ico（16/24/32/48/64/128/256），比让 electron-builder
+  # 从一个 png 现场转出来的更完整——16/24px 那两档素材用的是简化头像，小尺寸下更清楚。
+  icon: build/icon.ico
+  artifactName: '${productName}-${version}-setup.${ext}'
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: あられブック
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Office
+  icon: build/icon.png
+  artifactName: '${productName}-${version}.${ext}'
