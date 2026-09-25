@@ -50,3 +50,20 @@ export function isVerticalBox(box: Box): boolean {
   const height = Math.max(1, box[3] - box[1]);
   return height / width >= VERTICAL_ASPECT_THRESHOLD;
 }
+
+/**
+ * 引擎给的**一行**文字。
+ *
+ * 引擎只负责「文字 + 框 + 朝向」这三件事；**阅读顺序与成块不归它管**（那是漫画排版的
+ * 知识，见 `blocksFromLines`）。这条边界是引擎能随便换实现的前提：manga-anki、系统 OCR、
+ * 将来的 Rust/ONNX 就地替换，行为一致。
+ */
+export interface OcrLine {
+  text: string;
+  /** 0..1。引擎不给置信度时填 1（协议要求它是数，填 0 会让下游以为这行不可信）。 */
+  confidence: number;
+  /** 原图像素。 */
+  box: Box;
+  /** 竖排。引擎说不准就填 false，由框的宽高比兜底（见 `blocksFromLines`）。 */
+  vertical: boolean;
+}

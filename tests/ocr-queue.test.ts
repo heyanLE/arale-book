@@ -23,7 +23,7 @@ import * as path from 'node:path';
 
 import { setUserDataRootForTesting, bookContentDir } from '../src/main/paths';
 import { OcrService } from '../src/main/ocr/service';
-import type { OcrBookContext, OcrEngine } from '../src/main/ocr/provider';
+import type { OcrBookJob, OcrEngine, OcrPageOut, OcrSink } from '../src/main/ocr/provider';
 import { makeBaseRecord } from '../src/main/library/store';
 import type {
   BookRecord,
@@ -87,8 +87,8 @@ interface Run {
 }
 
 /**
- * 假引擎：`recognizeBook` 按页回调后睡 `perPageMs`，于是「并行 vs 串行」可以从
- * 时间区间是否重叠直接看出来。
+ * 假引擎：`recognize` 按页回调（进度）后睡 `perPageMs`，于是「并行 vs 串行」可以从
+ * 时间区间是否重叠直接看出来。它只吐**行**——成块是服务层的事（引擎不该懂 mokuro）。
  */
 function makeEngine(
   id: OcrProviderId,
@@ -116,25 +116,28 @@ function makeEngine(
         ...options.status,
       };
     },
-    async recognizeBook(context: OcrBookContext): Promise<PageText[]> {
-      const run: Run = { bookId: context.book.id, provider: id, startedAt: Date.now(), endedAt: 0 };
+    async recognize(job: OcrBookJob, sink: OcrSink): Promise<OcrPageOut[]> {
+      const run: Run = { bookId: job.book.id, provider: id, startedAt: Date.now(), endedAt: 0 };
       runs.push(run);
-      const out: PageText[] = [];
-      for (const [index, page] of context.pages.entries()) {
-        if (context.isCancelled()) break;
+      const out: OcrPageOut[] = [];
+      for (const [index, page] of job.pages.entries()) {
+        if (job.isCancelled()) break;
         await new Promise((resolve) => setTimeout(resolve, perPageMs));
-        const blocks = [
+        const lines = [
           {
-            // Box = [x, y, width, height]（见 shared/types.ts:174）。
+            // Box = [x, y, x2, y2]（原图像素，见 shared/types.ts:174）。
             box: [0, 0, 10, 10] as [number, number, number, number],
-            vertical: true,
-            fontSize: 12,
-            lines: [`${context.book.title} 第${index + 1}页`],
+            vertical: false,
+            confidence: 1,
+            text: `${job.book.title} 第${index + 1}页`,
           },
         ];
-        context.onPage(index, blocks);
-        options.onPageSeen?.(context.book.id, index);
-        out.push({ url: page.rel, blocks });
+        const pageOut: OcrPageOut = { index, ok: true, lines };
+        out.push(pageOut);
+        // ★ 进度与结果是**同一个对象**：引擎对同一件事只报一次。
+        sink.page(pageOut);
+        options.onPageSeen?.(job.book.id, index);
+        void page;
       }
       run.endedAt = Date.now();
       return out;
@@ -470,7 +473,7 @@ test('引擎抛异常 → 记成失败，队列不卡住', async () => {
         extension: null,
       };
     },
-    async recognizeBook(): Promise<PageText[]> {
+    async recognize(): Promise<OcrPageOut[]> {
       throw new Error('模型文件损坏');
     },
     async dispose(): Promise<void> {

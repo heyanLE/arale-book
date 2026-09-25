@@ -34,16 +34,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import type { OcrEngineStatus, OcrProviderId, PageText } from '../../../shared/types';
+import type { OcrEngineStatus, OcrProviderId } from '../../../shared/types';
 import type { ExtensionManifest } from '../../../shared/extensions';
-import { buildBlocks } from '../../../core/ocr/blocks';
-import { computeReadingOrder } from '../../../core/ocr/reading-order';
-import type { OcrBox } from '../../../core/ocr/types';
-import { isVerticalBox } from '../../../core/ocr/types';
 import type { ExtensionService } from '../../extensions/service';
 import { resolveInside } from '../../extensions/service';
 import { runOcrProcess } from '../runner';
-import type { OcrBookContext, OcrEngine } from '../provider';
+import type { OcrBookJob, OcrEngine, OcrPageOut, OcrSink } from '../provider';
 
 export interface ExtensionOcrEngineOptions {
   /** 提供这个引擎的扩展 id。 */
@@ -157,9 +153,10 @@ export class ExtensionOcrEngine implements OcrEngine {
     };
   }
 
-  async recognizeBook(context: OcrBookContext): Promise<PageText[]> {
-    const pages = context.pages;
-    const results: PageText[] = pages.map((page) => ({ url: page.rel, blocks: [] }));
+  async recognize(job: OcrBookJob, sink: OcrSink): Promise<OcrPageOut[]> {
+    const pages = job.pages;
+    // 只装行；阅读顺序与成块由服务层统一做（`blocksFromLines`）。
+    const results: OcrPageOut[] = pages.map((_page, index) => ({ index, ok: true, lines: [] }));
     if (pages.length === 0) return results;
 
     const manifest = this.manifest();
@@ -198,12 +195,13 @@ export class ExtensionOcrEngine implements OcrEngine {
           if (index === undefined || index < 0) return;
           const target = results[index];
           if (target === undefined) return;
-          target.blocks = page.ok
-            ? toBlocks(page.lines, context.direction)
-            : [];
-          context.onPage(index, target.blocks);
+          target.ok = page.ok;
+          target.lines = page.ok ? page.lines : [];
+          if (!page.ok) target.error = page.error ?? '这一页识别失败';
+          // ★ 进度与结果是同一个对象：服务层拿到的就是最终结果里的那一份。
+          sink.page(target);
         },
-        isCancelled: context.isCancelled,
+        isCancelled: job.isCancelled,
       });
 
       if (result.cancelled) return results;
@@ -233,24 +231,6 @@ export class ExtensionOcrEngine implements OcrEngine {
   }
 }
 
-/** 把引擎给的行整理成 mokuro 块（与系统引擎共用同一套排序/成块）。 */
-function toBlocks(
-  lines: readonly { text: string; confidence: number; box: [number, number, number, number]; vertical: boolean }[],
-  direction: 'ltr' | 'rtl',
-): PageText['blocks'] {
-  if (lines.length === 0) return [];
-  const boxes: OcrBox[] = lines.map((line) => ({
-    box: line.box,
-    text: line.text,
-    confidence: line.confidence,
-    vertical: line.vertical || isVerticalBox(line.box),
-  }));
-  const order = computeReadingOrder(
-    boxes.map((item) => item.box),
-    { rightToLeft: direction === 'rtl' },
-  );
-  return buildBlocks(order.map((index) => boxes[index]).filter((item): item is OcrBox => item !== undefined));
-}
 
 function findIndexByAbsPath(pages: readonly { absPath: string }[], file: string): number | undefined {
   const index = pages.findIndex((page) => page.absPath === file);

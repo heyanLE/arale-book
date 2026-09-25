@@ -21,13 +21,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { OcrEngineStatus, PageText, TextBlock } from '../../../shared/types';
-import { buildBlocks } from '../../../core/ocr/blocks';
-import { computeReadingOrder } from '../../../core/ocr/reading-order';
-import type { OcrBox } from '../../../core/ocr/types';
-import { isVerticalBox } from '../../../core/ocr/types';
+import type { OcrEngineStatus } from '../../../shared/types';
 import { runOcrProcess } from '../runner';
-import type { OcrBookContext, OcrEngine } from '../provider';
+import type { OcrBookJob, OcrEngine, OcrPageOut, OcrSink } from '../provider';
 
 export const SYSTEM_ENGINE_ID = 'system';
 
@@ -163,16 +159,17 @@ export class SystemOcrEngine implements OcrEngine {
     };
   }
 
-  async recognizeBook(context: OcrBookContext): Promise<PageText[]> {
+  async recognize(job: OcrBookJob, sink: OcrSink): Promise<OcrPageOut[]> {
     const tool = this.resolveTool();
     if (tool === null) throw new Error('系统 OCR 组件不可用');
 
-    const pages = context.pages;
-    const results: PageText[] = pages.map((page) => ({ url: page.rel, blocks: [] }));
+    const pages = job.pages;
+    // 只装行；阅读顺序与成块由服务层统一做（`blocksFromLines`）。
+    const results: OcrPageOut[] = pages.map((_page, index) => ({ index, ok: true, lines: [] }));
 
     // 分批：一次几百个路径会让 argv 过长，也让「取消」要等很久才生效。
     for (let start = 0; start < pages.length; start += PAGES_PER_INVOCATION) {
-      if (context.isCancelled()) break;
+      if (job.isCancelled()) break;
       const batch = pages.slice(start, start + PAGES_PER_INVOCATION);
       // 小工具回传的是**我们自己传进去的路径**（原样回显），所以用它反查页号。
       // 不靠顺序反查：单页失败、并发回调都会让顺序不可靠。
@@ -186,9 +183,9 @@ export class SystemOcrEngine implements OcrEngine {
           // 系统不支持日语时会降级成默认语言，那时识别质量会明显下降。
           // 这是**必须告诉用户**的事实，否则他只会觉得「这个 OCR 很差」。
           if (meta.requested.length > 0 && meta.languages.length === 0) {
-            context.onMessage('这台机器的系统 OCR 不支持指定的识别语言，已退回系统默认语言');
+            sink.message('这台机器的系统 OCR 不支持指定的识别语言，已退回系统默认语言');
           } else if (meta.languages.length > 0 && !meta.languages.includes('ja-JP')) {
-            context.onMessage(`系统 OCR 未提供日语模型（实际语言：${meta.languages.join('、')}）`);
+            sink.message(`系统 OCR 未提供日语模型（实际语言：${meta.languages.join('、')}）`);
           }
         },
         onPage: (page) => {
@@ -196,10 +193,13 @@ export class SystemOcrEngine implements OcrEngine {
           if (index === undefined) return;
           const target = results[index];
           if (target === undefined) return;
-          target.blocks = toBlocks(page.lines, page.width, page.height, context.direction);
-          context.onPage(index, target.blocks);
+          target.ok = page.ok !== false;
+          target.lines = page.lines;
+          if (page.ok === false) target.error = page.error ?? '这一页识别失败';
+          // ★ 进度与结果是同一个对象：服务层拿到的就是最终结果里的那一份。
+          sink.page(target);
         },
-        isCancelled: context.isCancelled,
+        isCancelled: job.isCancelled,
       });
 
       if (result.cancelled) break;
@@ -252,30 +252,3 @@ function buildCommand(tool: string, mode: { probe?: boolean } = {}): { program: 
   };
 }
 
-/**
- * 引擎给的「行」→ mokuro 文字块。
- *
- * 三个引擎（Vision / WinRT / manga-anki）都在这一步汇合，所以它必须是公用的：
- * 排序用 `computeReadingOrder`（日漫从右到左），成块用 `buildBlocks`。
- * 引擎只负责把文字和框吐出来，**不负责决定阅读顺序**——那是漫画排版的知识，
- * 不该在每个引擎里各实现一遍。
- */
-export function toBlocks(
-  lines: readonly { text: string; confidence: number; box: [number, number, number, number]; vertical: boolean }[],
-  width: number,
-  height: number,
-  direction: 'ltr' | 'rtl',
-): TextBlock[] {
-  void width;
-  void height;
-  if (lines.length === 0) return [];
-  const boxes: OcrBox[] = lines.map((line) => ({
-    box: line.box,
-    text: line.text,
-    confidence: line.confidence,
-    // 引擎说竖排就竖排；说不准（Vision 不提供方向）时按宽高比兜底。
-    vertical: line.vertical || isVerticalBox(line.box),
-  }));
-  const order = computeReadingOrder(boxes.map((item) => item.box), { rightToLeft: direction === 'rtl' });
-  return buildBlocks(order.map((index) => boxes[index]).filter((item): item is OcrBox => item !== undefined));
-}

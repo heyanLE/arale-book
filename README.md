@@ -73,7 +73,15 @@ npm start
 {"kind":"probe","ok":true|false,"error":"…"}
 ```
 
-排序与成块（日漫从右到左、mokuro 块语义）在应用侧的 `core/ocr/` 里做，**不在引擎里**。
+排序与成块（日漫从右到左、mokuro 块语义）在应用侧的 `core/ocr/` 里做，**不在引擎里**——
+引擎侧的接口就一句话：**输入一本书，输出进度与结果**：
+
+```ts
+recognize(job, sink) → OcrPageOut[]      // job = 这本书的页清单 + 方向 + 取消信号
+// sink.page({index, ok, lines})        // 进度：某页出结果了（与返回值是同一个对象）
+// 返回值：按页序的 OcrLine[]（文字 + 框 + 朝向），**不是** mokuro 文字块
+```
+
 于是扩展的 `runner` 就是一个进程协议，应用完全不知道它是 shell、Python 还是二进制——
 
 > manga-anki 今天是一个 1.6 GB 的 Python 包（实测：site-packages 1077 MB + 模型 500 MB +
@@ -82,6 +90,11 @@ npm start
 >
 > 这两个归档已经能自动产出：`node vendor/ocr-manga-anki/build.mjs --target all`
 > （macOS arm64 + Windows x64，各自自带解释器与依赖，装完零外部依赖）。
+>
+> 这条路已经**实测过一遍**：两个模型都能导出 ONNX（编码器/解码器/检测器 int8 合计 170 MB，
+> 数值差异 ~1e-5），分词器实测等价于「NFKC + 逐字查表」（真实语料 2241 条零差异，**不需要 MeCab
+> 与 248 MiB 的 UniDic**），剩下的风险集中在检测器那 500 行 OpenCV 后处理。全部数据、验收标准
+> 与推进顺序见 [`docs/rust-engine-feasibility.md`](docs/rust-engine-feasibility.md)。
 
 ### 一个文字行/列 = 一个文字块（划词能对准字的前提）
 

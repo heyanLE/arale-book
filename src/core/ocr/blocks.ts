@@ -18,8 +18,10 @@
  */
 
 import type { TextBlock } from '../../shared/types';
-import type { OcrBox } from './types';
+import type { OcrBox, OcrLine } from './types';
+import { isVerticalBox } from './types';
 import { estimateFontSize } from './geometry';
+import { computeReadingOrder } from './reading-order';
 
 function round4(value: number): number {
   const rounded = Math.round(value * 10000) / 10000;
@@ -53,3 +55,31 @@ export function buildBlocks(recognized: readonly OcrBox[]): TextBlock[] {
 }
 
 /** 把识别结果里的文本按顺序拼起来（调试 / 日志 / 测试断言用）。 */
+
+/**
+ * 引擎给的一页（`OcrLine[]`）→ mokuro 文字块。
+ *
+ * **这是「行 → 块」的唯一实现**。以前系统引擎与扩展引擎各写了一份 `toBlocks`（连注释都
+ * 在说「必须是公用的」），两份必然漂移；现在引擎只吐行，排序与成块在应用侧做一次。
+ *
+ * 两个动作：先按阅读顺序排序（日漫右起，`computeReadingOrder`），再成块
+ * （[buildBlocks]）。朝向以引擎说的为准，它说不准（比如 macOS Vision 不给方向）时按
+ * 框的宽高比兜底。
+ */
+export function blocksFromLines(
+  lines: readonly OcrLine[],
+  direction: 'ltr' | 'rtl',
+): TextBlock[] {
+  if (lines.length === 0) return [];
+  const boxes: OcrBox[] = lines.map((line) => ({
+    box: line.box,
+    text: line.text,
+    confidence: line.confidence,
+    vertical: line.vertical || isVerticalBox(line.box),
+  }));
+  const order = computeReadingOrder(
+    boxes.map((item) => item.box),
+    { rightToLeft: direction === 'rtl' },
+  );
+  return buildBlocks(order.map((index) => boxes[index]).filter((item): item is OcrBox => item !== undefined));
+}

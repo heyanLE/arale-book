@@ -36,7 +36,8 @@ import { parseMangaJson, serializeMangaJson } from '../../core/comic/mokuro';
 import { bookContentDir } from '../paths';
 import { invalidateContentCache } from '../reader/content';
 import { emitEvent } from '../events';
-import type { OcrBookContext, OcrEngine, OcrPageInput } from './provider';
+import { blocksFromLines } from '../../core/ocr/blocks';
+import type { OcrBookJob, OcrEngine, OcrPageInput, OcrPageOut, OcrSink } from './provider';
 
 export interface OcrServiceOptions {
   getBook: (bookId: string) => BookRecord | null;
@@ -468,40 +469,39 @@ export class OcrService {
       height: page.height,
     }));
 
-    // 每页的最新结果。引擎可以乱序回调，按 index 归位即可。
-    const fresh = new Map<number, PageText>();
-    let blocksSoFar = 0;
+    // 引擎报过的页（进度用）。结果本身在 recognize() 的返回值里，两边形状一致。
+    const reported = new Set<number>();
 
-    const context: OcrBookContext = {
+    const request: OcrBookJob = {
       book,
       contentDir,
       pages: inputs,
       direction: book.direction,
-      onPage: (index, blocks) => {
-        const page = pages[index];
-        if (!page) return;
-        fresh.set(index, { url: page.url, blocks });
-        blocksSoFar += blocks.length;
+      isCancelled: () => job.cancelled,
+    };
+
+    const sink: OcrSink = {
+      page: (page) => {
+        reported.add(page.index);
         this.emit({
           bookId: book.id,
           provider: engine.id,
-          done: fresh.size,
+          done: reported.size,
           total: pages.length,
-          pageIndex: index,
+          pageIndex: page.index,
           stage: 'recognizing',
         });
       },
-      onMessage: (message) =>
+      message: (message) =>
         this.emit({
           bookId: book.id,
           provider: engine.id,
-          done: fresh.size,
+          done: reported.size,
           total: pages.length,
           pageIndex: 0,
           stage: 'loading-model',
           message,
         }),
-      isCancelled: () => job.cancelled,
     };
 
     this.emit({
@@ -513,12 +513,19 @@ export class OcrService {
       stage: 'loading-model',
     });
 
-    let recognized: PageText[] = [];
+    let pagesOut: OcrPageOut[] = [];
     try {
-      recognized = await engine.recognizeBook(context);
+      pagesOut = await engine.recognize(request, sink);
     } finally {
       await engine.dispose().catch(() => undefined);
     }
+
+    // ★ 行 → 块在这里做，且**只在这里做**：引擎只吐行（`core/ocr/blocks.ts` 的
+    //   `blocksFromLines` 是唯一实现），阅读顺序与成块不再由每个引擎各写一遍。
+    const recognized: PageText[] = pages.map((page, index) => {
+      const out = pagesOut[index];
+      return { url: page.url, blocks: blocksFromLines(out?.lines ?? [], book.direction) };
+    });
 
     if (job.cancelled) {
       // 取消时**已经识别出来的页照样写盘**：用户重跑不必从第 1 页再来一遍。
@@ -528,7 +535,7 @@ export class OcrService {
         ok: false,
         provider: engine.id,
         pages: recognized.filter((page) => page.blocks.length > 0).length,
-        blocks: blocksSoFar,
+        blocks: recognized.reduce((sum, page) => sum + page.blocks.length, 0),
         error: '已取消（已识别的页已保存）',
       };
     }

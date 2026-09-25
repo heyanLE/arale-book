@@ -1787,14 +1787,22 @@ try {
   const edgeTrigger = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const cls = () => document.querySelector('.app').className;
+    // **轮询**而不是固定 sleep：应用刚起来/正忙时，React 的一次重渲染可能晚于 250ms，
+    // 于是「鼠标到边缘 → 工具栏出现」会偶发地量成没出现（这不是功能坏了）。要断言的是
+    // 「最终会到那个状态」，等它到就行。
+    const until = async (fn, ms = 2000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) { if (fn()) return true; await wait(50); }
+      return false;
+    };
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: 5 }));
-    await wait(250);
+    await until(() => cls().includes('chrome-top'));
     const topZone = cls();
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: window.innerHeight / 2 }));
-    await wait(250);
+    await until(() => !cls().includes('chrome-top') && !cls().includes('chrome-bottom'));
     const middle = cls();
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: window.innerHeight - 5 }));
-    await wait(250);
+    await until(() => cls().includes('chrome-bottom'));
     return { topZone, middle, bottomZone: cls() };
   })()`);
   check(
@@ -1828,11 +1836,14 @@ try {
     window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: Math.round(window.innerHeight / 2) }));
     await wait(260);
     const before = cls();
+    // 翻页键：**必须等一段**才能断言「它没把工具栏顶出来」（不能轮询一个「不出现」）。
     key('ArrowLeft');
-    await wait(420);
+    await wait(600);
     const afterTurn = cls();
+    // 命令键：应该出现，所以轮询等它（等的是「最终会到」，不是「立刻到」）。
     key('+');
-    await wait(320);
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2000 && !cls().includes('chrome-top')) await wait(50);
     return { before, afterTurn, afterCommand: cls() };
   })()`);
   check(
