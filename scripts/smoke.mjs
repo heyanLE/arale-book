@@ -356,17 +356,27 @@ try {
     comicImg?.src,
   );
 
-  const layer = await client.evaluate(`(() => {
-    const layer = document.querySelector('.comic-text-layer');
-    if (!layer) return null;
-    const blocks = Array.from(layer.querySelectorAll('.comic-text-block'));
-    const first = blocks[0];
-    const rect = first ? first.getBoundingClientRect() : null;
-    return {
-      blocks: blocks.length,
-      firstRect: rect ? { w: Math.round(rect.width), h: Math.round(rect.height), left: Math.round(rect.left), top: Math.round(rect.top) } : null,
-    };
-  })()`);
+  // 文字层是**异步**来的（OCR 数据到齐才铺框），所以这里必须轮询。
+  // 早前只采样一次：图先到、文字层后到，就会随机红两条（实测偶发）——
+  // 那不是功能坏了，是测试在跟异步抢时间。
+  const readLayer = () =>
+    client.evaluate(`(() => {
+      const layer = document.querySelector('.comic-text-layer');
+      if (!layer) return null;
+      const blocks = Array.from(layer.querySelectorAll('.comic-text-block'));
+      const first = blocks[0];
+      const rect = first ? first.getBoundingClientRect() : null;
+      return {
+        blocks: blocks.length,
+        firstRect: rect ? { w: Math.round(rect.width), h: Math.round(rect.height), left: Math.round(rect.left), top: Math.round(rect.top) } : null,
+      };
+    })()`);
+  let layer = null;
+  for (let i = 0; i < 40; i += 1) {
+    layer = await readLayer();
+    if ((layer?.blocks ?? 0) > 0) break;
+    await delay(150);
+  }
   check('漫画文字层渲染出可点的文字框', (layer?.blocks ?? 0) > 0, `blocks=${layer?.blocks}`);
   check(
     '文字框有真实尺寸（几何按原图像素 × 缩放算出来了）',

@@ -77,6 +77,12 @@ export function EpubReader({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tocOpen, setTocOpen] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
+  /**
+   * 上一次**划词**开出来的那张卡的 id（点击查词不写它）。
+   *
+   * 只用来决定页面上那份持久高亮该不该继续留着，见 `holdSelection`。
+   */
+  const [heldSelectionPopupId, setHeldSelectionPopupId] = useState<string | null>(null);
   /** 词卡弹窗 + 词卡夹（与漫画阅读器共用同一套状态中枢）。 */
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -114,6 +120,23 @@ export function EpubReader({
       // iframe 已被卸载（切章/退出阅读器时会发生），忽略。
     }
   }, []);
+
+  /**
+   * 划词高亮是否继续留在页面上：那次划词的卡片还开着。
+   *
+   * 卡片可能被关闭按钮、Esc、点击别处、切章四种路子关掉，全都是在 hook 里改
+   * `popups`，所以这里只需要"卡片没了 → 清高亮"这一条规则。
+   */
+  const holdSelection =
+    heldSelectionPopupId !== null &&
+    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId);
+  const holdRef = useRef(false);
+  useEffect(() => {
+    // 只在**由真变假**时清（也就是卡片关掉那一刻）。写成 `if (!holdSelection)` 会在
+    // 挂载时、以及「划完词、卡片还在查」这段时间误清——那时它本来就还是 false。
+    if (holdRef.current && !holdSelection) post({ type: 'clearHighlight' });
+    holdRef.current = holdSelection;
+  }, [holdSelection, post]);
 
   // ------------------------------------------------------------------
   // 位置保存
@@ -294,17 +317,25 @@ export function EpubReader({
       };
       const result = await call('查词', () => api.dict.lookup(message.context, message.offset));
       if (!result) return;
-      wordCards.openPopup({
-        word: message.text,
-        context: message.context,
-        offset: message.offset,
-        length: Array.from(message.text).length,
-        anchor,
-        result,
-      });
-      // 给选区画一条下划线，跟点击查词的行为保持一致。
+      // 记下这次划词开出来的卡片：**卡片还开着**就是页面上高亮该留着的全部理由。
+      setHeldSelectionPopupId(
+        wordCards.openPopup({
+          word: message.text,
+          context: message.context,
+          offset: message.offset,
+          length: Array.from(message.text).length,
+          anchor,
+          result,
+        }),
+      );
+      // 划词的高亮**一直画着**（不是点击那种闪一下）：卡片关掉才由下面的 effect 清。
       const absoluteStart = message.absoluteOffset;
-      post({ type: 'highlight', start: absoluteStart, end: absoluteStart + message.text.length });
+      post({
+        type: 'highlight',
+        start: absoluteStart,
+        end: absoluteStart + message.text.length,
+        persistent: true,
+      });
     },
     [post, wordCards],
   );

@@ -76,8 +76,24 @@ export type BridgeToHost =
 /** 父窗口 → iframe。 */
 export type HostToBridge =
   | { tag: typeof FUSHI_BRIDGE_TAG; type: 'restore'; absoluteOffset: number }
-  /** 高亮一个词（点击查词后画下划线）。 */
-  | { tag: typeof FUSHI_BRIDGE_TAG; type: 'highlight'; start: number; end: number }
+  /**
+   * 高亮一段文字。
+   *
+   * `persistent: true` —— **一直画着**，直到收到 `clearHighlight` 或被下一次
+   * `highlight` 顶掉。划词开词卡走这条：卡片还开着，页面上就得一直标着用户划的是哪一段。
+   *
+   * 缺省（false）—— 2.4 s 后自己消失。点击查词走这条：只是"闪一下告诉你查的是哪个词"，
+   * 不值得长期占着版面。
+   */
+  | {
+      tag: typeof FUSHI_BRIDGE_TAG;
+      type: 'highlight';
+      start: number;
+      end: number;
+      persistent?: boolean;
+    }
+  /** 清掉 `persistent` 那份高亮（点击查词的临时下划线不受影响）。 */
+  | { tag: typeof FUSHI_BRIDGE_TAG; type: 'clearHighlight' }
   /**
    * 一次性设置全部外观变量。**优先用这条**：`fontScale`/`mode` 是早期拆开的两条消息，
    * 保留是为了不破坏已写好的调用方，新代码一律发 `appearance`——拆成多条会在切换主题
@@ -323,7 +339,9 @@ export const READER_BRIDGE_JS = String.raw`
         } catch (e) { /* 节点已变，忽略 */ }
       }
     } else if (data.type === 'highlight') {
-      highlight(data.start, data.end);
+      highlight(data.start, data.end, !!data.persistent);
+    } else if (data.type === 'clearHighlight') {
+      clearHighlight();
     } else if (data.type === 'appearance') {
       applyAppearance(data.value || {});
     } else if (data.type === 'fontScale') {
@@ -350,30 +368,72 @@ export const READER_BRIDGE_JS = String.raw`
     root.classList.toggle('arale-vertical', !!value.vertical);
   }
 
-  var highlightEl = null;
-  function highlight(start, end) {
-    if (highlightEl && highlightEl.parentNode) highlightEl.parentNode.removeChild(highlightEl);
+  // 高亮元素分成两类，互不干扰：
+  //   persistentEls —— 划词那份，卡片关掉才清（clearHighlight）；
+  //   transientEls  —— 点击查词那份，2.4 s 自己消失。
+  // 分开存是必要的：卡片关闭时发的 clearHighlight 不能顺手把点击那条下划线也抹掉
+  // （点词查卡是另一条路径，两者会前后脚发生）。
+  // 注意：这一段在**模板字符串**里，注释里不能出现反引号（会把字符串截断）。
+  var persistentEls = [];
+  var transientEls = [];
+  var transientTimer = null;
+
+  function removeEls(els) {
+    for (var i = 0; i < els.length; i++) {
+      if (els[i].parentNode) els[i].parentNode.removeChild(els[i]);
+    }
+    els.length = 0;
+  }
+
+  // 画一段高亮，一段一行（range.getClientRects()）。
+  // 早前是整段画一个大框：跨行选区会把行间空白也盖住，看着像"选错了范围"。
+  // 返回是否真的画上了（拿不到节点或选区为空时为 false）。
+  function paint(start, end, els) {
     var a = nodeAt(start);
     var b = nodeAt(end);
-    if (!a || !b) return;
+    if (!a || !b) return false;
     try {
       var range = document.createRange();
       range.setStart(a.node, Math.max(0, start - a.start));
       range.setEnd(b.node, Math.max(0, end - b.start));
-      var rect = range.getBoundingClientRect();
-      var el = document.createElement('div');
-      el.className = 'arale-highlight';
-      el.style.left = rect.left + window.scrollX + 'px';
-      el.style.top = rect.top + window.scrollY + 'px';
-      el.style.width = Math.max(2, rect.width) + 'px';
-      el.style.height = Math.max(2, rect.height) + 'px';
-      document.body.appendChild(el);
-      highlightEl = el;
-      setTimeout(function () {
-        if (el.parentNode) el.parentNode.removeChild(el);
-        if (highlightEl === el) highlightEl = null;
-      }, 2400);
+      var rects = range.getClientRects();
+      for (var i = 0; i < rects.length; i++) {
+        var r = rects[i];
+        if (r.width < 0.5 && r.height < 0.5) continue;
+        var el = document.createElement('div');
+        el.className = 'arale-highlight';
+        el.style.left = r.left + window.scrollX + 'px';
+        el.style.top = r.top + window.scrollY + 'px';
+        el.style.width = Math.max(2, r.width) + 'px';
+        el.style.height = Math.max(2, r.height) + 'px';
+        document.body.appendChild(el);
+        els.push(el);
+      }
     } catch (e) { /* 越界忽略 */ }
+    return els.length > 0;
+  }
+
+  function highlight(start, end, persistent) {
+    if (persistent) {
+      removeEls(persistentEls);
+      // 划词高亮一出现，点击留下的临时框就让位（同一段文字上叠两个框更乱）。
+      removeEls(transientEls);
+      if (transientTimer) { clearTimeout(transientTimer); transientTimer = null; }
+      paint(start, end, persistentEls);
+      return;
+    }
+    removeEls(transientEls);
+    if (transientTimer) { clearTimeout(transientTimer); transientTimer = null; }
+    if (!paint(start, end, transientEls)) return;
+    transientTimer = setTimeout(function () {
+      removeEls(transientEls);
+      transientTimer = null;
+    }, 2400);
+  }
+
+  // 只清持久那份：点击查词的临时下划线归它自己的定时器管。
+  function clearHighlight() {
+    removeEls(persistentEls);
   }
 
   function boot() {
