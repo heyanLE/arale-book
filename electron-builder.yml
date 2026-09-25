@@ -43,6 +43,9 @@ files:
   - '!build/**'
   - '!.models-probe/**'
   # 非运行时内容
+  # `engines/` 是 OCR 引擎库的 **submodule**（源码 + 构建脚本，几 MB 但完全不需要进包；
+  # 引擎是用户在「设置 → 扩展」里按需下载安装的）。
+  - '!engines/**'
   - '!native/**'
   - '!scripts/**'
   - '!tests/**'

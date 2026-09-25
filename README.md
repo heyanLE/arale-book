@@ -88,8 +88,10 @@ recognize(job, sink) → OcrPageOut[]      // job = 这本书的页清单 + 方�
 > 精简 CPython 47 MB，gzip 后 734 MB）。它的两个模型都是标准 PyTorch，理论上可以导出 ONNX
 > 用 Rust 直接跑。届时**只需换一个归档、改一份 `extension.json`**，应用一行都不用动。
 >
-> 这两个归档已经能自动产出：`node vendor/ocr-manga-anki/build.mjs --target all`
+> 这两个归档已经能自动产出：`node engines/manga-anki/build.mjs --target all`
 > （macOS arm64 + Windows x64，各自自带解释器与依赖，装完零外部依赖）。
+> 引擎库是**这个仓库的 submodule**（[`engines/`](engines/README.md) → `arale-book-ocr-manga`）：
+> 一个仓库放多个引擎，各引擎自带构建脚本与发布条目；应用只认协议，不认实现。
 >
 > 分发关系（谁在哪个仓库、什么要上传、引擎与应用各认什么契约）见
 > [`docs/distribution.md`](docs/distribution.md)。
@@ -250,8 +252,11 @@ native/
 ├── arale-vision-ocr/   macOS 系统 OCR（Swift + Vision）
 └── arale-winrt-ocr.ps1 Windows 系统 OCR（PowerShell + Windows.Media.Ocr）
 
-scripts/ocr-bridge.py   manga-anki 管线的桥（NDJSON over stdout）
-vendor/ocr-manga-anki/  **生成物**（gitignore）：build.mjs 打进度的 macOS/Windows 归档
+engines/                **submodule**：OCR 引擎库（多引擎；目前只有 manga-anki）
+├── README.md           引擎清单 + 「一个引擎必须满足什么」
+└── manga-anki/         桥 + 构建脚本（`node engines/manga-anki/build.mjs --target all`）
+scripts/ocr-bridge.py   manga-anki 管线的桥（应用仓库这份是历史副本，真相源在 engines/manga-anki/）
+vendor/ocr-manga-anki/  本机构建缓存（gitignore）：中间产物与 dist/*.zip
 
 assets/arale-icons-v2/  图标素材包（母图 + 各尺寸 PNG + icns/ico + 提示词）
 build/                  图标导出件（`npm run icon` 生成）：icon.icns / icon.png / icon.ico

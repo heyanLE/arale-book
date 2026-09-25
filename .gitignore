@@ -35,3 +35,6 @@ build/*
 .vision-build/
 .probe-det*.mjs
 *.ses
+
+# 注意：`engines/` 是 git submodule（OCR 引擎库），**不能**忽略。
+# 它自己的构建产物由它自己的 .gitignore 管（`**/build/`、`**/dist/*.zip`）。

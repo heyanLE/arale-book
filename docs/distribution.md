@@ -59,7 +59,7 @@
 |---|---|---|---|
 | 模型权重（manga-ocr-base + comictextdetector.pt） | 本地 manga_anki 检出 | 500 MB | 构建归档时打进去 |
 | Python venv / site-packages | 同上 | 1.4 GB | 同上 |
-| 归档中间产物 | `vendor/ocr-manga-anki/{build,dist}` | 1.6 G + 752 M | 构建缓存（可重跑） |
+| 归档中间产物 | `engines/manga-anki/{build,dist}`（本机还有一份旧的在 `vendor/`） | 1.6 G + 752 M | 构建缓存（可重跑） |
 | Swift 模块缓存 | `.vision-build/` | 961 MB | 构建 Vision 小工具 |
 
 ---
@@ -115,7 +115,7 @@
 ```
 ① 建一个放清单+归档的仓库（或就用 arale-ocr-manga-anki 的 Releases）
 ② 改 DEFAULT_CATALOG_URL（或让用户设 ARALE_EXTENSIONS_CATALOG_URL 指向你的清单）
-③ 把 vendor/ocr-manga-anki/dist/catalog-entry-{darwin-arm64,win32-x64}.json
+③ 把 engines/manga-anki/dist/catalog-entry-{darwin-arm64,win32-x64}.json
    的内容粘进 catalog.json 的 extensions 数组（sha256/bytes 是构建时写出的真值）
 ```
 

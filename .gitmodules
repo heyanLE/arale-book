@@ -1,0 +1,3 @@
+[submodule "engines"]
+	path = engines
+	url = git@github.com:heyanLE/arale-book-ocr-manga.git
