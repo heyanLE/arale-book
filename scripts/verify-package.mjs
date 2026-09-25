@@ -149,11 +149,14 @@ try {
     JSON.stringify({ ok: first?.ok, format: first?.format, error: first?.error }),
   );
 
-  // ★ 关键：Python 桥从 Contents/Resources/scripts/ 被找到
+  // ★ 关键：manga-anki 引擎可用。
+  //   它**不再是随包带的桥**：应用只认「已安装的扩展」（`extension.json` 的 runner），
+  //   桥与整条 Python 管线都在扩展归档里（独立仓库 arale-ocr-manga-anki）。
+  //   所以这条检查在装了扩展的机器上是绿的，在没装的机器上会明确报告「还没安装」。
   const capability = await client.evaluate('window.arale.ocr.capability()');
   const mangaAnki = capability?.providers?.find((p) => p.id === 'manga-anki');
   check(
-    'Python 桥在包里被找到（Contents/Resources/scripts/ocr-bridge.py）',
+    'manga-anki OCR 引擎可用（来自已安装的扩展，不再随包带桥接脚本）',
     mangaAnki?.available === true,
     mangaAnki?.available ? '可用' : (mangaAnki?.reason ?? '未探测到'),
   );
