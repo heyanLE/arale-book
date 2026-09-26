@@ -8,7 +8,7 @@
 ## 一句话
 
 **应用只认两份契约**：一套 NDJSON 协议 + 一份 `extension.json`。
-引擎用什么语言写、装在哪、模型多大，应用一概不知道——所以引擎可以独立成仓库、独立发版、以后还能换成 Rust。
+引擎用什么语言写、装在哪、模型多大，应用一概不知道。当前扩展使用包内 Python + ONNX Runtime，并通过独立 OCR 仓库分发。
 
 ---
 
@@ -16,12 +16,12 @@
 
 ```
 ① 应用            arale-book 仓库                   装机包几十 MB      用户下载（Release / 官网）
-② 引擎            arale-book-ocr-manga 仓库         归档 ≈170 MB（Rust/ONNX 版）
-                                                     用户点「安装」时下载（应用从 catalog 拉）
-③ 运行时与模型     第三方，任何仓库都不放               约 1.9 GB         只在【构建 ②】时需要
+② 引擎            arale-book-ocr-manga 仓库         包内 Python/ONNX 归档
+                                                     用户点「安装」时从 JSONL 仓库选择归档
+③ 构建输入        submodule 内 gitignore 的 models/、runtime/   构建机准备，打入 ②
 ```
 
-③ 从不分发给用户——它被 **打进去** 变成 ②。用户机器上再也不需要 Python、torch、模型下载。
+③ 在构建机上准备后打进 ②。用户机器不需要自有 Python、PyTorch 或额外模型下载。
 
 ---
 
@@ -37,7 +37,7 @@
 | 图标素材包（母图 + 各尺寸 + icns/ico） | `assets/arale-icons-v2/` | ✔ | 12 MB | 人 + `npm run icon` |
 | 打包图标（同步产物） | `build/icon.{icns,png,ico}` | ✔ | 4.6 MB | electron-builder |
 | 内嵌词典 ×3 | `resources/dictionaries/` | ✔ | 1.0 MB | 首次启动自动装进用户词典库 |
-| 内置扩展清单（回退） | `resources/extensions/catalog.json` | ✔ | 1.6 KB | 远端拉不到时用 |
+| 默认 OCR 仓库登记 | `src/main/extensions/service.ts` | ✔ | — | 首次使用时登记 submodule 的远端 JSONL |
 | 去屈折 / 异体字数据 | `data/{ja-transforms,kanji-variants}.json` | ✔ | 135 KB | 运行时（打进 asar） |
 | Rust 解包器 | `native/arale-native/`（源码） | 源码 ✔ / `target/` ✘ | 二进制 ~2 MB | 运行时（extraResources） |
 | 系统 OCR 小工具 | `native/arale-vision-ocr/`（含 149 KB 二进制）、`native/arale-winrt-ocr.ps1` | ✔ | 164 KB | 运行时（extraResources） |
@@ -47,18 +47,18 @@
 
 | 东西 | 进 git | 体积 | 谁用 |
 |---|---|---|---|
-| `arale_onnx_v1/`（Rust 引擎：Cargo 工程 + build.mjs） | ✔ | 源码 KB 级 | 扩展 runner 就是它编出的二进制 |
-| `build.mjs`（装配 + 打包） | ✔ | 52 KB | 构建归档 |
-| `launcher/ocr-run`、`README.md`、`LICENSE` | ✔ | 22 KB | 人 |
-| `dist/catalog-entry-*.json` | ✔（构建产物，含真 sha） | 1.6 KB | 粘进应用 catalog |
-| **`dist/*.zip`（两个归档）** | ✘ | **741 + 745 MiB** | **上传到 Release**，用户安装时下载 |
+| `arale_onnx_v1/`（Python/ONNX：桥接脚本 + build.mjs） | ✔ | 源码 KB 级 | 扩展 runner 是归档内的 Python |
+| `arale_onnx_v1/prepare-runtime.mjs`、`build.mjs` | ✔ | KB 级 | 准备包内 Python、打 ZIP |
+| `README.md`、`LICENSE` | ✔ | KB 级 | 人 |
+| `repositories/default.jsonl` | ✔（构建更新） | KB 级 | 应用默认 OCR 仓库，一行一个引擎 |
+| `dist/*.zip`（macOS arm64、Windows x64） | ✘ | 约 689 / 691 MiB | 后续上传 Release；Windows 待真机验证 |
 
 ### 既不在任何一个仓库、也不分发给用户
 
 | 东西 | 在哪 | 体积 | 用途 |
 |---|---|---|---|
-| 模型权重（manga-ocr-base + comictextdetector.pt） | 本地 manga_anki 检出 | 500 MB | 构建归档时打进去 |
-| Python venv / site-packages | 同上 | 1.4 GB | 同上 |
+| fp32 ONNX 模型 | `engines/arale_onnx_v1/models/` | 约 530 MB | 从原始权重离线导出，打进归档 |
+| 包内 Python 与 ORT 依赖 | `engines/arale_onnx_v1/runtime/<target>/` | 依平台而定 | 构建归档，不进 git |
 | 归档中间产物 | `engines/arale_onnx_v1/{build,dist}` | 构建缓存（可重跑） |
 | Swift 模块缓存 | `.vision-build/` | 961 MB | 构建 Vision 小工具 |
 
@@ -73,7 +73,7 @@
                  │      ├─ engine = system    ──▶ spawn  native/arale-vision-ocr（Swift）        │
                  │      │                             或 powershell arale-winrt-ocr.ps1           │
                  │      └─ engine = extension ──▶ spawn  <userData>/extensions/ocr-arale_onnx_v1/  │
-                 │                                     bin/arale_onnx_v1（自带 ONNX Runtime）    │
+                 │                                     python/bin/python3 + engine/onnxruntime │
                  │                    ▲                                                          │
                  │                    └── NDJSON（meta/page/probe/fatal）逐行                          │
                  │                                                                              │
@@ -93,39 +93,30 @@
 **谁不需要知道谁**
 
 - 应用**不知道**引擎是 Python 还是二进制，也不知道它带了多少模型；
-- 引擎**不知道** mokuro、不知道阅读方向（只报朝向），也不写 `manga.json`；
+- 引擎复用 Mokuro 的几何和裁切，不知道应用的阅读方向，也不写 `manga.json`；
 - 归档**不知道**应用版本（见下面的缺口）。
 
 **版本与兼容的现状（老实说）**
 
-- 扩展**清单**有 `schemaVersion: 1`，不认识就拒绝加载；
-- `manga.json` 里记了引擎签名（`arale_onnx_v1:v1`）；
+- OCR 仓库是 JSONL，每行按扩展条目校验，重复 id 会拒绝；
+- `manga.json` 里记了引擎签名（新扩展为 `arale_onnx_v1:v2`）；
 - 但 **NDJSON 协议本身没有版本字段**：旧归档 + 新应用时，只能靠「认不出的行忽略掉」自然退化——不会崩，但也没有显式协商。如果这套东西要长期对外分发，**建议在 `meta` 行加 `protocol: 1`**，应用不认就明确报错（现在是靠巧合而不是靠约定）。
 
 ---
 
-## 四、要真正「能装上」，还差三步（当前状态）
+## 四、仓库与归档的发布步骤
 
-1. **远端清单地址指向不存在的组织**：`DEFAULT_CATALOG_URL = github.com/aralebook/extensions/...`（`src/main/extensions/service.ts`），不是你的账号 → 现在远端根本拉不到，只有随包那份回退清单生效；
-2. **随包清单里 sha 是占位**（`0000…`、`bytes: 0`、只有 darwin）→ 点安装会**明确失败在校验那一步**（设计如此：宁可不装，也不装进一个没校验的东西）；
-3. **归档还没上传到任何 Release**。
+1. 把 ONNX 模型放在 submodule 的 `arale_onnx_v1/models/`，包内 Python 与平台匹配的 ONNX Runtime 放在 `runtime/<target>/`。两处均被 gitignore 排除。
+2. `node engines/arale_onnx_v1/build.mjs --target <target>` 生成 `dist/*.zip`，并更新 submodule 的 `repositories/default.jsonl` 中相应资产的 sha256/bytes。
+3. 将 ZIP 上传到 JSONL 条目所写的 GitHub Release；提交 JSONL，确保远端 raw 地址可用。应用的仓库管理可添加其他 HTTPS JSONL 地址。
 
-最小动作（三步，都不需要改代码逻辑）：
-
-```
-① 建一个放清单+归档的仓库（就用 arale-book-ocr-manga 的 Releases）
-② 改 DEFAULT_CATALOG_URL（或让用户设 ARALE_EXTENSIONS_CATALOG_URL 指向你的清单）
-③ 把构建脚本生成的库根 catalog.json（release{repo,tag,assets}）
-   的内容粘进 catalog.json 的 extensions 数组（sha256/bytes 是构建时写出的真值）
-```
+调试包走 `npm run pack:debug`，存在 `build/dev-<target>/` 时直接纳入引擎；正式发布走 `npm run pack:release`，不携带引擎。开发态 `npm start` 也可直接使用该目录。
 
 ---
 
 ## 四点五、已 mark 的后续项
 
-引擎的后续形态（**分词引擎也要单独分发**、Rust 引擎剩余工作、模型分发形态、协议版本字段）
-集中记在引擎库里：[`engines/docs/roadmap.md`](engines/docs/roadmap.md)。
-放那边是因为这些事都发生在「引擎怎么被分发」这一层；应用侧只留这一行指针，避免两处维护。
+引擎源码、Mokuro 对照验证和打包步骤见 [`engines/arale_onnx_v1/README.md`](../engines/arale_onnx_v1/README.md)。
 
 ---
 
@@ -133,11 +124,10 @@
 
 ```
 /Applications/ARaLeBook.app/Contents/Resources/
-├── app.asar                 应用代码 + data/ + resources/（词典与清单各有一份副本，约 1 MB 重复）
+├── app.asar                 应用代码 + data/ + resources/
 ├── native/arale-native      Rust 解包器
 ├── native/arale-vision-ocr  macOS 系统 OCR 小工具
 ├── native/arale-winrt-ocr.ps1
-├── extensions/catalog.json  扩展清单回退
 └── dictionaries/*.zip       内嵌词典
 
 ~/Library/Application Support/aralebook/        ← 全部是用户数据，任何仓库里都没有
@@ -145,6 +135,6 @@
 ├── dictionaries/               用户词典（内嵌的三部装在这里）
 ├── cards.json                  词卡
 ├── settings.json / positions.json
-├── extensions/ocr-arale_onnx_v1/  装好的引擎：bin/ + models/ + ONNX Runtime + extension.json
+├── extensions/ocr-arale_onnx_v1/  装好的引擎：python/ + engine/ + models/ + extension.json
 └── llm.json                    LLM 配置（**apiKey 明文**，只在主进程读；IPC 只回「有没有 key」）
 ```
