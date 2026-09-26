@@ -1,7 +1,7 @@
 /**
  * **扩展提供的 OCR 引擎**（目前是 arale_onnx_v1，将来可能是任何东西）。
  *
- * ## 这个文件刻意不知道 Python 的存在
+ * ## 这个文件刻意不依赖引擎的实现语言
  *
  * 扩展在它自己的 `extension.json` 里声明：
  *
@@ -15,14 +15,7 @@
  * ```
  *
  * 应用只做三件事：把页清单写成一个文件、按 `runner` spawn、按统一协议读 NDJSON。
- * **它不知道 runner 是 shell 脚本、是 Python、还是 Rust 二进制。**
- *
- * 这一点是刻意的：引擎今天是一个自带 ONNX Runtime 与模型的归档（实测：int8 模型 132 MB +
- * 1077 MiB + 模型 500 MiB + 精简解释器 47 MiB，gzip 后 734 MiB），而它的两个模型
- * （comic-text-detector 的检测器 + manga-ocr 的 ViT/BERT 编解码器）都是标准
- * PyTorch 结构，理论上可以导出成 ONNX 用 Rust 直接跑。那样扩展会缩到「模型 + 一个
- * 二进制」，并且没有 Python。届时**只需要换一个归档、改一份 `extension.json`**，
- * 这个文件一行都不用动。把 Python 知识写进来的话，那次替换就变成了重写。
+ * 目前归档内的 runner 是自带 Python + ONNX Runtime；应用仍只读取自描述与 NDJSON。
  *
  * ## 页清单走文件而不是 argv
  *

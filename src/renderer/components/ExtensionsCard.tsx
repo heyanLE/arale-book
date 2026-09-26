@@ -16,11 +16,13 @@
  * （取消之后进度条还挂着）。这里直接按 id 查，单一真相源。
  */
 
-import type { ExtensionProgress, ExtensionStatus } from '@shared/extensions';
+import { useState } from 'react';
+import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 
 export interface ExtensionsCardProps {
   statuses: ExtensionStatus[];
-  /** 清单来源：远端缓存 / 随包 / 没有。 */
+  repositories: OcrRepository[];
+  /** 清单来源：远端缓存 / 本地开发仓库 / 没有。 */
   source: 'cache' | 'bundled' | 'none';
   /** 清单本身的问题（远端刷新失败等）。 */
   error: string | null;
@@ -30,11 +32,15 @@ export interface ExtensionsCardProps {
   onInstall: (id: string) => void;
   onCancel: (id: string) => void;
   onRemove: (id: string) => void;
+  onAddRepository: (name: string, url: string) => void;
+  onRemoveRepository: (url: string) => void;
 }
 
 export function ExtensionsCard(props: ExtensionsCardProps): JSX.Element {
-  const { statuses, source, error, progress, loading, onRefresh, onInstall, onCancel, onRemove } =
+  const { statuses, repositories, source, error, progress, loading, onRefresh, onInstall, onCancel, onRemove, onAddRepository, onRemoveRepository } =
     props;
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
 
   return (
     <section className="settings-card">
@@ -47,9 +53,29 @@ export function ExtensionsCard(props: ExtensionsCardProps): JSX.Element {
         </div>
       </div>
 
+      <div className="settings-list" aria-label="OCR 仓库">
+        {repositories.map((repo) => (
+          <div className="settings-row settings-row-block" key={repo.url}>
+            <div className="settings-row-main">
+              <span className="settings-row-title">{repo.name}</span>
+              <span className="settings-row-sub mono">{repo.url}</span>
+            </div>
+            <button type="button" className="btn btn-sm" onClick={() => onRemoveRepository(repo.url)}>移除仓库</button>
+          </div>
+        ))}
+      </div>
+      <div className="settings-card-actions">
+        <input aria-label="仓库名称" placeholder="仓库名称" value={name} onChange={(event) => setName(event.target.value)} />
+        <input aria-label="仓库 JSONL 地址" placeholder="https://…/repository.jsonl" value={url} onChange={(event) => setUrl(event.target.value)} />
+        <button type="button" className="btn btn-sm" disabled={!name.trim() || !url.trim()} onClick={() => {
+          onAddRepository(name, url);
+          setName(''); setUrl('');
+        }}>添加仓库</button>
+      </div>
+
       {source === 'bundled' && (
         <p className="settings-note settings-warn">
-          正在使用随应用带的清单（远端未取到）。点「刷新清单」可以拿最新的。
+          正在使用随包提供的 OCR 仓库索引。点「刷新清单」可获取远端版本。
         </p>
       )}
       {source === 'none' && (
@@ -99,6 +125,7 @@ function ExtensionRow(props: {
           {entry.name}
           <span className="segment-chip mono">v{entry.version}</span>
           {installed !== null && !updateAvailable && <span className="segment-chip">已安装</span>}
+          {installed?.local && <span className="segment-chip">本地开发</span>}
           {updateAvailable && <span className="segment-chip">可更新</span>}
           {!supported && <span className="segment-chip">不适用本机</span>}
         </span>
@@ -141,7 +168,7 @@ function ExtensionRow(props: {
           <button type="button" className="btn btn-sm" onClick={() => onCancel(entry.id)}>
             取消
           </button>
-        ) : installed !== null ? (
+        ) : installed?.local ? null : installed !== null ? (
           <>
             <button
               type="button"

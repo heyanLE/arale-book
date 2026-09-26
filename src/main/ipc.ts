@@ -311,6 +311,8 @@ export function registerIpc(services: Services): void {
   });
 
   handle(IPC.extensionsRemove, (id: string) => extensions.remove(id));
+  handle(IPC.extensionsRepositoryAdd, (name: string, url: string) => extensions.addRepository(name, url));
+  handle(IPC.extensionsRepositoryRemove, (url: string) => extensions.removeRepository(url));
 
   // --- 分词 ---
 

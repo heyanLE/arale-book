@@ -1,9 +1,11 @@
 /**
- * 扩展服务：**清单 + 下载器 + 安装记录**。
+ * 扩展服务：**多个 JSONL 仓库 + 下载器 + 安装记录**。
  *
  * 目录布局（`<userData>/extensions/`）：
  * ```
- *   catalog.json          ← 远端清单的本地缓存（离线时用）
+ *   repositories.json     ← 用户登记的仓库（缺省当前引擎库）
+ *   repositories/*.jsonl  ← 各仓库的已校验缓存
+ *   catalog.json          ← 旧版缓存，仅迁移期回退
  *   installed.json        ← 本机装了什么（真相源）
  *   <extId>/              ← 解包后的扩展
  *     extension.json      ← 扩展自描述（必须存在）
@@ -19,14 +21,16 @@
  *
  * rename 是原子的（同一个文件系统内），所以「要么完全没有，要么完整」。
  *
- * ## 内置清单是回退，不是第二真相源
+ * ## 随包 JSONL 是离线回退，不是第二真相源
  *
- * 远端清单拿不到时用随包带的那份。它不是「备份」，而是**新装应用的第一次体验**：
+ * 远端仓库拿不到时用从 submodule 打进包里的 JSONL。它不是「备份」，而是**新装应用的第一次体验**：
  * 第一次打开就得看得见有什么可装，不能因为 GitHub 不可达而让扩展页面一片空白。
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+import * as os from 'node:os';
 
 import type {
   ExtensionAsset,
@@ -37,6 +41,7 @@ import type {
   ExtensionProgress,
   ExtensionStatus,
   InstalledExtension,
+  OcrRepository,
 } from '../../shared/extensions';
 import { EXTENSION_MANIFEST_FILE, resolveDownload } from '../../shared/extensions';
 import { NativeCommandError, extractArchive, isNativeAvailable } from '../native/sidecar';
@@ -45,7 +50,7 @@ import { DownloadCancelledError, DownloadError, downloadToFile } from './downloa
 /**
  * 默认清单地址。
  *
- * 指向**引擎库仓库**里的一个纯数据文件（`arale-book-ocr-manga/catalog.json`）：
+ * 指向**引擎库仓库**里的 JSONL 文件（`repositories/default.jsonl`）：
  * 清单由引擎的构建脚本生成（`node engines/arale_onnx_v1/build.mjs --target all`），
  * 每个引擎一条、按平台分条目；归档本身放在 GitHub Release 里，清单只写
  * 「哪个 release、哪个包」（`release: {repo, tag, asset}`），地址由应用拼。
@@ -54,7 +59,9 @@ import { DownloadCancelledError, DownloadError, downloadToFile } from './downloa
  * `ARALE_EXTENSIONS_CATALOG_URL`。后者是给开发和自建镜像用的。
  */
 export const DEFAULT_CATALOG_URL =
-  'https://raw.githubusercontent.com/heyanLE/arale-book-ocr-manga/main/catalog.json';
+  'https://raw.githubusercontent.com/heyanLE/arale-book-ocr-manga/main/repositories/default.jsonl';
+
+export const DEFAULT_REPOSITORY: OcrRepository = { name: '官方 OCR 引擎', url: DEFAULT_CATALOG_URL };
 
 /** 应用认得的清单格式版本。不认就拒绝加载，而不是半懂不懂地解析。 */
 export const EXTENSION_SCHEMA_VERSION = 1;
@@ -63,7 +70,13 @@ export interface ExtensionServiceOptions {
   /** 扩展根目录（`<userData>/extensions`）。 */
   root: string;
   /** 随包带的清单（`<resources>/extensions/catalog.json`）。 */
-  bundledCatalogFile: string;
+  bundledCatalogFile?: string;
+  /** 来自 submodule 的本地 JSONL：开发态直接读，发布态只带这份小索引。 */
+  localRepositoryFile?: string;
+  /** 有本地调试引擎时，本地索引必须盖过旧远端缓存。正式包让远端缓存优先。 */
+  preferLocalRepository?: boolean;
+  /** 开发态直接加载的归档根目录；发布版不传。 */
+  debugExtensionDir?: string;
   /** 远端清单地址覆盖。 */
   catalogUrl?: string;
   /** 进度广播。 */
@@ -91,6 +104,46 @@ export class ExtensionService {
     return path.join(this.options.root, 'catalog.json');
   }
 
+  repositoryFile(): string { return path.join(this.options.root, 'repositories.json'); }
+
+  repositories(): OcrRepository[] {
+    const raw = readJson<unknown>(this.repositoryFile(), null);
+    if (raw === null) return [DEFAULT_REPOSITORY];
+    if (!Array.isArray(raw)) return [DEFAULT_REPOSITORY];
+    return raw.filter((item): item is OcrRepository =>
+      typeof item === 'object' && item !== null &&
+      typeof item.name === 'string' && item.name.trim() !== '' &&
+      typeof item.url === 'string' && /^https:\/\//.test(item.url));
+  }
+
+  addRepository(name: string, url: string): { ok: boolean; error: string | null } {
+    if (name.trim() === '' || !/^https:\/\/[^\s]+\.jsonl(?:\?[^\s]*)?$/.test(url)) {
+      return { ok: false, error: '仓库需要名称和 HTTPS JSONL 地址' };
+    }
+    const all = this.repositories();
+    if (all.some((item) => item.url === url)) return { ok: false, error: '仓库已存在' };
+    this.writeRepositories([...all, { name: name.trim(), url }]);
+    this.options.onChanged?.();
+    return { ok: true, error: null };
+  }
+
+  removeRepository(url: string): { ok: boolean; error: string | null } {
+    const all = this.repositories();
+    if (!all.some((item) => item.url === url)) return { ok: false, error: '找不到仓库' };
+    this.writeRepositories(all.filter((item) => item.url !== url));
+    this.options.onChanged?.();
+    return { ok: true, error: null };
+  }
+
+  private writeRepositories(items: OcrRepository[]): void {
+    fs.mkdirSync(this.options.root, { recursive: true });
+    fs.writeFileSync(this.repositoryFile(), `${JSON.stringify(items, null, 2)}\n`);
+  }
+
+  private repositoryCache(url: string): string {
+    return path.join(this.options.root, 'repositories', `${crypto.createHash('sha256').update(url).digest('hex')}.jsonl`);
+  }
+
   installedFile(): string {
     return path.join(this.options.root, 'installed.json');
   }
@@ -101,6 +154,10 @@ export class ExtensionService {
 
   /** 某个扩展的安装目录（**不保证存在**）。 */
   installDir(id: string): string {
+    if (id === 'ocr-arale_onnx_v1' && this.options.debugExtensionDir &&
+        fs.existsSync(path.join(this.options.debugExtensionDir, EXTENSION_MANIFEST_FILE))) {
+      return this.options.debugExtensionDir;
+    }
     return path.join(this.options.root, safeId(id));
   }
 
@@ -113,19 +170,41 @@ export class ExtensionService {
   // -------------------------------------------------------------------------
 
   /**
-   * 当前可用的清单：优先用远端缓存，没有就用随包带的那份。
+   * 当前可用的清单：正式包用远端缓存，离线退回随包索引；调试包优先本地索引。
    *
    * 读不到任何清单时返回**空清单**而不是抛：扩展功能整体失效不该让应用起不来。
    */
   loadCatalog(): { catalog: ExtensionCatalog; source: 'cache' | 'bundled' | 'none'; error: string | null } {
-    const cached = readCatalogFile(this.catalogCacheFile());
-    if (cached.ok) return { catalog: cached.catalog, source: 'cache', error: null };
-    const bundled = readCatalogFile(this.options.bundledCatalogFile);
-    if (bundled.ok) return { catalog: bundled.catalog, source: 'bundled', error: null };
+    const entries = new Map<string, ExtensionEntry>();
+    let source: 'cache' | 'bundled' | 'none' = 'none';
+    for (const repo of this.repositories()) {
+      const cached = readRepositoryFile(this.repositoryCache(repo.url));
+      const local = repo.url === DEFAULT_CATALOG_URL && this.options.localRepositoryFile
+        ? readRepositoryFile(this.options.localRepositoryFile) : null;
+      const localIsNewer = local?.ok && cached.ok && local.catalog.extensions.some((entry) => {
+        const remote = cached.catalog.extensions.find((item) => item.id === entry.id);
+        return remote === undefined || compareVersion(entry.version, remote.version) > 0;
+      });
+      const fromLocal = local?.ok && (this.options.preferLocalRepository === true || !cached.ok || localIsNewer);
+      const found = (fromLocal && local?.ok) ? local : cached.ok ? cached : null;
+      if (!found) continue;
+      if (fromLocal && source === 'none') source = 'bundled';
+      else if (cached.ok) source = 'cache';
+      for (const entry of found.catalog.extensions) if (!entries.has(entry.id)) entries.set(entry.id, entry);
+    }
+    if (entries.size > 0) return {
+      catalog: { schemaVersion: EXTENSION_SCHEMA_VERSION, generatedAt: '', extensions: [...entries.values()] },
+      source, error: null,
+    };
+    // 旧安装的 catalog.json 只用于迁移期离线兜底。
+    const legacy = readCatalogFile(this.catalogCacheFile());
+    if (legacy.ok) return { catalog: legacy.catalog, source: 'cache', error: null };
+    const bundled = this.options.bundledCatalogFile ? readCatalogFile(this.options.bundledCatalogFile) : null;
+    if (bundled?.ok) return { catalog: bundled.catalog, source: 'bundled', error: null };
     return {
       catalog: { schemaVersion: EXTENSION_SCHEMA_VERSION, generatedAt: '', extensions: [] },
       source: 'none',
-      error: bundled.error ?? cached.error ?? '找不到扩展清单',
+      error: '尚未取得仓库索引，请刷新仓库',
     };
   }
 
@@ -136,34 +215,29 @@ export class ExtensionService {
    * 「清单更新失败（用本地缓存）」比弹一个错误框合适。
    */
   async refreshCatalog(): Promise<{ ok: boolean; count: number; error: string | null; source: 'remote' | 'cache' }> {
-    const url = this.options.catalogUrl ?? process.env['ARALE_EXTENSIONS_CATALOG_URL'] ?? DEFAULT_CATALOG_URL;
-    const dest = path.join(this.stagingDir(), 'catalog.json');
-    fs.mkdirSync(this.stagingDir(), { recursive: true });
-
-    try {
-      await downloadToFile({ url, dest, throttleMs: 1000 });
-      const text = fs.readFileSync(dest, 'utf8');
-      const parsed = parseCatalog(text);
-      if (!parsed.ok) {
-        fs.rmSync(dest, { force: true });
-        return { ok: false, count: 0, error: `远端清单格式不对：${parsed.error}`, source: 'cache' };
-      }
-      // 校验通过才覆盖缓存：一份坏清单会让扩展页面直接空掉。
-      fs.mkdirSync(this.options.root, { recursive: true });
-      fs.renameSync(dest, this.catalogCacheFile());
-      return { ok: true, count: parsed.catalog.extensions.length, error: null, source: 'remote' };
-    } catch (error) {
-      fs.rmSync(dest, { force: true });
-      const reason =
-        error instanceof DownloadCancelledError
-          ? '已取消'
-          : error instanceof DownloadError
-            ? `${error.message}（${error.detail.replace(/\n/g, ' ')}）`
-            : error instanceof Error
-              ? error.message
-              : String(error);
-      return { ok: false, count: 0, error: reason, source: 'cache' };
+    const repos = this.repositories();
+    const override = this.options.catalogUrl ?? process.env['ARALE_EXTENSIONS_CATALOG_URL'];
+    if (override && repos.some((item) => item.url === DEFAULT_CATALOG_URL)) {
+      repos.splice(repos.findIndex((item) => item.url === DEFAULT_CATALOG_URL), 1, { ...DEFAULT_REPOSITORY, url: override });
     }
+    fs.mkdirSync(this.stagingDir(), { recursive: true });
+    let updated = 0;
+    const errors: string[] = [];
+    for (const repo of repos) {
+      const dest = path.join(this.stagingDir(), `${crypto.createHash('sha256').update(repo.url).digest('hex')}.jsonl`);
+      try {
+        await downloadToFile({ url: repo.url, dest, throttleMs: 1000 });
+        const parsed = parseRepository(fs.readFileSync(dest, 'utf8'));
+        if (!parsed.ok) throw new Error(parsed.error);
+        fs.mkdirSync(path.dirname(this.repositoryCache(repo.url)), { recursive: true });
+        fs.renameSync(dest, this.repositoryCache(repo.url));
+        updated += parsed.catalog.extensions.length;
+      } catch (error) {
+        errors.push(`${repo.name}: ${error instanceof Error ? error.message : String(error)}`);
+        fs.rmSync(dest, { force: true });
+      }
+    }
+    return { ok: errors.length === 0, count: updated, error: errors.length ? errors.join('；') : null, source: updated ? 'remote' : 'cache' };
   }
 
   // -------------------------------------------------------------------------
@@ -189,15 +263,27 @@ export class ExtensionService {
         bytes: typeof record['bytes'] === 'number' ? record['bytes'] : 0,
       });
     }
+    const debug = this.options.debugExtensionDir;
+    if (debug && fs.existsSync(path.join(debug, EXTENSION_MANIFEST_FILE))) {
+      const parsed = parseManifest(readJson<unknown>(path.join(debug, EXTENSION_MANIFEST_FILE), null));
+      if (parsed.ok && parsed.manifest.id === 'ocr-arale_onnx_v1') {
+        return [...out.filter((item) => item.id !== parsed.manifest.id), {
+          id: parsed.manifest.id, version: parsed.manifest.version, installedAt: 0,
+          dir: debug, sha256: '', bytes: 0, local: true,
+        }];
+      }
+    }
     return out;
   }
 
   /** 清单 + 本机状态拼成 UI 直接渲染的行。 */
-  list(): { statuses: ExtensionStatus[]; source: 'cache' | 'bundled' | 'none'; error: string | null } {
+  list(): { statuses: ExtensionStatus[]; repositories: OcrRepository[]; source: 'cache' | 'bundled' | 'none'; error: string | null } {
     const { catalog, source, error } = this.loadCatalog();
     const byId = new Map(this.installed().map((item) => [item.id, item]));
 
-    const statuses = catalog.extensions.map<ExtensionStatus>((entry) => {
+    const statuses = catalog.extensions.map<ExtensionStatus>((item) => {
+      const download = resolveDownload(item, process.platform, process.arch);
+      const entry = { ...item, bytes: download.bytes || item.bytes, installedBytes: download.installedBytes || item.installedBytes };
       const installed = byId.get(entry.id) ?? null;
       const support = this.supportOf(entry);
       return {
@@ -205,12 +291,12 @@ export class ExtensionService {
         installed,
         // 「有新版」只比字符串相等，不比语义版本高低：清单里出现一个更低的版本号
         // 时也提示，因为那通常意味着上游在回滚，用户应该跟上。
-        updateAvailable: installed !== null && installed.version !== entry.version,
+        updateAvailable: installed !== null && !installed.local && installed.version !== entry.version,
         supported: support.supported,
         unsupportedReason: support.reason,
       };
     });
-    return { statuses, source, error };
+    return { statuses, repositories: this.repositories(), source, error };
   }
 
   private supportOf(entry: ExtensionEntry): { supported: boolean; reason: string | null } {
@@ -227,6 +313,9 @@ export class ExtensionService {
         supported: false,
         reason: `这个扩展只支持：${entry.arch.join(' / ')}（当前 ${process.arch}）`,
       };
+    }
+    if (platform === 'darwin' && entry.minMacOS && Number.parseInt(os.release(), 10) - 9 < entry.minMacOS) {
+      return { supported: false, reason: `需要 macOS ${entry.minMacOS} 或更高版本` };
     }
     return { supported: true, reason: null };
   }
@@ -255,6 +344,10 @@ export class ExtensionService {
    * 那几十次进度事件之后用户只会看到一个 `Error: ...`，而哪一步失败了看不出来。
    */
   async install(id: string): Promise<{ ok: boolean; error: string | null }> {
+    if (id === 'ocr-arale_onnx_v1' && this.options.debugExtensionDir &&
+        fs.existsSync(path.join(this.options.debugExtensionDir, EXTENSION_MANIFEST_FILE))) {
+      return { ok: false, error: '开发包已直接加载，无需安装' };
+    }
     if (this.installing.has(id)) return { ok: false, error: '这个扩展正在安装中' };
     this.installing.add(id);
     this.cancelled.delete(id);
@@ -395,6 +488,10 @@ export class ExtensionService {
 
   /** 卸载。目录删掉、记录删掉——不保留「卸载残留」。 */
   remove(id: string): { ok: boolean; error: string | null } {
+    if (id === 'ocr-arale_onnx_v1' && this.options.debugExtensionDir &&
+        fs.existsSync(path.join(this.options.debugExtensionDir, EXTENSION_MANIFEST_FILE))) {
+      return { ok: false, error: '开发包由 submodule 提供，不能从应用里删除' };
+    }
     if (this.installing.has(id)) return { ok: false, error: '正在安装中，先等它结束' };
     const target = this.installDir(id);
     try {
@@ -540,6 +637,7 @@ export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalo
       summary: str(entry['summary']) ?? '',
       platforms: strArray(entry['platforms']) as ExtensionEntry['platforms'],
       arch: strArray(entry['arch']) as ExtensionEntry['arch'],
+      ...(num(entry['minMacOS']) > 0 ? { minMacOS: num(entry['minMacOS']) } : {}),
       urls,
       bytes: num(entry['bytes']),
       sha256: str(entry['sha256']) ?? '',
@@ -558,6 +656,17 @@ export function parseCatalog(text: string): { ok: true; catalog: ExtensionCatalo
       extensions,
     },
   };
+}
+
+/** JSONL 仓库：每行一条扩展；借用清单校验以保持安装安全边界一致。 */
+export function parseRepository(text: string): { ok: true; catalog: ExtensionCatalog } | { ok: false; error: string } {
+  const entries: unknown[] = [];
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (line.trim() === '') continue;
+    try { entries.push(JSON.parse(line) as unknown); }
+    catch { return { ok: false, error: `第 ${index + 1} 行不是合法 JSON` }; }
+  }
+  return parseCatalog(JSON.stringify({ schemaVersion: EXTENSION_SCHEMA_VERSION, extensions: entries }));
 }
 
 export function parseManifest(
@@ -706,6 +815,21 @@ function readCatalogFile(
   } catch {
     return { ok: false, error: `读不到清单：${file}` };
   }
+}
+
+function readRepositoryFile(file: string): ReturnType<typeof parseRepository> {
+  try { return parseRepository(fs.readFileSync(file, 'utf8')); }
+  catch { return { ok: false, error: `读不到仓库：${file}` }; }
+}
+
+function compareVersion(a: string, b: string): number {
+  const parts = (value: string) => value.split('.').slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+  const left = parts(a);
+  const right = parts(b);
+  for (let index = 0; index < 3; index += 1) {
+    if ((left[index] ?? 0) !== (right[index] ?? 0)) return (left[index] ?? 0) - (right[index] ?? 0);
+  }
+  return 0;
 }
 
 function readJson<T>(file: string, fallback: T): T {

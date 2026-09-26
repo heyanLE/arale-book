@@ -15,7 +15,7 @@
  * 一行是「文字 + 框 + 朝向」；再往下的两件事——**阅读顺序**与**成块**——是漫画排版的知识，
  * 属于应用侧（`core/ocr/blocks.ts` 的 `blocksFromLines`）。以前这段逻辑在每个引擎里各写了
  * 一遍（连注释都在说「必须是公用的」），两份必然漂移；现在引擎完全不知道 mokuro 是什么，
- * 所以换实现（比如把 Python 换成 Rust/ONNX）以后行为一致。
+ * 所以切换系统 OCR 与下载的 ONNX 引擎后，应用侧行为一致。
  *
  * ## 接口刻意做成**书级**而不是页级
  *
@@ -24,7 +24,7 @@
  *
  * 两个实现：
  * - `system`：操作系统自带的 OCR（macOS Vision / Windows.Media.Ocr），随应用走、零下载。
- * - `arale_onnx_v1`：下载安装的扩展（comic-text-detector + manga-ocr 的 Rust/ONNX 实现）。
+ * - `arale_onnx_v1`：下载安装的扩展（包内 Python + ONNX Runtime，复用 Mokuro 几何）。
  */
 
 import type { BookRecord, OcrEngineStatus, OcrProviderId } from '../../shared/types';

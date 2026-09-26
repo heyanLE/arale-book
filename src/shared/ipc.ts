@@ -33,7 +33,7 @@ import type {
   ReadingPosition,
   SegmentToken,
 } from './types';
-import type { ExtensionProgress, ExtensionStatus } from './extensions';
+import type { ExtensionProgress, ExtensionStatus, OcrRepository } from './extensions';
 import type { AppDefaults } from './defaults';
 
 /** 所有 invoke 通道名。渲染进程与主进程都从这里取，禁止写字面量。 */
@@ -88,6 +88,8 @@ export const IPC = {
   extensionsInstall: 'extensions:install',
   extensionsCancel: 'extensions:cancel',
   extensionsRemove: 'extensions:remove',
+  extensionsRepositoryAdd: 'extensions:repositoryAdd',
+  extensionsRepositoryRemove: 'extensions:repositoryRemove',
 
   segmentStatus: 'segment:status',
   segmentStart: 'segment:start',
@@ -228,13 +230,15 @@ export interface AraleApi {
    * 报进度，下载完**必须**校验 sha256 才落盘。
    */
   extensions: {
-    list(): Promise<{ statuses: ExtensionStatus[]; source: 'cache' | 'bundled' | 'none'; error: string | null }>;
+    list(): Promise<{ statuses: ExtensionStatus[]; repositories: OcrRepository[]; source: 'cache' | 'bundled' | 'none'; error: string | null }>;
     /** 从远端拉一份新清单（拉不到就用本地缓存，不抛）。 */
     refresh(): Promise<{ ok: boolean; count: number; error: string | null; source: 'remote' | 'cache' }>;
     install(id: string): Promise<{ ok: boolean; error: string | null }>;
     /** 取消正在进行的下载/安装。 */
     cancel(id: string): Promise<void>;
     remove(id: string): Promise<{ ok: boolean; error: string | null }>;
+    addRepository(name: string, url: string): Promise<{ ok: boolean; error: string | null }>;
+    removeRepository(url: string): Promise<{ ok: boolean; error: string | null }>;
   };
   /**
    * 分词。同样可选、也能反复重新生成——换词典、改文本层之后都值得重跑一次。

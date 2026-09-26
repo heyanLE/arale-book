@@ -6,8 +6,7 @@
  *
  * 这里钉三件事：
  * 1. 引擎库 README 真的有引擎清单（多引擎库的入口），并且列着当前发布的引擎；
- * 2. 当前发布的引擎是**有源码的**（Rust 工程有 Cargo.toml），不是只剩文档；
- * 3. Python 实现已经移到 `legacy/`——它不该再出现在清单里（弃用就不能发布）。
+ * 2. 当前引擎是包内 Python + ONNX Runtime，且旧 Rust/PyTorch 引擎源码已删除；
  *
  * submodule 没初始化时（`git clone` 忘了 `--recursive`）跳过并打印原因——不假装验证过。
  */
@@ -36,41 +35,44 @@ test('引擎库 README 有引擎清单，且列着当前发布的引擎', (t) =>
   assert.match(text, /extension\.json/, 'README 要写清 extension.json');
 });
 
-test('发布的引擎有源码（Rust 工程），且 Python 实现只在 legacy/ 里', (t) => {
+test('发布的引擎是无 PyTorch 的 Python/ONNX 实现，旧引擎源码已删除', (t) => {
   if (!fs.existsSync(LIBRARY)) {
     t.skip('submodule 没初始化');
     return;
   }
-  const cargo = path.join(LIBRARY, ENGINE, 'Cargo.toml');
-  assert.ok(fs.existsSync(cargo), `${ENGINE}/ 应当是一个 Rust 工程（缺 Cargo.toml）`);
-
-  // 弃用 = 不发布：Python 实现只该躺在 legacy/ 里，不该在库根再出现一个引擎目录。
-  const legacyPython = path.join(LIBRARY, 'legacy', 'python-manga-anki');
-  assert.ok(fs.existsSync(legacyPython), '原 Python 实现应当移到 legacy/python-manga-anki/ 留档');
+  assert.ok(fs.existsSync(path.join(LIBRARY, ENGINE, 'python', 'ocr_run.py')));
+  assert.ok(fs.existsSync(path.join(LIBRARY, ENGINE, 'prepare-runtime.mjs')));
+  assert.ok(!fs.existsSync(path.join(LIBRARY, ENGINE, 'Cargo.toml')));
+  assert.ok(!fs.existsSync(path.join(LIBRARY, 'legacy', 'python-manga-anki')));
   const rootDirs = fs
     .readdirSync(LIBRARY, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .map((entry) => entry.name);
-  for (const shared of ['tools', 'docs', 'legacy']) {
+  for (const shared of ['tools', 'docs']) {
     assert.ok(rootDirs.includes(shared), `库根应有 ${shared}/`);
   }
   assert.ok(!rootDirs.includes('manga-anki'), 'manga-anki 不该再作为引擎目录存在（已弃用）');
+  const dev = path.join(LIBRARY, ENGINE, 'build', `dev-${process.platform}-${process.arch}`);
+  if (fs.existsSync(path.join(dev, 'extension.json'))) {
+    assert.ok(!fs.existsSync(path.join(dev, 'engine', 'torch')), '调试包不能带 PyTorch');
+    assert.ok(fs.existsSync(path.join(dev, 'engine', 'onnxruntime')));
+  }
 });
 
-test('随包清单只发布当前引擎，且包按平台给（同一个 release 两个包）', () => {
-  const catalogPath = path.join(ROOT, 'resources', 'extensions', 'catalog.json');
-  const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8')) as {
-    extensions: Array<{ id: string; provides: string; release?: { repo: string; tag: string; assets: Record<string, { asset: string; sha256: string }> } }>;
-  };
-  const ids = catalog.extensions.map((entry) => entry.id);
+test('OCR 仓库 JSONL 在 submodule 中生成，且包按平台给', () => {
+  const repoPath = path.join(LIBRARY, 'repositories', 'default.jsonl');
+  const entries = fs.readFileSync(repoPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line)) as
+    Array<{ id: string; provides: string; release?: { repo: string; tag: string; assets: Record<string, { asset: string; sha256: string }> } }>;
+  const ids = entries.map((entry) => entry.id);
   assert.equal(new Set(ids).size, ids.length, 'id 不能重复：解析器会把整份清单判成坏的');
-  const entry = catalog.extensions.find((item) => item.provides === ENGINE);
+  const entry = entries.find((item) => item.provides === ENGINE);
   assert.ok(entry, `清单里要有 provides = ${ENGINE} 的条目`);
   assert.equal(entry.id, 'ocr-arale_onnx_v1', '扩展 id = ocr- + provider id');
   assert.ok(entry.release, '清单用 release{repo,tag,assets} 表达下载地址');
-  assert.deepEqual(Object.keys(entry.release.assets).sort(), ['darwin-arm64', 'win32-x64'], '两个平台的包都在');
+  assert.deepEqual(Object.keys(entry.release.assets).sort(), ['darwin-arm64', 'win32-x64'], '两平台都有构建记录');
   for (const [key, asset] of Object.entries(entry.release.assets)) {
     assert.ok(asset.asset.length > 0, `${key} 要有包名`);
     assert.ok(!asset.asset.includes('/'), `${key} 的包名只能是文件名`);
+    assert.ok(asset.sha256 === '' || /^[0-9a-f]{64}$/.test(asset.sha256), `${key} 的 sha256 形状不对`);
   }
 });

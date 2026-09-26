@@ -843,7 +843,7 @@ try {
   );
   const ankiEntry = extList?.statuses?.find((item) => item.entry.id === 'ocr-arale_onnx_v1');
   check(
-    '随包清单里有 arale_onnx_v1 扩展（离线也有东西可装）',
+    '开发态 submodule 仓库里有 arale_onnx_v1 扩展',
     ankiEntry !== undefined,
     JSON.stringify(extList?.statuses?.map((item) => item.entry.id)),
   );

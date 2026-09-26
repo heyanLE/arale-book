@@ -16,10 +16,13 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 
 import {
   ExtensionService,
+  DEFAULT_CATALOG_URL,
   parseCatalog,
+  parseRepository,
   parseManifest,
   parseRelease,
   resolveInside,
@@ -57,6 +60,54 @@ function catalog(entries: unknown[], schemaVersion = 1): string {
   return JSON.stringify({ schemaVersion, generatedAt: '2026-01-01T00:00:00Z', extensions: entries });
 }
 
+test('JSONL 仓库逐行解析，坏行拒绝且不接受重复 id', () => {
+  assert.equal(parseRepository(`${JSON.stringify(VALID_ENTRY)}\n`).ok, true);
+  assert.equal(parseRepository(`${JSON.stringify(VALID_ENTRY)}\n{`).ok, false);
+  assert.equal(parseRepository(`${JSON.stringify(VALID_ENTRY)}\n${JSON.stringify(VALID_ENTRY)}`).ok, false);
+});
+
+test('仓库管理默认包含官方 JSONL，可添加与移除 HTTPS 仓库', () => {
+  const root = makeRoot();
+  try {
+    const service = new ExtensionService({ root });
+    assert.equal(service.repositories().length, 1);
+    assert.equal(service.addRepository('示例', 'http://example.com/ocr.jsonl').ok, false);
+    assert.equal(service.addRepository('示例', 'https://example.com/ocr.jsonl').ok, true);
+    assert.equal(service.repositories().length, 2);
+    assert.equal(service.addRepository('重复', 'https://example.com/ocr.jsonl').ok, false);
+    assert.equal(service.removeRepository('https://example.com/ocr.jsonl').ok, true);
+    assert.equal(service.repositories().length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('调试目录优先于远端缓存，直接加载且不会被卸载', () => {
+  const root = makeRoot();
+  try {
+    const dev = path.join(root, 'dev');
+    fs.mkdirSync(dev);
+    fs.writeFileSync(path.join(dev, 'extension.json'), JSON.stringify({
+      id: 'ocr-arale_onnx_v1', version: '0.2.0', kind: 'ocr-engine', provides: 'arale_onnx_v1',
+      runner: { program: 'python/bin/python3', args: [], env: {} },
+    }));
+    const repo = path.join(root, 'default.jsonl');
+    fs.writeFileSync(repo, `${JSON.stringify({ ...VALID_ENTRY, version: '0.2.0' })}\n`);
+    const service = new ExtensionService({ root: path.join(root, 'installed'), localRepositoryFile: repo, debugExtensionDir: dev, preferLocalRepository: true });
+    assert.equal(service.loadCatalog().source, 'bundled');
+    assert.equal(service.installed()[0]?.local, true);
+    assert.equal(service.installDir('ocr-arale_onnx_v1'), dev);
+    assert.equal(service.remove('ocr-arale_onnx_v1').ok, false);
+    assert.ok(fs.existsSync(path.join(dev, 'extension.json')));
+    const cacheDir = path.join(root, 'installed', 'repositories');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const cache = path.join(cacheDir, `${crypto.createHash('sha256').update(DEFAULT_CATALOG_URL).digest('hex')}.jsonl`);
+    fs.writeFileSync(cache, `${JSON.stringify({ ...VALID_ENTRY, version: '0.1.0' })}\n`);
+    const release = new ExtensionService({ root: path.join(root, 'installed'), localRepositoryFile: repo });
+    assert.equal(release.loadCatalog().catalog.extensions[0]?.version, '0.2.0', '随包新版盖过旧缓存');
+    fs.writeFileSync(cache, `${JSON.stringify({ ...VALID_ENTRY, version: '0.3.0' })}\n`);
+    assert.equal(release.loadCatalog().catalog.extensions[0]?.version, '0.3.0', '远端新版盖过随包索引');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('parseCatalog: 接受合法清单', () => {
   const parsed = parseCatalog(catalog([VALID_ENTRY]));
   assert.equal(parsed.ok, true);
@@ -64,6 +115,12 @@ test('parseCatalog: 接受合法清单', () => {
   assert.equal(parsed.catalog.extensions.length, 1);
   assert.equal(parsed.catalog.extensions[0]?.provides, 'arale_onnx_v1');
   assert.deepEqual(parsed.catalog.extensions[0]?.urls, ['https://example.com/a.zip']);
+});
+
+test('parseCatalog: 保留可选的 macOS 最低版本', () => {
+  const parsed = parseCatalog(catalog([{ ...VALID_ENTRY, minMacOS: 14 }]));
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.equal(parsed.catalog.extensions[0]?.minMacOS, 14);
 });
 
 test('parseCatalog: schemaVersion 不认就拒绝（而不是半懂不懂地解析）', () => {

@@ -15,12 +15,13 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
+const debug = args.includes('--debug');
 
 function run(label, command, commandArgs, options = {}) {
   process.stdout.write(`\n▸ ${label}\n`);
@@ -57,17 +58,45 @@ if (!existsSync(join(root, 'build', 'icon.icns')) && !existsSync(join(root, 'bui
 
 // 4) 装箱
 const builderArgs = [];
+let debugConfig = null;
+if (debug) {
+  const target = `${process.platform}-${process.arch}`;
+  const devDir = join(root, 'engines', 'arale_onnx_v1', 'build', `dev-${target}`);
+  const resources = [
+    { from: 'native/arale-native/target/release/arale-native', to: 'native/arale-native' },
+    { from: 'native/arale-vision-ocr/arale-vision-ocr', to: 'native/arale-vision-ocr' },
+    { from: 'native/arale-winrt-ocr.ps1', to: 'native/arale-winrt-ocr.ps1' },
+    { from: 'resources/dictionaries', to: 'dictionaries' },
+    { from: 'engines/repositories/default.jsonl', to: 'debug-engines/default.jsonl' },
+  ];
+  if (existsSync(join(devDir, 'extension.json'))) {
+    resources.push({ from: devDir, to: 'debug-engines/ocr-arale_onnx_v1' });
+  } else {
+    process.stdout.write(`\n▸ submodule 没有 ${devDir}/extension.json；调试包只带仓库索引，不带本地 OCR 引擎\n`);
+  }
+  debugConfig = join(root, '.electron-builder.debug.generated.json');
+  writeFileSync(debugConfig, JSON.stringify({
+    extends: join(root, 'electron-builder.yml'),
+    directories: { output: 'release-debug' },
+    extraResources: resources,
+  }));
+  builderArgs.push('--config', debugConfig);
+}
 if (args.includes('--mac')) builderArgs.push('--mac');
 if (args.includes('--win')) builderArgs.push('--win');
 if (args.includes('--linux')) builderArgs.push('--linux');
 if (args.includes('--dir')) builderArgs.push('--dir');
 builderArgs.push('--publish', 'never');
 
-run('electron-builder 装箱', join(root, 'node_modules', '.bin', 'electron-builder'), builderArgs);
+try {
+  run('electron-builder 装箱', join(root, 'node_modules', '.bin', 'electron-builder'), builderArgs);
+} finally {
+  if (debugConfig) rmSync(debugConfig, { force: true });
+}
 
 // 5) macOS 上再打一个 DMG。交给系统自带的 hdiutil，不走 electron-builder 的 dmg 目标
 //    （后者要从 GitHub Releases 下 dmgbuild，本机不可达）。--dir 模式跳过。
-if (process.platform === 'darwin' && !args.includes('--dir')) {
+if (process.platform === 'darwin' && !args.includes('--dir') && !debug) {
   run('打 DMG（hdiutil）', 'node', ['scripts/make-dmg.mjs']);
 }
 
@@ -75,9 +104,9 @@ process.stdout.write(
   [
     '',
     '✓ 打包完成',
-    `  产物目录：${join(root, 'release')}`,
-    '    · ARaLeBook-<版本>-arm64-mac.zip    压缩包（解压即用）',
-    '    · ARaLeBook-<版本>-arm64.dmg        磁盘映像（拖进「应用程序」）',
+    `  产物目录：${join(root, debug ? 'release-debug' : 'release')}`,
+    ...(!args.includes('--dir') ? ['    · ARaLeBook-<版本>-arm64-mac.zip    压缩包（解压即用）'] : []),
+    ...(!args.includes('--dir') && !debug ? ['    · ARaLeBook-<版本>-arm64.dmg        磁盘映像（拖进「应用程序」）'] : []),
     '    · mac-arm64/ARaLeBook.app           解包后的应用本体',
     '',
     '  macOS 首次打开若提示「已损坏」或「无法验证开发者」（因为没签名）：',

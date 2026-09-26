@@ -141,18 +141,18 @@ function findResource(relative: string): string | null {
   return null;
 }
 
-/**
- * 随包带的扩展清单（远端拉不到时的回退，也是新装应用的第一次体验）。
- *
- * 找不到时返回一个**不存在的路径**而不是 null：调用方（`ExtensionService`）已经
- * 会处理「读不到清单」，多一种空值形态只会让那条路径多一个分支。
- */
-export function bundledExtensionsCatalog(): string {
-  return (
-    findResource(path.join('resources', 'extensions', 'catalog.json')) ??
-    findResource(path.join('extensions', 'catalog.json')) ??
-    path.join(process.resourcesPath ?? '', 'extensions', 'catalog.json')
-  );
+/** 从 submodule 取得的本地 JSONL：开发态直接读，正式包只带索引副本。 */
+export function localOcrRepositoryFile(): string | undefined {
+  return findResource(path.join('debug-engines', 'default.jsonl')) ??
+    findResource(path.join('extensions', 'default.jsonl')) ??
+    (isDev() ? findResource(path.join('engines', 'repositories', 'default.jsonl')) ?? undefined : undefined);
+}
+
+/** 开发态直接使用 submodule 中 build.mjs --debug 生成的完整引擎目录。 */
+export function debugOcrEngineDir(): string | undefined {
+  const target = `${process.platform}-${process.arch}`;
+  return findResource(path.join('debug-engines', 'ocr-arale_onnx_v1')) ??
+    (isDev() ? findResource(path.join('engines', 'arale_onnx_v1', 'build', `dev-${target}`)) ?? undefined : undefined);
 }
 
 /**

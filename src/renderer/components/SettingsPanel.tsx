@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { DictionaryStatus, LibraryInfo, OcrCapability, OcrProviderId } from '@shared/types';
-import type { ExtensionProgress, ExtensionStatus } from '@shared/extensions';
+import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { LlmProfile, LlmSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
@@ -52,6 +52,7 @@ export interface SettingsPanelProps {
   };
   extensions?: {
     statuses: ExtensionStatus[];
+    repositories: OcrRepository[];
     source: 'cache' | 'bundled' | 'none';
     error: string | null;
     progress: Record<string, ExtensionProgress>;
@@ -60,6 +61,8 @@ export interface SettingsPanelProps {
     onInstall: (id: string) => void;
     onCancel: (id: string) => void;
     onRemove: (id: string) => void;
+    onAddRepository: (name: string, url: string) => void;
+    onRemoveRepository: (url: string) => void;
   };
 }
 
@@ -487,6 +490,7 @@ export function SettingsPanel({
         {extensions ? (
           <ExtensionsCard
             statuses={extensions.statuses}
+            repositories={extensions.repositories}
             source={extensions.source}
             error={extensions.error}
             progress={extensions.progress}
@@ -495,6 +499,8 @@ export function SettingsPanel({
             onInstall={extensions.onInstall}
             onCancel={extensions.onCancel}
             onRemove={extensions.onRemove}
+            onAddRepository={extensions.onAddRepository}
+            onRemoveRepository={extensions.onRemoveRepository}
           />
         ) : (
           <section className="settings-card">

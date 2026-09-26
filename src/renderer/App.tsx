@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ExtensionProgress, ExtensionStatus } from '@shared/extensions';
+import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { LlmSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { DEFAULT_APP_DEFAULTS } from '@shared/defaults';
@@ -109,9 +109,10 @@ export function App(): JSX.Element {
    */
   const [extensions, setExtensions] = useState<{
     statuses: ExtensionStatus[];
+    repositories: OcrRepository[];
     source: 'cache' | 'bundled' | 'none';
     error: string | null;
-  }>({ statuses: [], source: 'none', error: null });
+  }>({ statuses: [], repositories: [], source: 'none', error: null });
   const [extensionProgress, setExtensionProgress] = useState<Record<string, ExtensionProgress>>({});
   const [extensionsLoading, setExtensionsLoading] = useState(false);
 
@@ -308,9 +309,14 @@ export function App(): JSX.Element {
 
   const loadExtensions = useCallback(async () => {
     setExtensionsLoading(true);
-    const result = await call('读取扩展清单', () => api.extensions.list());
+    let result = await call('读取扩展清单', () => api.extensions.list());
+    if (result?.source === 'none' && result.repositories.length > 0) {
+      // 首启没有缓存时自动取默认仓库；之后可手动刷新。
+      await call('刷新 OCR 仓库', () => api.extensions.refresh());
+      result = await call('读取扩展清单', () => api.extensions.list());
+    }
     setExtensionsLoading(false);
-    if (result) setExtensions({ statuses: result.statuses, source: result.source, error: result.error });
+    if (result) setExtensions(result);
   }, []);
 
   useEffect(() => {
@@ -378,6 +384,18 @@ export function App(): JSX.Element {
       );
     }
     await loadExtensions();
+  }, [loadExtensions]);
+
+  const addOcrRepository = useCallback(async (name: string, url: string) => {
+    const result = await call('添加 OCR 仓库', () => api.extensions.addRepository(name, url));
+    if (result && !result.ok) setStatus(result.error ?? '添加仓库失败');
+    else if (result) { setStatus('OCR 仓库已添加'); await refreshExtensions(); }
+  }, [refreshExtensions]);
+
+  const removeOcrRepository = useCallback(async (url: string) => {
+    const result = await call('删除 OCR 仓库', () => api.extensions.removeRepository(url));
+    if (result && !result.ok) setStatus(result.error ?? '删除仓库失败');
+    else if (result) { setStatus('OCR 仓库已删除'); await loadExtensions(); }
   }, [loadExtensions]);
 
   const installExtension = useCallback(
@@ -661,6 +679,7 @@ export function App(): JSX.Element {
             }}
             extensions={{
               statuses: extensions.statuses,
+              repositories: extensions.repositories,
               source: extensions.source,
               error: extensions.error,
               progress: extensionProgress,
@@ -669,6 +688,8 @@ export function App(): JSX.Element {
               onInstall: (id) => void installExtension(id),
               onCancel: cancelExtension,
               onRemove: (id) => void removeExtension(id),
+              onAddRepository: (name, url) => void addOcrRepository(name, url),
+              onRemoveRepository: (url) => void removeOcrRepository(url),
             }}
           />
         )}

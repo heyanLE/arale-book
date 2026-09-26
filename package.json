@@ -23,6 +23,8 @@
     "test:native": "node scripts/test-native.mjs",
     "icon": "node scripts/make-icon.mjs",
     "pack": "node scripts/pack.mjs",
+    "pack:release": "node scripts/pack.mjs",
+    "pack:debug": "node scripts/pack.mjs --debug",
     "pack:dir": "node scripts/pack.mjs --dir",
     "verify:package": "node scripts/verify-package.mjs",
     "build:vision-ocr": "node scripts/build-vision-ocr.mjs",

@@ -1,5 +1,5 @@
 /**
- * **扩展**：可下载安装的能力包（清单 + 下载器）的契约（冻结文件）。
+ * **扩展**：可下载安装的能力包（JSONL 仓库 + 下载器）的契约（冻结文件）。
  *
  * ## 为什么需要这一层
  *
@@ -12,9 +12,9 @@
  * 所以这些能力做成「应用去网上取一份清单，按需下载、校验、安装」。清单里**必须有
  * sha256**：没有校验的下载器等于让远端决定用户磁盘上跑什么代码。
  *
- * ## 为什么清单在远端，但开发时有一份内置的
+ * ## 为什么仓库在远端，但包内有一份索引
  *
- * 清单放远端（GitHub raw）才能不发新版就上新扩展。但同时**随包带一份**：
+ * JSONL 仓库放远端（GitHub raw）才能不发新版就上新扩展。但同时从 submodule **随包带一份**：
  * 新装的应用第一次打开就得能用，不能因为 GitHub 不可达就让「扩展」页面一片空白。
  * 内置那份只是回退，顺手也当作离线场景的兜底（与 Fushi 的 `RecommendedDictionary`
  * 静态目录是同一个思路：远端清单是增量，不是唯一真相源）。
@@ -31,6 +31,9 @@ export type ExtensionArchive = 'zip';
 
 /** 扩展提供的能力种类。 */
 export type ExtensionKind = 'ocr-engine';
+
+/** 一个远端 OCR 引擎仓库（HTTPS JSONL 文件）。 */
+export interface OcrRepository { name: string; url: string }
 
 /** 支持的操作系统（与 `process.platform` 同口径）。 */
 export type ExtensionPlatform = 'darwin' | 'win32' | 'linux';
@@ -100,6 +103,8 @@ export interface ExtensionEntry {
   platforms: ExtensionPlatform[];
   /** 支持的架构。空数组 = 全架构。 */
   arch: ExtensionArch[];
+  /** macOS 主版本下限；缺省不限制。 */
+  minMacOS?: number;
   /**
    * 归档放在哪个 release 的哪个包里。**与 `urls` 二选一**（见 [downloadUrlsOf]）。
    * 两条都给时 `urls` 优先（用来配镜像）。
@@ -149,6 +154,8 @@ export interface InstalledExtension {
   sha256: string;
   /** 安装时清单里的字节数（UI 显示「已占用」）。 */
   bytes: number;
+  /** 从 submodule 开发目录直接加载，不能在应用中卸载。 */
+  local?: boolean;
 }
 
 /** 拼好的状态行，UI 直接渲染。 */

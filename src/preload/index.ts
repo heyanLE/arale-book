@@ -99,6 +99,8 @@ const api: AraleApi = {
     install: (id) => ipcRenderer.invoke(IPC.extensionsInstall, id),
     cancel: (id) => ipcRenderer.invoke(IPC.extensionsCancel, id),
     remove: (id) => ipcRenderer.invoke(IPC.extensionsRemove, id),
+    addRepository: (name, url) => ipcRenderer.invoke(IPC.extensionsRepositoryAdd, name, url),
+    removeRepository: (url) => ipcRenderer.invoke(IPC.extensionsRepositoryRemove, url),
   },
   defaults: {
     read: () => ipcRenderer.invoke(IPC.defaultsRead),

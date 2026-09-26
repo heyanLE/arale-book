@@ -31,8 +31,9 @@ import {
   bookContentDir,
   isDev,
   extensionsRoot,
+  localOcrRepositoryFile,
+  debugOcrEngineDir,
   systemOcrToolDirs,
-  bundledExtensionsCatalog,
   bundledDictionariesDir,
   llmSettingsPath,
   preloadPath,
@@ -146,9 +147,12 @@ async function bootstrap(): Promise<void> {
     .catch(() => undefined);
   // OCR 是**可选**能力：两个引擎都只是被构造出来，模型/进程要等用户真的点了识别才动。
   // 扩展：清单 + 下载器。OCR 引擎扩展装到 <userData>/extensions。
+  const debugExtensionDir = debugOcrEngineDir();
   const extensions = new ExtensionService({
     root: extensionsRoot(),
-    bundledCatalogFile: bundledExtensionsCatalog(),
+    localRepositoryFile: localOcrRepositoryFile(),
+    debugExtensionDir,
+    preferLocalRepository: debugExtensionDir !== undefined,
     onProgress: (progress) => emitEvent('extensions:progress', progress),
     onChanged: () => emitEvent('extensions:changed', {}),
   });

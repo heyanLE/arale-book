@@ -6,11 +6,10 @@
 #    `arale-native`（解包器）与 `arale-vision-ocr`（macOS 系统 OCR）都走 extraResources
 #    落到 `Contents/Resources/native/` 下——那正好是 `main/paths.ts` 的
 #    `nativeToolDir()` 会去找的位置。
-# 2. **扩展清单要跟进去**。`<resources>/extensions/catalog.json` 是离线/首启的回退
-#    （`bundledExtensionsCatalog()`）。缺了它扩展页面在没网时是一片空白。
+# 2. OCR 引擎仓库从 submodule 的 JSONL 拉取；release 包不携带引擎或仓库副本。
 # 3. **`data/ja-transforms.json` 要跟进去**。日语去屈折数据是运行时按目录向上找的，
 #    缺了它「食べました → 食べる」这类查询会在启动后第一次查词时抛异常。
-# 4. **OCR 引擎扩展不进包**。manga-anki 那套是 1.6 GB（实测）的独立归档，用户按需下载——
+# 4. **OCR 引擎扩展不进正式包**。它是独立下载的 ZIP；调试包可带 submodule 构建目录。
 #
 # 产物名用 ASCII（ARaLeBook），显示名用日文（CFBundleDisplayName）。
 # 这样 `app.getPath('userData')` 落在 `~/Library/Application Support/ARaLeBook`，
@@ -40,8 +39,15 @@ files:
   - '!.home/**'
   - '!.probe/**'
   - '!release/**'
+  - '!release-debug/**'
+  - '!.electron-builder.debug.generated.json'
   - '!build/**'
   - '!.models-probe/**'
+  - '!.arale-demo/**'
+  - '!.smoke-userdata/**'
+  - '!.screenshot-userdata/**'
+  - '!.vision-build/**'
+  - '!vendor/**'
   # 非运行时内容
   # `engines/` 是 OCR 引擎库的 **submodule**（源码 + 构建脚本，几 MB 但完全不需要进包；
   # 引擎是用户在「设置 → 扩展」里按需下载安装的）。
@@ -77,9 +83,9 @@ extraResources:
   # 跟着走；本机是 macOS，这条路径没有被验证过。
   - from: native/arale-winrt-ocr.ps1
     to: native/arale-winrt-ocr.ps1
-  # 随包带的扩展清单（远端拉不到时的回退）。
-  - from: resources/extensions
-    to: extensions
+  # 索引源文件在 submodule 中；正式包只带小型 JSONL，不带引擎归档。
+  - from: engines/repositories/default.jsonl
+    to: extensions/default.jsonl
   # 随包内嵌的小词典（~1 MB）：首次启动自动装入用户的词典库。
   # 缺了它只是少了内置词典，应用照常启动（`installBundledDictionaries` 读不到清单就返回空）。
   - from: resources/dictionaries

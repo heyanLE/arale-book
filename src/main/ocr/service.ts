@@ -592,7 +592,7 @@ export class OcrService {
         JSON.parse(
           serializeMangaJson(merged, {
             engine: engine.id,
-            engineSignature: `${engine.id}:v1`,
+            engineSignature: `${engine.id}:${engine.id === 'arale_onnx_v1' ? 'v2' : 'v1'}`,
             schemaVersion: 1,
           }),
         ),
