@@ -1,7 +1,7 @@
 /**
  * 导入：磁盘路径 → 一本书。
  *
- * 与 Fushi 的对照（见 docs/analysis/01-manga-pipeline.md §2、02-novel-epub-pipeline.md §1）：
+ * 与 Fushi 的历史对照（见 docs/archive/2026-09-26/docs/analysis/ 下的 01 §2、02 §1）：
  * - Fushi 的载体判定是纯函数 `classifyImportCarrier`，`.zip`/`.epub` 这类**歧义扩展名**
  *   必须真正开包看一眼（`looksLikeImageArchive`）；这里照做，因为「词典包也是 .zip」是
  *   真实存在的用户行为。

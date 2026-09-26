@@ -1,6 +1,6 @@
 # Windows 开发迁移交接
 
-核对日期：2026-09-26。先读[当前状态](current-state.md)，再执行本页。本文是当前迁移步骤；旧版原文在 `archive/2026-09-26/`。迁移分支为 `codex/windows-handoff`，本地提交不等于推送或发布。
+日期：2026-09-26。迁移改动整理在两个仓库的 `codex/windows-handoff` 分支；本地提交不等于推送或发布。
 
 ## 1. 源码通过 Git 搬迁
 
@@ -11,7 +11,7 @@
 - README 与设计笔记一并保存；`.workbuddy/` 是本地工具记忆，已忽略，不随源码提交。
 - 小型 JSONL、model-manifest、源码、构建脚本和文档应提交；模型、运行时、ZIP、node_modules 和构建缓存不提交。
 
-功能实现的历史基线提交：引擎 `59eed53`，主仓库功能与 submodule 指针 `91fc064`。换机前按顺序推送：
+已整理的功能提交：引擎 `59eed53`，主仓库功能与 submodule 指针 `91fc064`。换机前按顺序推送：
 
 ```bash
 git -C engines push -u origin codex/windows-handoff
@@ -28,7 +28,7 @@ git submodule status
 
 若推的是其他分支，将 `--branch` 改成实际分支名。`.gitmodules` 的子仓库地址也是 SSH；仅把主仓库 clone URL 改为 HTTPS 不会自动改变子仓库地址。
 
-clone 后 submodule 通常处于 detached HEAD。在 Windows 开始改引擎前，先检查 `git -C engines status`，需要时建立工作分支，例如：
+在 Windows 开始改引擎前，给 detached submodule 建工作分支，例如：
 
 ```powershell
 git -C engines switch -c codex/windows-fixes
@@ -42,7 +42,6 @@ Mac 文件位置：
 
 - 724,064,723 字节，约 690.5 MiB。
 - SHA-256：`df1371702cf27cb457d613e6edc5e992511f766198deb11ffb26418e58bd7107`。
-- 这是本次迁移快照；以后重建 ZIP，实际校验值以[Windows 单平台构建记录](../engines/arale_onnx_v1/dist/catalog-entry-win32-x64.json)为准，不要从安装仓库中的空 SHA 取校验值。
 - 包含 fp32 检测器、编码器、KV cache 首步/续步解码器、词表，以及 Windows CPython 3.12 和平台依赖。
 - 用移动硬盘、U 盘、局域网共享或私人网盘复制即可。不必为了迁移先公开发布 Release。
 - 不要把 Mac 的 node_modules、Python runtime/darwin-arm64、.rust 或 native target 目录复制到 Windows 使用。
@@ -55,8 +54,7 @@ Mac 文件位置：
 $repo = 'C:\src\arale-book'
 $engine = Join-Path $repo 'engines\arale_onnx_v1'
 $archive = 'D:\transfer\arale_onnx_v1-windows-x64.zip'
-$record = Get-Content -LiteralPath (Join-Path $engine 'dist\catalog-entry-win32-x64.json') -Raw | ConvertFrom-Json
-$expected = $record.sha256
+$expected = 'df1371702cf27cb457d613e6edc5e992511f766198deb11ffb26418e58bd7107'
 $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'OCR ZIP 校验失败，请重新传输' }
 
@@ -118,7 +116,6 @@ npm start
 
 - 系统 OCR 保留；旧 PyTorch 与 Rust OCR 源码已移除。
 - KV cache：30 页 / 388 行，文字和框与无缓存图完全一致；8 线程下约 126.4 秒 → 96.5 秒。
-- 上述是 8 线程测量；运行时默认 4 线程。详细口径集中在[当前引擎文档](../engines/docs/current.md)。
 - 对 Mokuro 0.2.5：同批抽样约 98.2% 配对文字逐字一致；并非全量质量保证。
 - macOS 引擎 ZIP 688.8 MiB，Windows 交叉 ZIP 690.5 MiB；当前图为 fp32。
 - 类型检查通过；407 项应用测试中 402 通过、5 跳过。
@@ -126,4 +123,4 @@ npm start
 - Windows 尚无运行验收；当前 Mac 工具环境中的 GUI smoke 在 Electron 启动前退出，未完成 GUI 验收。
 - 换机前检查两个仓库的 `git status` 和远端分支，确认本地提交已经推送；不要只 clone 旧的远端 main 后就丢弃 Mac 工作区。
 
-给 Windows 上新会话的任务：阅读此文与 [当前引擎文档](../engines/docs/current.md)，先恢复大文件，修复 `_pth`/原生构建/打包兼容性，再用包内解释器和真实 OCR 完成 Windows 验收。保持 Mokuro 文字结果与 KV cache 基线，不把 PyTorch 加回用户运行包。
+给 Windows 上新会话的任务：阅读此文与 `engines/arale_onnx_v1/README.md`，先恢复大文件，修复 `_pth`/原生构建/打包兼容性，再用包内解释器和真实 OCR 完成 Windows 验收。保持 Mokuro 文字结果与 KV cache 基线，不把 PyTorch 加回用户运行包。

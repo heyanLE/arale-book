@@ -4,7 +4,7 @@
  * 主进程（Node）、预加载脚本、渲染进程（浏览器）三边都 import 本文件。它是**唯一的**
  * 数据形状真相源；任何一边想加字段，先改这里。
  *
- * 设计约束（与 Fushi 的对照，见 docs/analysis/）：
+ * 设计约束（与 Fushi 的历史对照，见 docs/archive/2026-09-26/docs/analysis/）：
  * - 漫画与小说是**同一种书**的两种 `format`，共用一个书库目录与一条记录，这与 Fushi 把
  *   EPUB/PDF/manga 全塞进 `EpubBooks` 一张表是同一个取舍（analysis 04 §E）。
  * - 文本偏移一律是 **UTF-16 code unit 偏移**，因为渲染进程那边对应的是 DOM `Range`

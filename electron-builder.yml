@@ -6,7 +6,7 @@
 #    `arale-native`（解包器）与 `arale-vision-ocr`（macOS 系统 OCR）都走 extraResources
 #    落到 `Contents/Resources/native/` 下——那正好是 `main/paths.ts` 的
 #    `nativeToolDir()` 会去找的位置。
-# 2. OCR 引擎仓库从 submodule 的 JSONL 拉取；release 包不携带引擎或仓库副本。
+# 2. OCR 索引由 submodule 的 JSONL 生成；release 包只携带小索引副本，不携带引擎。
 # 3. **`data/ja-transforms.json` 要跟进去**。日语去屈折数据是运行时按目录向上找的，
 #    缺了它「食べました → 食べる」这类查询会在启动后第一次查词时抛异常。
 # 4. **OCR 引擎扩展不进正式包**。它是独立下载的 ZIP；调试包可带 submodule 构建目录。

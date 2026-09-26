@@ -1,0 +1,90 @@
+{
+  "archivedAt": "2026-09-26",
+  "files": [
+    {
+      "originalPath": "docs/00-fushi-analysis.md",
+      "archivePath": "docs/00-fushi-analysis.md",
+      "mode": "moved",
+      "sha256": "024e43216ab26ccf2ba40691185954a01fef2d16f702635e7ebbe1056889d31d",
+      "bytes": 19176
+    },
+    {
+      "originalPath": "docs/analysis/01-manga-pipeline.md",
+      "archivePath": "docs/analysis/01-manga-pipeline.md",
+      "mode": "moved",
+      "sha256": "6ac27fb5d59896281d7389eff8bb1f51efd2aacfb2a57b994893c5944bcdb2f5",
+      "bytes": 67228
+    },
+    {
+      "originalPath": "docs/analysis/02-novel-epub-pipeline.md",
+      "archivePath": "docs/analysis/02-novel-epub-pipeline.md",
+      "mode": "moved",
+      "sha256": "11523b75dabb5d27a1307022583396da283ff412e7deab01de326d2169545891",
+      "bytes": 69475
+    },
+    {
+      "originalPath": "docs/analysis/03-dictionary-tokenizer-lookup.md",
+      "archivePath": "docs/analysis/03-dictionary-tokenizer-lookup.md",
+      "mode": "moved",
+      "sha256": "cbf06368d0ef1cc4e18154b5d80e2dd87bdb6ab691fdb801d80d04f05b4ef473",
+      "bytes": 120336
+    },
+    {
+      "originalPath": "docs/analysis/04-architecture-and-stack.md",
+      "archivePath": "docs/analysis/04-architecture-and-stack.md",
+      "mode": "moved",
+      "sha256": "85fdaf5075f1c559e4756d4a2d5bff0f8e5640f66f65745511448bd53b7cb536",
+      "bytes": 71024
+    },
+    {
+      "originalPath": "docs/analysis/05-fushi-ocr.md",
+      "archivePath": "docs/analysis/05-fushi-ocr.md",
+      "mode": "moved",
+      "sha256": "05b0bb91586708cca64c8d4040f196ce49966fc2d06ff47840e56a444af8b817",
+      "bytes": 69649
+    },
+    {
+      "originalPath": "docs/design-notes.md",
+      "archivePath": "docs/design-notes.md",
+      "mode": "moved",
+      "sha256": "f55630f04a18d1cb3d48d383857ddd61441abf401483b7f368852abdd134a370",
+      "bytes": 12240
+    },
+    {
+      "originalPath": "docs/distribution.md",
+      "archivePath": "docs/distribution.md",
+      "mode": "moved",
+      "sha256": "4d15f528d256f9f59e304a6c5e63c3597103f08315f0437cd586745e9c443078",
+      "bytes": 8526
+    },
+    {
+      "originalPath": "docs/rust-engine-feasibility.md",
+      "archivePath": "docs/rust-engine-feasibility.md",
+      "mode": "moved",
+      "sha256": "f5a800caf6501a50fbeb9b29e7438ac36d4e727a96f7def9f68032d0013f8ce7",
+      "bytes": 17280
+    },
+    {
+      "originalPath": "docs/windows-handoff.md",
+      "archivePath": "docs/windows-handoff.md",
+      "mode": "moved",
+      "sha256": "bd6b596b966a8ce11bebbe496b27e27ba5072b355060c68607d8aa26db4a4cf3",
+      "bytes": 7835
+    },
+    {
+      "originalPath": "README.md",
+      "archivePath": "root-README.md",
+      "mode": "snapshot",
+      "sha256": "e6e72720cf168c54871a620285c98a4808feabf64e82b0f26dfe81ced00dd35b",
+      "bytes": 6589
+    },
+    {
+      "originalPath": "assets/arale-icons-v2/README.md",
+      "archivePath": "assets/arale-icons-v2/README.md",
+      "mode": "snapshot",
+      "sha256": "11d21555c411e3fd426f109557793654b79c368878f9e5802834115520efa45f",
+      "bytes": 3575
+    }
+  ],
+  "sourceCommit": "1b57c64cee6d78c3f0898b3c8162d53d3330fdbb"
+}

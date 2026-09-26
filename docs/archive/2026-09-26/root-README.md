@@ -68,7 +68,7 @@ npm start
 
 这是一个个人项目，[Issue](https://github.com/heyanLE/arale-book/issues) 与 PR 都欢迎；改动较大的话，请先开个 Issue 聊一下。
 
-提交问题前，可以先看看下面的「已知限制」和已有的 Issue。新上下文接续开发从[当前文档入口](docs/README.md)开始，Windows 换机见[迁移交接](docs/windows-handoff.md)。
+提交问题前，可以先看看下面的「已知限制」和已有的 Issue；项目怎么设计的、引擎怎么分发的，记在 [`docs/`](./docs) 里。
 
 ### 相关仓库
 
@@ -85,7 +85,7 @@ npm start
 
 ### 致谢
 
-* 流程设计参考 [Fushi](https://github.com/hajisensai/Fushi)（GPL-3.0），早期阅读笔记已收入[历史文档归档](docs/archive/2026-09-26/README.md)。
+* 流程设计参考 [Fushi](https://github.com/hajisensai/Fushi)（GPL-3.0），逐条对照的阅读笔记在 [`docs/analysis/`](./docs/analysis)。
 * 日语去屈折数据来自 [Yomitan](https://github.com/yomitan/yomitan)（BSD-3-Clause）。
 * 异体字表由 [kanji-processor](https://github.com/yomidevs/kanji-processor)（MIT）生成。
 * 随包内嵌的词典来自 [MarvNC/yomitan-dictionaries](https://github.com/MarvNC/yomitan-dictionaries)。

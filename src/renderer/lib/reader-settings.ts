@@ -75,7 +75,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   detailWidth: 300,
   fontScale: 1,
   // 竖排默认开：这是日文小说的常态（Fushi 的 ReaderSettings.writingMode 默认
-  // 'vertical-rl'，见 docs/analysis/02 §5.7），横向书也能一键 'v' 切回来。
+  // 'vertical-rl'，见 docs/archive/2026-09-26/docs/analysis/02-novel-epub-pipeline.md §5.7），横向书也能一键 'v' 切回来。
   vertical: true,
   fontFamily: '',
   lineHeight: 1.8,
