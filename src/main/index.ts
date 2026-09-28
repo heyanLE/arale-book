@@ -249,6 +249,9 @@ async function bootstrap(): Promise<void> {
     ensureDictionary: () => dict.ensureLoaded(),
     lookupMeaning: (expression, reading) => chooseMeaning(dict.lookup(expression, 0).results, expression, reading),
     progress: (bookId, done, total) => emitEvent('study:progress', { bookId, done, total }),
+    workflowProgress: (progress) => emitEvent('study:workflow-progress', progress),
+    llm,
+    translation,
   });
 
   installBookProtocol((bookId) => store.get(bookId));

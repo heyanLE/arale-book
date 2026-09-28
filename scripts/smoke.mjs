@@ -2199,6 +2199,11 @@ try {
   check('Kuromoji 候选经 IPC 生成并带原文出处',
     (studyList?.candidates?.length ?? 0) > 0 && studyList.candidates.some((item) => item.occurrences?.[0]?.text),
     `候选=${studyList?.candidates?.length ?? 0}`);
+  check('制卡默认直接筛选 N3/N2/N1，未知可单独控制',
+    JSON.stringify(studyList?.workflow?.levels) === '[1,2,3]' && studyList?.workflow?.includeUnknown === false);
+  const directlyFiltered = await client.evaluate(`window.arale.study.directFilter(${JSON.stringify(comicId)}, [1,2,3], false)`);
+  check('直接筛选会持久选择对应等级，不混入未分级或等级冲突',
+    directlyFiltered?.candidates?.every((item) => !item.selected || (item.jlpt !== null && item.jlpt <= 3 && !item.jlptConflict)) === true);
   const firstStudy = studyList?.candidates?.[0];
   if (firstStudy) {
     await client.evaluate(`window.arale.study.patch(${JSON.stringify(comicId)}, ${JSON.stringify(firstStudy.id)}, { selected: true, meaning: '冒烟测试释义' })`);
@@ -2224,6 +2229,13 @@ try {
     openedStudyTab === 'opened' && studyTab === 'opened' &&
     (await client.evaluate("!!document.querySelector('.study-panel .study-filters')")) === true,
     `${openedStudyTab}/${studyTab}`);
+  check('Anki 页面有直接筛选、LLM 筛选、R0–R3 制卡入口',
+    (await client.evaluate("[...document.querySelectorAll('.study-workflow-step h3')].map((node) => node.textContent)"))?.length === 4 &&
+    (await client.evaluate("!!document.querySelector('select[aria-label=\"制卡档位\"] option[value=\"R3\"]')")) === true);
+  if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+  }
   await client.evaluate(`(() => {
     const back = [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'));
     back?.click();

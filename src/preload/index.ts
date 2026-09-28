@@ -142,6 +142,11 @@ const api: AraleApi = {
     patchMany: (bookId, candidateIds, patch) => ipcRenderer.invoke(IPC.studyPatchMany, bookId, candidateIds, patch),
     addPhrase: (bookId, ref, expression, reading) => ipcRenderer.invoke(IPC.studyAddPhrase, bookId, ref, expression, reading),
     export: (bookId) => ipcRenderer.invoke(IPC.studyExport, bookId),
+    directFilter: (bookId, levels, includeUnknown) => ipcRenderer.invoke(IPC.studyDirectFilter, bookId, levels, includeUnknown),
+    runFilter: (bookId, request) => ipcRenderer.invoke(IPC.studyRunFilter, bookId, request),
+    runCards: (bookId, request) => ipcRenderer.invoke(IPC.studyRunCards, bookId, request),
+    patchCard: (bookId, candidateId, patch) => ipcRenderer.invoke(IPC.studyPatchCard, bookId, candidateId, patch),
+    exportPackage: (bookId) => ipcRenderer.invoke(IPC.studyExportPackage, bookId),
   },
   on: (event, handler) => {
     ensureEventBridge();

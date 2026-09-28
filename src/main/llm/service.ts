@@ -31,6 +31,16 @@ export interface LlmServiceOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** 内部 Harness 调用；密钥和网络请求仍由同一主进程服务管理。 */
+export interface LlmCompletionRequest {
+  profileId?: string;
+  system?: string;
+  user: string;
+  /** 筛选/制卡用低温度，覆盖词卡交互分析的用户温度。 */
+  temperature?: number;
+  signal?: AbortSignal;
+}
+
 /** 磁盘上的形状。**只在主进程内出现**，多出来的 `apiKey` 绝不进公共契约。 */
 interface StoredProfile {
   id: string;
@@ -119,6 +129,15 @@ export class LlmService {
 
   /** 跑一次分析。**永不抛**，失败也返回 `ok:false`。 */
   async analyze(request: LlmAnalyzeRequest): Promise<LlmAnalyzeResult> {
+    const stored = this.readStored();
+    return this.complete({
+      profileId: request.profileId,
+      user: renderPrompt(stored.prompt, { word: request.word, context: request.context }),
+    });
+  }
+
+  /** 版本化 Harness 的底层调用。失败返回结构化错误，不把密钥交给渲染进程。 */
+  async complete(request: LlmCompletionRequest): Promise<LlmAnalyzeResult> {
     try {
       const stored = this.readStored();
       const wanted = request.profileId ?? stored.activeProfileId;
@@ -139,6 +158,7 @@ export class LlmService {
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
       let response: Response;
       try {
         response = await (this.options.fetchImpl ?? fetch)(`${profile.baseUrl}/chat/completions`, {
@@ -147,11 +167,12 @@ export class LlmService {
           body: JSON.stringify({
             model: profile.model,
             messages: [
-              { role: 'user', content: renderPrompt(stored.prompt, { word: request.word, context: request.context }) },
+              ...(request.system ? [{ role: 'system', content: request.system }] : []),
+              { role: 'user', content: request.user },
             ],
-            temperature: profile.temperature,
+            temperature: request.temperature ?? profile.temperature,
           }),
-          signal: controller.signal,
+          signal,
         });
       } finally {
         clearTimeout(timer);

@@ -1,12 +1,18 @@
 /** 按书生成学习候选、保存人工审核，并导出 Anki 文本。 */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
-import type { BookRecord, BookSegments, StudyCandidate, StudyCandidatePatch, StudyList } from '../../shared/types';
-import { readJson, writeJsonAtomic } from '../../core/util/atomic-json';
+import type { BookRecord, BookSegments, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardRunRequest, StudyFilterRunRequest, StudyList, StudyRunProgress } from '../../shared/types';
+import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
+import { cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeLevels, parseCardResponse, parseFilterResponse, parseVerifyResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
 import { createJlptIndex, lookupJlpt, normalizeReading, studyKey, type JlptRow } from '../../core/study/jlpt';
 import { bookDir } from '../paths';
+import { buildAnkiPackage } from './apkg';
+import { cropStudyOccurrence, type StudyCrop } from './crop';
+import type { LlmService } from '../llm/service';
+import type { TranslationService } from '../translation/service';
 import { tokenizeJapanese } from './tokenizer';
 
 const FILE = 'study-list.json';
@@ -18,10 +24,15 @@ export interface StudyServiceOptions {
   ensureDictionary(): Promise<unknown>;
   lookupMeaning(expression: string, reading: string): string;
   progress?(bookId: string, done: number, total: number): void;
+  workflowProgress?(progress: StudyRunProgress): void;
+  llm?: Pick<LlmService, 'complete'>;
+  translation?: Pick<TranslationService, 'translate'>;
+  /** 测试注入纯图片；正式运行从漫画原始页图裁取。 */
+  crop?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
 }
 
 export class StudyService {
-  private readonly running = new Map<string, { cancelled: boolean }>();
+  private readonly running = new Map<string, { cancelled: boolean; controller?: AbortController }>();
 
   constructor(private readonly options: StudyServiceOptions) {}
 
@@ -56,7 +67,8 @@ export class StudyService {
         }
       }
       const candidates = buildStudyCandidates(segments.units, parsed, index);
-      const previous = new Map(this.read(bookId)?.candidates.map((item) => [item.id, item]) ?? []);
+      const previousList = this.read(bookId);
+      const previous = new Map(previousList?.candidates.map((item) => [item.id, item]) ?? []);
       for (let index = 0; index < candidates.length; index += 1) {
         if (job.cancelled) throw new Error('已取消生成');
         const item = candidates[index]!;
@@ -78,13 +90,14 @@ export class StudyService {
       const list: StudyList = {
         bookId, generatedAt: Date.now(), segmentGeneratedAt: segments.generatedAt,
         jlptSource: source, candidates,
+        workflow: { ...(previousList?.workflow ?? defaultStudyWorkflow()), filterRun: undefined, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined },
       };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
     } finally { this.running.delete(bookId); }
   }
 
-  cancel(bookId: string): void { const job = this.running.get(bookId); if (job) job.cancelled = true; }
+  cancel(bookId: string): void { const job = this.running.get(bookId); if (job) { job.cancelled = true; job.controller?.abort(); } }
 
   patch(bookId: string, candidateId: string, patch: StudyCandidatePatch): StudyCandidate {
     if (this.running.has(bookId)) throw new Error('正在重新生成候选，请稍后修改');
@@ -154,6 +167,214 @@ export class StudyService {
     return list;
   }
 
+  /** 第一步：按五个 JLPT 勾选项和“未分级”直接筛选，结果持久化为候选选择。 */
+  directFilter(bookId: string, levels: number[], includeUnknown: boolean): StudyList {
+    if (this.running.has(bookId)) throw new Error('正在运行学习任务，请稍后筛选');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成学习候选');
+    const normalized = normalizeLevels(levels);
+    const ids = new Set(directCandidates(list.candidates, normalized, includeUnknown).map((item) => item.id));
+    for (const item of list.candidates) item.selected = ids.has(item.id);
+    list.workflow = { levels: normalized, includeUnknown };
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return list;
+  }
+
+  /** 可选第二步：固定版本的 F1/F2/F3 Harness；只允许模型评价直接筛选后的候选。 */
+  async runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyList> {
+    if (this.running.has(bookId)) throw new Error('这本书已有学习任务在运行');
+    if (!['F1', 'F2', 'F3'].includes(request.tier)) throw new Error('未知 LLM 筛选档位');
+    const llm = this.options.llm;
+    if (!llm) throw new Error('LLM 筛选服务未就绪');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成学习候选');
+    const workflow = list.workflow ?? defaultStudyWorkflow();
+    const source = directCandidates(list.candidates, workflow.levels, workflow.includeUnknown);
+    if (source.length === 0) throw new Error('直接筛选没有候选词，请调整 JLPT 勾选项');
+    const sourceHash = createHash('sha256').update(JSON.stringify(source.map((item) => ({
+      id: item.id, expression: item.expression, reading: item.reading, contextRef: item.contextRef, occurrences: item.occurrences,
+    })))).digest('hex');
+    const job = { cancelled: false, controller: new AbortController() };
+    this.running.set(bookId, job);
+    try {
+      const prior = workflow.pendingFilterRun;
+      const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash;
+      const decisions: NonNullable<NonNullable<StudyList['workflow']>['filterRun']>['decisions'] =
+        resumed ? { ...prior.decisions } : {};
+      const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+      const startedAt = Date.now();
+      const batchSize = request.tier === 'F1' ? 12 : 1;
+      for (let offset = 0; offset < source.length; offset += batchSize) {
+        if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+        const batch = source.slice(offset, offset + batchSize);
+        if (batch.every((item) => decisions[item.id])) {
+          this.options.workflowProgress?.({ bookId, stage: 'filter', done: Math.min(offset + batchSize, source.length), total: source.length, message: '复用已完成结果' });
+          continue;
+        }
+        const firstPrompt = filterHarnessPrompt(request.tier, batch);
+        const first = await llm.complete({ profileId: request.profileId, ...firstPrompt, temperature: 0.1, signal: job.controller.signal });
+        if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+        stats.llmCalls += 1;
+        if (!first.ok) throw new Error(`LLM 筛选失败：${first.error ?? '未知错误'}`);
+        const firstRows = parseFilterResponse(first.text, batch.map((item) => item.id));
+        let finalRows = firstRows;
+        if (request.tier === 'F3') {
+          const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), temperature: 0.1, signal: job.controller.signal });
+          if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+          stats.llmCalls += 1;
+          if (!second.ok) throw new Error(`LLM 复核失败：${second.error ?? '未知错误'}`);
+          const checked = parseFilterResponse(second.text, batch.map((item) => item.id));
+          finalRows = firstRows.map((row) => {
+            const reviewer = checked.find((item) => item.id === row.id)!;
+            return row.decision === reviewer.decision
+              ? row
+              : { id: row.id, decision: 'review' as const, reason: `两轮意见不一致：${row.reason} / ${reviewer.reason}`.slice(0, 240) };
+          });
+        }
+        for (const row of finalRows) decisions[row.id] = { decision: row.decision, reason: row.reason };
+        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+        writeJsonAtomic(this.fileFor(bookId), list);
+        this.options.workflowProgress?.({ bookId, stage: 'filter', done: Math.min(offset + batchSize, source.length), total: source.length });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+      for (const item of list.candidates) {
+        if (decisions[item.id]) item.selected = decisions[item.id]?.decision !== 'reject';
+      }
+      list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+      writeJsonAtomic(this.fileFor(bookId), list);
+      return list;
+    } finally { this.running.delete(bookId); }
+  }
+
+  /** 第三步：R0 翻译或 R1–R3 LLM Harness 制作草稿。每张原句都来自固定的漫画文字块。 */
+  async runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList> {
+    if (this.running.has(bookId)) throw new Error('这本书已有学习任务在运行');
+    if (!['R0', 'R1', 'R2', 'R3'].includes(request.tier)) throw new Error('未知制卡档位');
+    const translation = this.options.translation;
+    if (!translation) throw new Error('翻译服务未就绪');
+    const llm = this.options.llm;
+    if (request.tier !== 'R0' && (!llm || !request.profileId)) throw new Error('R1–R3 需要选择 LLM 配置');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成学习候选');
+    const selected = selectedCandidates(list);
+    if (selected.length === 0) throw new Error('请先在筛选步骤选择候选词');
+    const sourceHash = selectedHash(list);
+    const job = { cancelled: false, controller: new AbortController() };
+    this.running.set(bookId, job);
+    try {
+      const prior = list.workflow?.pendingCardRun;
+      const resumed = prior?.tier === request.tier &&
+        prior.translationProfileId === request.translationProfileId &&
+        prior.profileId === (request.tier === 'R0' ? null : request.profileId ?? null) &&
+        prior.sourceHash === sourceHash;
+      const drafts: StudyCardDraft[] = resumed ? [...prior.drafts] : [];
+      const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+      const startedAt = Date.now();
+      for (let index = 0; index < selected.length; index += 1) {
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        const item = selected[index]!;
+        if (drafts.some((draft) => draft.candidateId === item.id)) {
+          this.options.workflowProgress?.({ bookId, stage: 'cards', done: index + 1, total: selected.length, message: '复用已完成草稿' });
+          continue;
+        }
+        const occurrence = chosenOccurrence(item);
+        if (!occurrence) throw new Error(`「${item.expression}」没有原文出处`);
+        const [word, sentence] = await Promise.all([
+          translation.translate({ text: item.expression, profileId: request.translationProfileId, targetLanguage: 'zh-Hans' }),
+          translation.translate({ text: occurrence.text, profileId: request.translationProfileId, targetLanguage: 'zh-Hans' }),
+        ]);
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        stats.translationCalls += 2;
+        if (!word.ok || !sentence.ok) throw new Error(`「${item.expression}」翻译失败：${word.error ?? sentence.error ?? '未知错误'}`);
+        let draft: StudyCardDraft = {
+          candidateId: item.id, meaning: word.text, sentenceTranslation: sentence.text,
+          usage: '', nuance: '', needsReview: false, reviewReason: '',
+        };
+        if (request.tier !== 'R0' && llm) {
+          const prompt = cardHarnessPrompt(request.tier, item, word.text, sentence.text);
+          const result = await llm.complete({ profileId: request.profileId, ...prompt, temperature: 0.1, signal: job.controller.signal });
+          if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+          stats.llmCalls += 1;
+          if (!result.ok) throw new Error(`「${item.expression}」制卡失败：${result.error ?? '未知错误'}`);
+          draft = parseCardResponse(result.text, item.id);
+          if (request.tier === 'R3') {
+            const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(item, draft), temperature: 0.1, signal: job.controller.signal });
+            if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+            stats.llmCalls += 1;
+            if (!checked.ok) throw new Error(`「${item.expression}」复核失败：${checked.error ?? '未知错误'}`);
+            const verdict = parseVerifyResponse(checked.text);
+            if (!verdict.approved) draft = { ...draft, needsReview: true, reviewReason: verdict.reason || '复核未通过' };
+          }
+        }
+        drafts.push(draft);
+        list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), pendingCardRun: {
+          tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
+          translationProfileId: request.translationProfileId, sourceHash, drafts,
+          stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
+        } };
+        writeJsonAtomic(this.fileFor(bookId), list);
+        this.options.workflowProgress?.({ bookId, stage: 'cards', done: index + 1, total: selected.length, message: item.expression });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+      list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), cardRun: {
+        tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
+        translationProfileId: request.translationProfileId, completedAt: Date.now(), sourceHash, drafts,
+        stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
+      }, pendingCardRun: undefined };
+      writeJsonAtomic(this.fileFor(bookId), list);
+      return list;
+    } finally { this.running.delete(bookId); }
+  }
+
+  /** 人工修正或认可 R3 存疑草稿；不修改候选身份。 */
+  patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): StudyList {
+    if (this.running.has(bookId)) throw new Error('正在制卡，请稍后审核');
+    const list = this.read(bookId);
+    const draft = list?.workflow?.cardRun?.drafts.find((item) => item.candidateId === candidateId);
+    if (!list || !draft) throw new Error('找不到制卡草稿');
+    for (const key of ['meaning', 'sentenceTranslation', 'usage', 'nuance'] as const) {
+      if (typeof patch[key] === 'string') draft[key] = patch[key]!.trim().slice(0, 1000);
+    }
+    if (patch.needsReview === false && draft.meaning && draft.sentenceTranslation) {
+      draft.needsReview = false;
+      draft.reviewReason = '';
+    }
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return list;
+  }
+
+  /** 第四步：逐张裁 OCR 原文矩形，写入含媒体的 .apkg。 */
+  async exportPackage(bookId: string, targetPath: string): Promise<number> {
+    if (this.running.has(bookId)) throw new Error('学习任务仍在运行');
+    const list = this.read(bookId);
+    const book = this.options.getBook(bookId);
+    const run = list?.workflow?.cardRun;
+    if (!list || !book || !run) throw new Error('请先运行制卡 Harness');
+    if (run.sourceHash !== selectedHash(list)) throw new Error('候选已变化，请重新制作词卡');
+    if (run.drafts.some((item) => item.needsReview)) throw new Error('还有存疑词卡，请先审核');
+    const byId = new Map(selectedCandidates(list).map((item) => [item.id, item]));
+    if (run.drafts.length !== byId.size) throw new Error('制卡草稿与候选数量不一致');
+    const crop = this.options.crop ?? cropStudyOccurrence;
+    const inputs = [];
+    for (let index = 0; index < run.drafts.length; index += 1) {
+      const draft = run.drafts[index]!;
+      const candidate = byId.get(draft.candidateId);
+      const occurrence = candidate && chosenOccurrence(candidate);
+      if (!candidate || !occurrence) throw new Error('制卡草稿的原文出处已失效');
+      const image = crop(bookId, occurrence);
+      inputs.push({ candidate, draft, imageName: image.name, image: image.data });
+      this.options.workflowProgress?.({ bookId, stage: 'export', done: index + 1, total: run.drafts.length });
+    }
+    const content = await buildAnkiPackage(bookId, book.title, run.tier, inputs);
+    writeFileAtomic(targetPath, content);
+    const now = Date.now();
+    for (const item of selectedCandidates(list)) item.exportedAt = now;
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return inputs.length;
+  }
+
   exportText(bookId: string, targetPath: string): number {
     if (this.running.has(bookId)) throw new Error('正在重新生成候选，请稍后导出');
     const list = this.read(bookId);
@@ -167,6 +388,19 @@ export class StudyService {
     writeJsonAtomic(this.fileFor(bookId), list);
     return result.count;
   }
+}
+
+function selectedCandidates(list: StudyList): StudyCandidate[] {
+  return list.candidates.filter((item) => item.selected && !item.excluded);
+}
+
+/** 不把 exportedAt 算入：导出后再次导出仍应命中相同草稿。 */
+function selectedHash(list: StudyList): string {
+  const rows = selectedCandidates(list).map((item) => ({
+    id: item.id, expression: item.expression, reading: item.reading, meaning: item.meaning,
+    contextRef: item.contextRef, occurrences: item.occurrences,
+  }));
+  return createHash('sha256').update(JSON.stringify({ segmentGeneratedAt: list.segmentGeneratedAt, rows })).digest('hex');
 }
 
 function loadJlpt(): { index: ReturnType<typeof createJlptIndex>; source: string } {

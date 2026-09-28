@@ -24,6 +24,7 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
+| Anki Harness | 在候选页增加 N5–N1 独立直接筛选（默认 N3/N2/N1）、未分级选择、可选 F1–F3 LLM 筛选及 R0–R3 制卡。R0 用翻译引擎和原文框裁图，R1–R3 逐级增加语境词义、用法提示、二次复核；生成带媒体 `.apkg` 并保留旧 TSV。档位、评估与限制见[Anki Harness](anki-harness.md)。 |
 | 整书原始词表 | 漫画文字块和 EPUB 章节统一由 Kuromoji 按日语词形切分；Yomitan 词典只标记是否收录。助词、助动词、标点和未收录的单个假名不进入学习词表，但词位置信息仍保存在 `segments.json`。打开旧版逐字产物会自动重建；阅读时点词查询仍走词典扫描。 |
 | 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片分翻译栏与 LLM 分析栏管理各自默认项及提示词。弹窗引擎下拉只列实际配置，顶部词语与编辑图标共用按钮。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
 
@@ -75,6 +76,14 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 - `npm run smoke`：188/188 通过，包括 EPUB 整书词表引擎标识、原文偏移、漫画制卡及词典点词查询。
 - 本地 171 页/2232 文字块样本：空词典下旧算法产出 12840 个 token，其中 9553 个是未收录单个假名；形态分析产出 7243 个 token，过滤后的词表为 1222 个不同词项，未收录单假名词项为 0。此统计只说明切分粒度，不能当作人工标注准确率。
 - 未验证范围：Windows 上本轮分词构建与运行、真实漫画人工标注质量、长篇 EPUB 的性能与词典覆盖率。
+
+### 2026-09-28 Anki Harness 验证（macOS / Node 22）
+
+- `npm run typecheck`、`npm run build` 通过；`npm test`：446 项中 441 通过、5 跳过。新增测试覆盖直接筛选、Harness 输出校验、R0 `.apkg`、F3 分歧、R3 待审、批次续跑、LLM 取消与旧草稿失效。
+- `npm run smoke`：191/191，通过 Electron IPC 与 UI 检查筛选/制卡入口。Electron 主进程用本地 JPEG 原页和 OCR 像素框实际裁出有效 PNG；生成的 `.apkg` 已验证 SQLite 完整性、笔记、卡和媒体条目。
+- 通过 GUI smoke 截取大窗口 Anki 页面并人工检查四步骤、候选区和审核区布局。
+- `npm run pack:release -- --dir` 通过；从 macOS 正式包 `app.asar` 中实际加载 `sql.js` 并生成 `.apkg`。
+- 未验证范围：Anki 桌面客户端导入及更新行为、Windows 上新版制卡、真实 LLM/翻译供应商的质量和费用、PNG/JPEG 以外页图的裁图，以及新工作流在窄窗口下的人工视觉检查。
 
 ## 下一步：Windows 兼容与修复
 

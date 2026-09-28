@@ -32,8 +32,12 @@ import type {
   SegmentProgress,
   StudyCandidate,
   StudyCandidatePatch,
+  StudyCardDraft,
+  StudyCardRunRequest,
   StudyExportResult,
+  StudyFilterRunRequest,
   StudyList,
+  StudyRunProgress,
   WordCard,
   WordCardDraft,
   OpenBookResult,
@@ -121,6 +125,11 @@ export const IPC = {
   studyPatchMany: 'study:patchMany',
   studyAddPhrase: 'study:addPhrase',
   studyExport: 'study:export',
+  studyDirectFilter: 'study:directFilter',
+  studyRunFilter: 'study:runFilter',
+  studyRunCards: 'study:runCards',
+  studyPatchCard: 'study:patchCard',
+  studyExportPackage: 'study:exportPackage',
 } as const;
 
 export type ImportDialogKind = 'files' | 'directory';
@@ -312,6 +321,11 @@ export interface AraleApi {
     patchMany(bookId: string, candidateIds: string[], patch: StudyCandidatePatch): Promise<StudyList>;
     addPhrase(bookId: string, ref: string, expression: string, reading: string): Promise<StudyList>;
     export(bookId: string): Promise<StudyExportResult>;
+    directFilter(bookId: string, levels: number[], includeUnknown: boolean): Promise<StudyList>;
+    runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyList>;
+    runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList>;
+    patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): Promise<StudyList>;
+    exportPackage(bookId: string): Promise<StudyExportResult>;
   };
 }
 
@@ -340,6 +354,7 @@ export interface AraleEvents {
   /** 分词任务结束。 */
   'segment:done': SegmentJobResult;
   'study:progress': { bookId: string; done: number; total: number };
+  'study:workflow-progress': StudyRunProgress;
 }
 
 export type ShellCommand =

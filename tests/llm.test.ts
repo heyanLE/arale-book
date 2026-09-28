@@ -262,6 +262,35 @@ test('analyze: 正常路径的 URL / 方法 / 头 / body 都对', async () => {
   assert.ok(body.messages[0]?.content.includes('猫がいる'), '上下文也要进提示词');
 });
 
+test('complete: Harness 使用指定配置、系统提示和低温度，密钥不进入返回值', async () => {
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { content: '{"ok":true}' } }] }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service);
+  service.setApiKey('p1', 'sk-harness');
+  const result = await service.complete({ profileId: 'p1', system: '只返回 JSON', user: '猫がいる', temperature: 0.1 });
+  assert.equal(result.ok, true);
+  assert.equal(JSON.stringify(result).includes('sk-harness'), false);
+  const body = JSON.parse(String(captured.calls[0]?.init?.body)) as { temperature: number; messages: Array<{ role: string; content: string }> };
+  assert.equal(body.temperature, 0.1);
+  assert.deepEqual(body.messages.map((item) => item.role), ['system', 'user']);
+  assert.equal(body.messages[1]?.content, '猫がいる');
+});
+
+test('complete: 取消信号会终止进行中的 Harness 请求', async () => {
+  const captured = captureFetch(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+  }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service);
+  service.setApiKey('p1', 'sk-test');
+  const controller = new AbortController();
+  const pending = service.complete({ system: 'JSON', user: '猫', signal: controller.signal });
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(captured.calls.length, 1);
+});
+
 test('analyze: 远端地址没 key → 失败且说明缺 key，不发请求', async () => {
   const captured = captureFetch(async () => {
     throw new Error('不该发出请求');

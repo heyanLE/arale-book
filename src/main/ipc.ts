@@ -36,7 +36,10 @@ import type {
   SegmentToken,
   StudyCandidate,
   StudyCandidatePatch,
+  StudyCardDraft,
+  StudyCardRunRequest,
   StudyExportResult,
+  StudyFilterRunRequest,
   StudyList,
   TranslationRequest,
 } from '../shared/types';
@@ -382,6 +385,30 @@ export function registerIpc(services: Services): void {
   handle(IPC.studyAddPhrase, (bookId: string, ref: string, expression: string, reading: string): StudyList =>
     study.addPhrase(bookId, ref, expression, reading),
   );
+  handle(IPC.studyDirectFilter, (bookId: string, levels: number[], includeUnknown: boolean): StudyList =>
+    study.directFilter(bookId, levels, includeUnknown),
+  );
+  handle(IPC.studyRunFilter, (bookId: string, request: StudyFilterRunRequest): Promise<StudyList> =>
+    study.runFilter(bookId, request),
+  );
+  handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): Promise<StudyList> =>
+    study.runCards(bookId, request),
+  );
+  handle(IPC.studyPatchCard, (bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): StudyList =>
+    study.patchCard(bookId, candidateId, patch),
+  );
+  handle(IPC.studyExportPackage, async (bookId: string): Promise<StudyExportResult> => {
+    requireBook(bookId);
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      title: '导出带漫画裁图的 Anki 卡组',
+      defaultPath: `aralebook-${bookId}.apkg`,
+      filters: [{ name: 'Anki 卡组', extensions: ['apkg'] }],
+    };
+    const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return { path: null, count: 0 };
+    return { path: picked.filePath, count: await study.exportPackage(bookId, picked.filePath) };
+  });
   handle(IPC.studyExport, async (bookId: string): Promise<StudyExportResult> => {
     requireBook(bookId);
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
