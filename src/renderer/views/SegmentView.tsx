@@ -13,6 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import type { BookSegments, SegmentJobResult, SegmentProgress } from '@shared/types';
+import { StudyPanel } from './StudyPanel';
 
 export interface SegmentViewProps {
   bookId: string;
@@ -25,6 +26,7 @@ export interface SegmentViewProps {
   segments: BookSegments | null;
   /** 加载中标志（首次读盘）。 */
   loading: boolean;
+  isComic: boolean;
   onBack: () => void;
   onGenerate: (force: boolean) => void;
   onClear: () => void;
@@ -46,11 +48,12 @@ function formatTime(ms: number): string {
 }
 
 export function SegmentView(props: SegmentViewProps): JSX.Element {
-  const { bookTitle, status, progress, segments, loading, onBack, onGenerate, onClear, onReload } =
+  const { bookId, bookTitle, status, progress, segments, loading, isComic, onBack, onGenerate, onClear, onReload } =
     props;
 
   const [filter, setFilter] = useState('');
   const [onlyMatched, setOnlyMatched] = useState(false);
+  const [mode, setMode] = useState<'vocabulary' | 'study'>('vocabulary');
 
   const running = progress !== null;
 
@@ -120,6 +123,16 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
           </button>
         </div>
       </div>
+
+      {isComic && <div className="segment-tabs" role="tablist" aria-label="分词页面">
+        <button type="button" role="tab" aria-selected={mode === 'vocabulary'} onClick={() => setMode('vocabulary')}>原始词表</button>
+        <button type="button" role="tab" aria-selected={mode === 'study'} onClick={() => setMode('study')}>Anki 制卡</button>
+      </div>}
+
+      {mode === 'study' && isComic && segments && <StudyPanel bookId={bookId} bookTitle={bookTitle} segmentGeneratedAt={segments.generatedAt} />}
+      {mode === 'study' && isComic && !segments && <div className="segment-empty">请先生成分词结果，再制作 Anki 词卡。</div>}
+
+      {mode === 'vocabulary' && <>
 
       {running && progress && (
         <div className="segment-progress">
@@ -203,6 +216,7 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
           )}
         </>
       )}
+      </>}
     </div>
   );
 }

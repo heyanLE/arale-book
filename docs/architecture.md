@@ -1,6 +1,6 @@
 # 当前架构与数据流
 
-核对日期：2026-09-26。状态和待办见[当前状态](current-state.md)。
+核对日期：2026-09-28。状态和待办见[当前状态](current-state.md)。
 
 ## 代码导航
 
@@ -15,6 +15,7 @@
 | `src/renderer/reader/` | 漫画/EPUB UI、文字层与选择 |
 | [src/main/extensions/service.ts](../src/main/extensions/service.ts) | JSONL 仓库、缓存、下载校验、安装与开发目录加载 |
 | [src/main/ocr/service.ts](../src/main/ocr/service.ts) | 书级串行队列、进度、取消和文字层写盘 |
+| [学习候选服务](../src/main/study/service.ts)、[审核 UI](../src/renderer/views/StudyPanel.tsx) | Kuromoji 候选、JLPT 参考匹配、每书选择与 Anki 文本导出 |
 | [扩展 provider](../src/main/ocr/providers/extension.ts)、[runner](../src/main/ocr/runner.ts) | 按自描述启动进程，读取逐页 NDJSON |
 | [设置 UI](../src/renderer/components/ExtensionsCard.tsx) | 仓库管理、安装/卸载与进度 |
 | `native/arale-native/` | Rust 解包 sidecar；不是 OCR 引擎 |
@@ -52,6 +53,8 @@
   library/index.json
   library/<bookId>/content/        # arale:// 的可读根，含 manga.json
   library/<bookId>/cards.json      # 词卡按书存储
+  library/<bookId>/segments.json   # 可重生成的原始分词结果
+  library/<bookId>/study-list.json # 漫画制卡候选与人工审核结果
   library/<bookId>/original.*
   dictionaries/
   positions.json

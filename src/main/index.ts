@@ -27,6 +27,7 @@ import { setImportDefaults } from './library/importer';
 import { readAppDefaults } from './settings';
 import { OcrService } from './ocr/service';
 import { SegmentService } from './segment/service';
+import { StudyService, chooseMeaning } from './study/service';
 import { SystemOcrEngine } from './ocr/providers/system';
 import { ExtensionOcrEngine } from './ocr/providers/extension';
 import {
@@ -249,8 +250,16 @@ async function bootstrap(): Promise<void> {
     onFinished: () => emitEvent('library:changed', { reason: 'update' }),
   });
 
+  const study = new StudyService({
+    getBook: (bookId) => store.get(bookId),
+    getSegments: (bookId) => segment.read(bookId),
+    ensureDictionary: () => dict.ensureLoaded(),
+    lookupMeaning: (expression, reading) => chooseMeaning(dict.lookup(expression, 0).results, expression, reading),
+    progress: (bookId, done, total) => emitEvent('study:progress', { bookId, done, total }),
+  });
+
   installBookProtocol((bookId) => store.get(bookId));
-  registerIpc({ store, positions, dict, ocr, segment, extensions, llm, translation });
+  registerIpc({ store, positions, dict, ocr, segment, study, extensions, llm, translation });
 
   // 命令行里带的文件（Windows/Linux）。此时窗口还没建，队列会先攒着，
   // 等 `did-finish-load` 再派发。

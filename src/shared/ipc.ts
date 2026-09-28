@@ -29,6 +29,10 @@ import type {
   TranslationSettings,
   SegmentJobResult,
   SegmentProgress,
+  StudyCandidate,
+  StudyCandidatePatch,
+  StudyExportResult,
+  StudyList,
   WordCard,
   WordCardDraft,
   OpenBookResult,
@@ -109,6 +113,13 @@ export const IPC = {
   segmentRead: 'segment:read',
   /** 删掉分词结果（重新生成前也可以先删）。 */
   segmentClear: 'segment:clear',
+  studyRead: 'study:read',
+  studyGenerate: 'study:generate',
+  studyCancel: 'study:cancel',
+  studyPatch: 'study:patch',
+  studyPatchMany: 'study:patchMany',
+  studyAddPhrase: 'study:addPhrase',
+  studyExport: 'study:export',
 } as const;
 
 export type ImportDialogKind = 'files' | 'directory';
@@ -292,6 +303,15 @@ export interface AraleApi {
     /** 删掉分词结果。 */
     clear(bookId: string): Promise<void>;
   };
+  study: {
+    read(bookId: string): Promise<StudyList | null>;
+    generate(bookId: string): Promise<StudyList>;
+    cancel(bookId: string): Promise<void>;
+    patch(bookId: string, candidateId: string, patch: StudyCandidatePatch): Promise<StudyCandidate>;
+    patchMany(bookId: string, candidateIds: string[], patch: StudyCandidatePatch): Promise<StudyList>;
+    addPhrase(bookId: string, ref: string, expression: string, reading: string): Promise<StudyList>;
+    export(bookId: string): Promise<StudyExportResult>;
+  };
 }
 
 /** 主进程推给渲染进程的事件。 */
@@ -318,6 +338,7 @@ export interface AraleEvents {
   'segment:progress': SegmentProgress;
   /** 分词任务结束。 */
   'segment:done': SegmentJobResult;
+  'study:progress': { bookId: string; done: number; total: number };
 }
 
 export type ShellCommand =

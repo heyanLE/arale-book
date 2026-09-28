@@ -1,17 +1,17 @@
 # 开发、构建与验证
 
-核对日期：2026-09-26。所有命令默认从主仓库根运行；Windows 特有问题先读 [Windows 交接](windows-handoff.md)。
+核对日期：2026-09-28。所有命令默认从主仓库根运行；Windows 特有问题先读 [Windows 交接](windows-handoff.md)。
 
 ## 取得代码与依赖
 
 ```bash
-git clone --branch codex/windows-handoff --recurse-submodules git@github.com:heyanLE/arale-book.git
+git clone --recurse-submodules git@github.com:heyanLE/arale-book.git
 cd arale-book
 npm ci
 git submodule status
 ```
 
-前提是两个仓库的分支已 push。`.gitmodules` 使用 SSH，Windows 要能访问两个仓库。源码 clone 不包含模型、运行时或 OCR ZIP；恢复方式见交接文档。
+默认克隆主仓库 `main`。`.gitmodules` 使用 SSH，Windows 要能访问两个仓库。源码 clone 不包含模型、运行时或 OCR ZIP；恢复方式见交接文档。本次漫画制卡开发在本地 `codex/manga-vocabulary-anki` 分支，未推送时不能从 GitHub 克隆到。
 
 ## 常用命令
 

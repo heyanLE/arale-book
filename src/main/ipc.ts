@@ -34,6 +34,10 @@ import type {
   PageText,
   ReadingPosition,
   SegmentToken,
+  StudyCandidate,
+  StudyCandidatePatch,
+  StudyExportResult,
+  StudyList,
   TranslationRequest,
 } from '../shared/types';
 import {
@@ -62,6 +66,7 @@ import type { LlmService } from './llm/service';
 import type { TranslationService } from './translation/service';
 import type { OcrService } from './ocr/service';
 import type { SegmentService } from './segment/service';
+import type { StudyService } from './study/service';
 import { getChapterContent, getPageText, invalidateContentCache } from './reader/content';
 import { emitEvent } from './events';
 import { bookUrl } from './reader/protocol';
@@ -73,13 +78,14 @@ export interface Services {
   dict: DictionaryService;
   ocr: OcrService;
   segment: SegmentService;
+  study: StudyService;
   extensions: ExtensionService;
   llm: LlmService;
   translation: TranslationService;
 }
 
 export function registerIpc(services: Services): void {
-  const { store, positions, dict, ocr, segment, extensions, llm, translation } = services;
+  const { store, positions, dict, ocr, segment, study, extensions, llm, translation } = services;
 
   const requireBook = (bookId: string): BookRecord => {
     const book = store.get(bookId);
@@ -362,6 +368,31 @@ export function registerIpc(services: Services): void {
 
   handle(IPC.segmentClear, (bookId: string): void => {
     segment.clear(bookId);
+  });
+
+  handle(IPC.studyRead, (bookId: string): StudyList | null => study.read(bookId));
+  handle(IPC.studyGenerate, (bookId: string): Promise<StudyList> => study.generate(bookId));
+  handle(IPC.studyCancel, (bookId: string): void => study.cancel(bookId));
+  handle(IPC.studyPatch, (bookId: string, candidateId: string, patch: StudyCandidatePatch): StudyCandidate =>
+    study.patch(bookId, candidateId, patch),
+  );
+  handle(IPC.studyPatchMany, (bookId: string, candidateIds: string[], patch: StudyCandidatePatch): StudyList =>
+    study.patchMany(bookId, candidateIds, patch),
+  );
+  handle(IPC.studyAddPhrase, (bookId: string, ref: string, expression: string, reading: string): StudyList =>
+    study.addPhrase(bookId, ref, expression, reading),
+  );
+  handle(IPC.studyExport, async (bookId: string): Promise<StudyExportResult> => {
+    requireBook(bookId);
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      title: '导出 Anki 词表',
+      defaultPath: `aralebook-${bookId}.txt`,
+      filters: [{ name: 'Anki 文本', extensions: ['txt'] }],
+    };
+    const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return { path: null, count: 0 };
+    return { path: picked.filePath, count: study.exportText(bookId, picked.filePath) };
   });
 
   // --- 单向通知 ---

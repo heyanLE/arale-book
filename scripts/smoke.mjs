@@ -1622,8 +1622,8 @@ try {
   // hover 只描边、不填底色：底色会和"已选中的划词高亮"撞在一起，而且会压住画面上的字。
   // 直接加类读计算样式（React 的 mouseenter 走的也是这个类），不依赖合成事件。
   const hoverStyle = await client.evaluate(`(() => {
-    const el = document.querySelector('.comic-text-block');
-    if (!el) return { skipped: 'no-block' };
+    const el = document.querySelector('.comic-text-group');
+    if (!el) return { skipped: 'no-group' };
     el.classList.add('is-hovered');
     const style = getComputedStyle(el);
     const bg = style.backgroundColor;
@@ -1989,6 +1989,49 @@ try {
   // 重复 start 不该重跑（产物已存在且没 force）。
   const segStatus = await client.evaluate(`window.arale.segment.status(${JSON.stringify(epubId)})`);
   check('有产物时 status 能报出统计', (segStatus?.uniqueWords ?? 0) > 0, JSON.stringify(segStatus));
+
+  section('漫画学习候选与 Anki 制卡');
+  await client.evaluate(`window.arale.segment.start(${JSON.stringify(comicId)}, { force: true })`);
+  let comicSegments = null;
+  for (let i = 0; i < 60; i += 1) {
+    comicSegments = await client.evaluate(`window.arale.segment.read(${JSON.stringify(comicId)})`);
+    if (comicSegments) break;
+    await delay(100);
+  }
+  check('漫画分词有文字块可供制卡', (comicSegments?.units?.length ?? 0) > 0);
+  const studyList = await client.evaluate(`window.arale.study.generate(${JSON.stringify(comicId)})`);
+  check('Kuromoji 候选经 IPC 生成并带原文出处',
+    (studyList?.candidates?.length ?? 0) > 0 && studyList.candidates.some((item) => item.occurrences?.[0]?.text),
+    `候选=${studyList?.candidates?.length ?? 0}`);
+  const firstStudy = studyList?.candidates?.[0];
+  if (firstStudy) {
+    await client.evaluate(`window.arale.study.patch(${JSON.stringify(comicId)}, ${JSON.stringify(firstStudy.id)}, { selected: true, meaning: '冒烟测试释义' })`);
+    const savedStudy = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)})`);
+    check('人工选择和释义能经 IPC 保存',
+      savedStudy?.candidates?.find((item) => item.id === firstStudy.id)?.meaning === '冒烟测试释义');
+  }
+  const openedStudyTab = await client.evaluate(`(() => {
+    const open = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '分词');
+    if (!open) return 'missing-open';
+    open.click();
+    return 'opened';
+  })()`);
+  await delay(200);
+  const studyTab = await client.evaluate(`(() => {
+    const tab = [...document.querySelectorAll('[role="tab"]')].find((node) => node.textContent.includes('Anki 制卡'));
+    if (!tab) return 'missing-tab';
+    tab.click();
+    return 'opened';
+  })()`);
+  await delay(350);
+  check('漫画分词页可进入 Anki 制卡审核界面',
+    openedStudyTab === 'opened' && studyTab === 'opened' &&
+    (await client.evaluate("!!document.querySelector('.study-panel .study-filters')")) === true,
+    `${openedStudyTab}/${studyTab}`);
+  await client.evaluate(`(() => {
+    const back = [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'));
+    back?.click();
+  })()`);
 
   section('词典');
 

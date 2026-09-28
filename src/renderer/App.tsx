@@ -686,6 +686,7 @@ export function App(): JSX.Element {
             progress={segmentProgress[segmentBookId] ?? null}
             segments={segmentData}
             loading={segmentLoading}
+            isComic={(open?.book.readerMode ?? open?.book.format) === 'comic'}
             onBack={() => {
               setView(open !== null ? 'reader' : 'library');
               setSegmentBookId(null);

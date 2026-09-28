@@ -149,16 +149,34 @@ try {
     JSON.stringify({ ok: first?.ok, format: first?.format, error: first?.error }),
   );
 
+  if (first?.ok && first.bookId) {
+    await client.evaluate(`window.arale.segment.start(${JSON.stringify(first.bookId)}, { force: true })`);
+    let segments = null;
+    for (let i = 0; i < 50; i += 1) {
+      segments = await client.evaluate(`window.arale.segment.read(${JSON.stringify(first.bookId)})`);
+      if (segments) break;
+      await delay(100);
+    }
+    check('打包后的漫画分词结果可用', (segments?.units?.length ?? 0) > 0);
+    const study = await client.evaluate(`window.arale.study.generate(${JSON.stringify(first.bookId)})`);
+    check(
+      'Kuromoji 词典与 JLPT 数据在正式包内可加载并生成候选',
+      (study?.candidates?.length ?? 0) > 0 && typeof study?.jlptSource === 'string',
+      `候选=${study?.candidates?.length ?? 0}`,
+    );
+  }
+
   // ★ 关键：扩展引擎（arale_onnx_v1）可用。
   //   它**不再是随包带的桥**：应用只认「已安装的扩展」（`extension.json` 的 runner），
   //   桥与整条 Python 管线都在扩展归档里（独立仓库 arale-book-ocr-manga）。
   //   所以这条检查在装了扩展的机器上是绿的，在没装的机器上会明确报告「还没安装」。
   const capability = await client.evaluate('window.arale.ocr.capability()');
   const onnxEngine = capability?.providers?.find((p) => p.id === 'arale_onnx_v1');
+  const installed = onnxEngine?.extension?.installed === true;
   check(
-    '扩展 OCR 引擎可用（来自已安装的扩展，应用不随包带引擎本体）',
-    onnxEngine?.available === true,
-    onnxEngine?.available ? '可用' : (onnxEngine?.reason ?? '未探测到'),
+    '扩展 OCR 状态符合是否安装（正式包不携带引擎本体）',
+    onnxEngine !== undefined && (installed ? onnxEngine.available === true : onnxEngine.available === false),
+    installed ? (onnxEngine?.available ? '已安装且可用' : (onnxEngine?.reason ?? '不可用')) : '未安装，按设计需另行下载',
   );
 
   // ★ 关键：data/ja-transforms.json 在 asar 里被找到（去屈折数据）

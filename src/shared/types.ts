@@ -655,6 +655,62 @@ export interface SegmentJobResult {
 }
 
 // ---------------------------------------------------------------------------
+// 漫画学习候选与 Anki 导出
+// ---------------------------------------------------------------------------
+
+export type JlptLevel = 1 | 2 | 3 | 4 | 5 | null;
+
+export interface StudyOccurrence {
+  id: string;
+  ref: string;
+  label: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface StudyCandidate {
+  /** 辞书形与读音组成的稳定键；同形异读不合并。 */
+  id: string;
+  expression: string;
+  reading: string;
+  partOfSpeech: string;
+  jlpt: JlptLevel;
+  jlptConflict: boolean;
+  count: number;
+  occurrences: StudyOccurrence[];
+  /** 用户可修订的词典释义。 */
+  meaning: string;
+  selected: boolean;
+  excluded: boolean;
+  /** 选作卡背的出处 id（文字块 ref + 块内位置）。 */
+  contextRef: string;
+  exportedAt: number | null;
+}
+
+export interface StudyList {
+  bookId: string;
+  generatedAt: number;
+  segmentGeneratedAt: number;
+  jlptSource: string;
+  candidates: StudyCandidate[];
+}
+
+export interface StudyCandidatePatch {
+  selected?: boolean;
+  excluded?: boolean;
+  expression?: string;
+  reading?: string;
+  meaning?: string;
+  contextRef?: string;
+}
+
+export interface StudyExportResult {
+  path: string | null;
+  count: number;
+}
+
+// ---------------------------------------------------------------------------
 // 词卡（用户保存下来的查询）
 // ---------------------------------------------------------------------------
 
