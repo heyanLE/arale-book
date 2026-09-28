@@ -209,6 +209,12 @@ try {
     return title ? 'ok' : 'not-found';
   })()`, 700);
 
+  await shoot('07-settings-wordcard', `(() => {
+    const title = [...document.querySelectorAll('.settings-card-title')].find((node) => node.textContent.includes('词卡弹窗'));
+    title?.scrollIntoView({ block: 'start' });
+    return title ? 'ok' : 'not-found';
+  })()`, 700);
+
   client.close();
 } catch (error) {
   console.error('截屏失败：', error);

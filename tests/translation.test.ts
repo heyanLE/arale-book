@@ -51,15 +51,17 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-test('settings: 密钥只进不出，更新 profile 不会清掉密钥', () => {
+test('settings: 已存名称与提供商固定，更新端点不会清掉密钥', () => {
   const { service } = makeService();
   const item = profile('microsoft');
   service.update({ profiles: [item], activeProfileId: item.id });
   service.setSecret(item.id, 'top-secret');
-  const renamed = service.update({ profiles: [{ ...item, name: '微软翻译' }] });
+  const renamed = service.update({ profiles: [{ ...item, name: '微软翻译', provider: 'deepl', baseUrl: 'https://new.example.test' }] });
   const microsoft = renamed.profiles.find((profile) => profile.id === item.id)!;
   assert.equal(microsoft.hasSecret, true);
-  assert.equal(microsoft.name, '微软翻译');
+  assert.equal(microsoft.name, item.name);
+  assert.equal(microsoft.provider, 'microsoft');
+  assert.equal(microsoft.baseUrl, 'https://new.example.test');
   assert.equal(Object.hasOwn(microsoft, 'secret'), false);
   assert.equal(JSON.stringify(renamed).includes('top-secret'), false);
 });

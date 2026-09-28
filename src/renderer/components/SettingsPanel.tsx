@@ -15,6 +15,7 @@ import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comi
 import { ExtensionsCard } from './ExtensionsCard';
 import { LlmCard } from './LlmCard';
 import { TranslationCard } from './TranslationCard';
+import { WordCardSettingsCard } from './WordCardSettingsCard';
 import { api, call, reportApiError, useIpcEvent } from '../lib/api';
 import {
   DEFAULT_SETTINGS,
@@ -182,22 +183,7 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <nav className="settings-nav" aria-label="设置分类">
-        {(['通用', '小说', '漫画'] as const).map((label, index) => (
-          <button
-            key={label}
-            type="button"
-            onClick={() => document.getElementById(['settings-general', 'settings-novel', 'settings-comic'][index]!)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          >{label}</button>
-        ))}
-      </nav>
-
       <div className="settings-body">
-        {/* =====================================================================
-            通用 —— 与载体无关的东西：书库位置、词典、界面外观。
-            ===================================================================== */}
-        <h2 id="settings-general" className="settings-group">通用</h2>
-
         {/* ---------------- 书库 ---------------- */}
         <section className="settings-card">
           <div className="settings-card-head">
@@ -386,6 +372,8 @@ export function SettingsPanel({
           <section className="settings-card"><div className="detail-hint">翻译配置还没载入。</div></section>
         )}
 
+        <WordCardSettingsCard llm={llm ?? null} translation={translation ?? null} />
+
         {/* ---------------- OCR 引擎（可选能力） ---------------- */}
         <section className="settings-card">
           <div className="settings-card-head">
@@ -463,14 +451,9 @@ export function SettingsPanel({
           </section>
         )}
 
-        {/* =====================================================================
-            小说 —— 只影响 EPUB 阅读器。
-            ===================================================================== */}
-        <h2 id="settings-novel" className="settings-group">小说</h2>
-
         <section className="settings-card">
           <div className="settings-card-head">
-            <h2 className="settings-card-title">小说阅读器</h2>
+            <h2 className="settings-card-title">小说阅读器配置</h2>
           </div>
 
           <div className="settings-row">
@@ -544,12 +527,10 @@ export function SettingsPanel({
 
           <p className="settings-hint">只调整阅读器注入的排版，不覆盖书自带的 CSS。</p>
         </section>
-        <h2 id="settings-comic" className="settings-group">漫画</h2>
-
         {/* ---------------- 漫画阅读器 ---------------- */}
         <section className="settings-card">
           <div className="settings-card-head">
-            <h2 className="settings-card-title">漫画阅读器</h2>
+            <h2 className="settings-card-title">漫画阅读器配置</h2>
           </div>
 
           <div className="settings-row">

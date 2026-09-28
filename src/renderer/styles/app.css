@@ -1894,28 +1894,9 @@ button[aria-disabled='true'] {
   gap: 5px;
 }
 
-.settings-nav {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 12px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border-soft);
-  flex: none;
-}
-
-.settings-nav button {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 13px;
-  background: var(--bg-content);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.settings-nav button:hover { background: var(--bg-hover); }
-
 .profile-new { border-left: 3px solid var(--accent); background: var(--bg-active); }
+
+.profile-identity { display: flex; align-items: center; color: var(--text-dim); background: var(--bg-code); }
 
 .profile-builtin {
   display: flex;
@@ -2406,40 +2387,6 @@ button[aria-disabled='true'] {
   font-size: 11px;
 }
 
-/* ==========================================================================
-   设置页的分组标题
-   --------------------------------------------------------------------------
-   三个组（通用 / 漫画 / 小说）是**载体维度**的划分，不是功能维度：用户想知道
-   「改这个会影响漫画还是小说」。所以组标题要比卡片标题更重、更靠外，
-   用一条横线把它和上面的卡片切开，读起来像目录。
-   ========================================================================== */
-
-.settings-group {
-  margin: 22px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-}
-
-/* 第一个组标题不需要上间距（上面已经有 body 的 padding）。 */
-.settings-group:first-child {
-  margin-top: 0;
-}
-
-/* 组标题用主色的小方块做前缀，比纯文字更容易扫读。 */
-.settings-group::before {
-  content: '';
-  display: inline-block;
-  width: 3px;
-  height: 11px;
-  margin-right: 7px;
-  vertical-align: -1px;
-  border-radius: 1px;
-  background: var(--accent);
-}
 
 /* 「图片小说」角标：载体是 EPUB、阅读方式是漫画。用中性色而不是强调色 ——
    它是个说明，不是告警。 */

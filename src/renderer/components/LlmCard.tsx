@@ -1,5 +1,5 @@
 /**
- * 「LLM」设置卡片：配置 chat completions 兼容的服务，以及分析用的提示词。
+ * 「LLM」设置卡片：管理 chat completions 兼容的服务。词卡默认值与提示词在词卡弹窗卡片中。
  *
  * ## 为什么是**手动保存**
  *
@@ -57,12 +57,11 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
   const [newDraft, setNewDraft] = useState<LlmProfile | null>(null);
   const [newError, setNewError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [promptDraft, setPromptDraft] = useState<string | null>(null);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
 
   const profiles = draft ?? settings?.profiles ?? [];
   const activeId = settings?.activeProfileId ?? null;
-  const dirty = draft !== null || promptDraft !== null;
+  const dirty = draft !== null;
 
   const editProfile = (id: string, patch: Partial<LlmProfile>) => {
     setDraft(profiles.map((item) => (item.id === id ? { ...item, ...patch } : item)));
@@ -71,12 +70,9 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
   const commit = async () => {
     if (!dirty) return;
     setSaving(true);
-    const saved = await onUpdate({
-      ...(promptDraft !== null ? { prompt: promptDraft } : {}),
-      ...(draft !== null ? { profiles: draft } : {}),
-    });
+    const saved = await onUpdate({ profiles: draft ?? [] });
     setSaving(false);
-    if (saved) { setDraft(null); setPromptDraft(null); }
+    if (saved) setDraft(null);
   };
 
   const addProfile = () => {
@@ -128,7 +124,7 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
           >
             {dirty ? '保存 *' : '已保存'}
           </button>
-          <button type="button" className="btn btn-sm" onClick={() => { setDraft(null); setPromptDraft(null); onReload(); }} disabled={loading}>
+          <button type="button" className="btn btn-sm" onClick={() => { setDraft(null); onReload(); }} disabled={loading}>
             重新读取
           </button>
         </div>
@@ -154,14 +150,10 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
           <div className="settings-row settings-row-block" key={profile.id}>
             <div className="settings-row-main">
               <div className="llm-grid">
-                <label className="field">
+                <div className="field">
                   <span className="field-label">名称</span>
-                  <input
-                    className="input"
-                    value={profile.name}
-                    onChange={(e) => editProfile(profile.id, { name: e.target.value })}
-                  />
-                </label>
+                  <span className="input profile-identity" title="配置名称仅可在新建时填写">{profile.name}</span>
+                </div>
                 <label className="field">
                   <span className="field-label">模型</span>
                   <input
@@ -210,15 +202,6 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
                   const saved = await onSetApiKey(profile.id, keyDrafts[profile.id] ?? '');
                   if (saved) setKeyDrafts((current) => ({ ...current, [profile.id]: '' }));
                 })()}>保存 Key</button>
-                <label className="check" title="词卡上没指定时默认用这一套">
-                  <input
-                    type="radio"
-                    name="llm-active"
-                    checked={activeId === profile.id}
-                    onChange={() => void onUpdate({ activeProfileId: profile.id })}
-                  />
-                  <span>默认</span>
-                </label>
                 {profile.hasApiKey && (
                   <button
                     type="button"
@@ -244,23 +227,7 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
         )}
       </div>
 
-      <div className="settings-row settings-row-block">
-        <div className="settings-row-main">
-          <span className="settings-row-title">分析提示词</span>
-          <textarea
-            className="input mono llm-prompt"
-            rows={8}
-            value={promptDraft ?? settings?.prompt ?? ''}
-            onChange={(e) => setPromptDraft(e.target.value)}
-          />
-          <span className="settings-row-sub">
-            <code>{'{{word}}'}</code> 替换成词，<code>{'{{context}}'}</code> 替换成查词时的上下文。
-            {promptDraft !== null && promptDraft !== settings?.prompt && (
-              <b className="settings-warn"> · 有未保存的改动，点上面的「保存」</b>
-            )}
-          </span>
-        </div>
-      </div>
+      <p className="settings-hint">默认模型与分析提示词在“词卡弹窗”板块中设置。</p>
     </section>
   );
 }

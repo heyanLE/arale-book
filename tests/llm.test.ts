@@ -133,14 +133,15 @@ test('setApiKey: 存 key 后 hasApiKey 为 true，传 null / 空串就删掉', (
   assert.equal(service.settings().profiles[0]?.hasApiKey, false);
 });
 
-test('update: 改名字/模型不会把已存的 key 冲掉', () => {
+test('update: 已存配置名称固定，改模型不会把已存的 key 冲掉', () => {
   const { service } = makeService();
   const profile = seed(service);
   service.setApiKey('p1', 'sk-keep');
   // 渲染进程手里的 profile 没有 apiKey（只有 hasApiKey），覆盖式写入不能因此丢掉它。
   service.update({ profiles: [{ ...profile, name: '新名字', model: 'qwen3' }] });
   const settings = service.settings();
-  assert.equal(settings.profiles[0]?.name, '新名字');
+  assert.equal(settings.profiles[0]?.name, profile.name);
+  assert.equal(settings.profiles[0]?.model, 'qwen3');
   assert.equal(settings.profiles[0]?.hasApiKey, true);
 });
 

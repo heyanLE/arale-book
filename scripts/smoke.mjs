@@ -954,12 +954,39 @@ try {
   })()`);
   check('设置页有「扩展」卡片', extCard?.hasCard === true, JSON.stringify(extCard?.titles));
   check('扩展卡片列出了条目', (extCard?.rows ?? 0) >= 1, JSON.stringify(extCard));
-  const settingsOrder = await client.evaluate("[...document.querySelectorAll('.settings-group')].map((node) => node.textContent.trim())");
-  check('设置顺序为通用、小说、漫画', JSON.stringify(settingsOrder) === JSON.stringify(['通用', '小说', '漫画']), JSON.stringify(settingsOrder));
-  check('LLM、翻译、OCR 与 OCR 扩展都在小说设置之前',
-    ['LLM 配置', '翻译引擎', 'OCR 默认引擎', 'OCR 扩展与仓库'].every((title) =>
-      extCard?.titles?.indexOf(title) >= 0 && extCard.titles.indexOf(title) < extCard.titles.indexOf('小说阅读器')),
+  const settingsOrder = extCard?.titles ?? [];
+  check('设置按功能卡片排列，没有通用/小说/漫画分组',
+    (await client.evaluate("document.querySelectorAll('.settings-group, .settings-nav').length")) === 0 &&
+    ['LLM 配置', '翻译引擎', '词卡弹窗', 'OCR 默认引擎', 'OCR 扩展与仓库', '小说阅读器配置', '漫画阅读器配置'].every((title) => settingsOrder.includes(title)),
+    JSON.stringify(settingsOrder));
+  check('词卡、OCR 与扩展在两个阅读器配置之前',
+    ['LLM 配置', '翻译引擎', '词卡弹窗', 'OCR 默认引擎', 'OCR 扩展与仓库'].every((title) =>
+      settingsOrder.indexOf(title) >= 0 && settingsOrder.indexOf(title) < settingsOrder.indexOf('小说阅读器配置')),
     JSON.stringify(extCard?.titles));
+  check('LLM 提示词和两个默认选择集中在词卡弹窗板块',
+    await client.evaluate(`(() => {
+      const cards = [...document.querySelectorAll('.settings-card')];
+      const popup = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+      const llm = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+      return !!popup?.querySelector('textarea') && popup?.querySelectorAll('select').length === 2 && !llm?.querySelector('textarea');
+    })()`));
+  const originalPrompt = (await client.evaluate('window.arale.llm.settings()'))?.prompt ?? '';
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const area = card?.querySelector('textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(area, '冒烟提示词 {{word}} {{context}}');
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('保存提示词'))?.click();
+  })()`);
+  await delay(200);
+  const savedPrompt = (await client.evaluate('window.arale.llm.settings()'))?.prompt;
+  check('词卡弹窗板块能独立保存 LLM 提示词', savedPrompt === '冒烟提示词 {{word}} {{context}}', String(savedPrompt));
+  await client.evaluate(`window.arale.llm.update({ prompt: ${JSON.stringify(originalPrompt)} })`);
   const bingDefault = await client.evaluate('window.arale.translation.settings()');
   check('Bing 免 Key 配置初次存在且为默认',
     bingDefault?.profiles?.some((item) => item.id === bingDefault.activeProfileId && item.provider === 'bing' && !item.hasSecret));
@@ -976,16 +1003,17 @@ try {
   const llmDraftState = await client.evaluate(`(() => {
     const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
     [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
-    const radios = [...(card?.querySelectorAll('input[name="llm-active"]') ?? [])];
-    radios[1]?.click();
-    return { form: !!card?.querySelector('.profile-new'), radios: radios.length };
+    const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const select = popupCard?.querySelectorAll('select')[0];
+    if (select) { select.value = 'llm_smoke_b'; select.dispatchEvent(new Event('change', { bubbles: true })); }
+    return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
   })()`);
   await delay(300);
   const llmAfterDefault = await client.evaluate(`(async () => ({
     form: !!document.querySelector('.profile-new[aria-label="新建 LLM 配置"]'),
     active: (await window.arale.llm.settings()).activeProfileId
   }))()`);
-  check('LLM 新建草稿在切换默认配置后仍保留', llmDraftState?.form && llmDraftState.radios === 2 && llmAfterDefault?.form && llmAfterDefault?.active === 'llm_smoke_b', JSON.stringify({ llmDraftState, llmAfterDefault }));
+  check('LLM 新建草稿在词卡默认配置切换后仍保留', llmDraftState?.form && llmDraftState.defaultOptions === 3 && llmDraftState.radios === 0 && llmAfterDefault?.form && llmAfterDefault?.active === 'llm_smoke_b', JSON.stringify({ llmDraftState, llmAfterDefault }));
   await client.evaluate(`(() => {
     const input = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input');
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -998,6 +1026,10 @@ try {
   check('LLM 新配置点击独立保存后才进入已保存列表',
     savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.model === '') &&
     (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建 LLM 配置\"]')")) === true);
+  check('已保存 LLM 名称显示为固定文本', await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    return [...(card?.querySelectorAll('.profile-identity') ?? [])].some((node) => node.textContent.trim() === '新建测试 LLM');
+  })()`));
   await client.evaluate(`window.arale.llm.update({ profiles: [], activeProfileId: null })`);
   await client.evaluate(`window.arale.translation.update({ profiles: [
     { id: 'tr_smoke', name: '冒烟翻译', provider: 'microsoft', baseUrl: '', region: '', appId: '', hasSecret: false }
@@ -1010,16 +1042,17 @@ try {
   const translationDraftState = await client.evaluate(`(() => {
     const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
     [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
-    const radios = [...(card?.querySelectorAll('input[name="translation-active"]') ?? [])];
-    radios[0]?.click();
-    return { form: !!card?.querySelector('.profile-new'), radios: radios.length };
+    const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const select = popupCard?.querySelectorAll('select')[1];
+    if (select) { select.value = ${JSON.stringify(bingDefault.activeProfileId)}; select.dispatchEvent(new Event('change', { bubbles: true })); }
+    return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
   })()`);
   await delay(300);
   const translationAfterDefault = await client.evaluate(`(async () => ({
     form: !!document.querySelector('.profile-new[aria-label="新建翻译配置"]'),
     active: (await window.arale.translation.settings()).activeProfileId
   }))()`);
-  check('翻译新建草稿切回 Bing 默认后仍保留', translationDraftState?.form && translationDraftState.radios === 2 && translationAfterDefault?.form && translationAfterDefault?.active === bingDefault.activeProfileId, JSON.stringify({ translationDraftState, translationAfterDefault }));
+  check('翻译新建草稿切回 Bing 默认后仍保留', translationDraftState?.form && translationDraftState.defaultOptions === 2 && translationDraftState.radios === 0 && translationAfterDefault?.form && translationAfterDefault?.active === bingDefault.activeProfileId, JSON.stringify({ translationDraftState, translationAfterDefault }));
   await client.evaluate(`(() => {
     const input = document.querySelector('.profile-new[aria-label="新建翻译配置"] input');
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -1032,6 +1065,11 @@ try {
   check('翻译新配置点击独立保存后才进入已保存列表',
     savedNewTranslation?.profiles?.some((item) => item.name === '新建测试翻译') &&
     (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建翻译配置\"]')")) === true);
+  check('已保存翻译名称和提供商固定显示', await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    const row = [...(card?.querySelectorAll('.settings-row-block') ?? [])].find((node) => node.textContent.includes('新建测试翻译'));
+    return row?.querySelectorAll('.profile-identity').length === 2 && row?.querySelectorAll('.llm-grid select').length === 0;
+  })()`));
   await client.evaluate(`window.arale.translation.update({ profiles: [], activeProfileId: ${JSON.stringify(bingDefault.activeProfileId)} })`);
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,

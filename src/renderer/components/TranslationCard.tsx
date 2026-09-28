@@ -84,7 +84,6 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
 
   const profiles = draft ?? settings?.profiles ?? [];
   const persistedIds = new Set(settings?.profiles.map((profile) => profile.id) ?? []);
-  const activeId = settings?.activeProfileId ?? null;
   const edit = (id: string, patch: Partial<TranslationProfile>) =>
     setDraft(profiles.map((item) => (item.id === id ? { ...item, ...patch } : item)));
 
@@ -111,7 +110,7 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
     if (draft !== null) { setNewError('请先保存已有配置的修改。'); return; }
     const remaining = (settings?.profiles ?? []).filter((item) => item.id !== profile.id);
     setSaving(true);
-    const saved = await onUpdate({ profiles: remaining, ...(activeId === profile.id ? { activeProfileId: BUILTIN_BING_PROFILE_ID } : {}) });
+    const saved = await onUpdate({ profiles: remaining, ...(settings?.activeProfileId === profile.id ? { activeProfileId: BUILTIN_BING_PROFILE_ID } : {}) });
     setSaving(false);
     if (saved) setSecretDrafts((current) => { const copy = { ...current }; delete copy[profile.id]; return copy; });
   };
@@ -167,30 +166,20 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
           const builtin = profile.id === BUILTIN_BING_PROFILE_ID;
           if (builtin) return <div className="profile-builtin" key={profile.id}>
             <div><strong>Bing 网页翻译</strong><span>内置 · 免 Key · 无需新建即可使用</span></div>
-            <label className="check" title="词卡未指定时默认使用 Bing"><input type="radio" name="translation-active" checked={activeId === profile.id} onChange={() => void onUpdate({ activeProfileId: profile.id })} /><span>默认</span></label>
           </div>;
           const provider = PROVIDERS.find((item) => item.id === profile.provider)!;
           return (
           <div className="settings-row settings-row-block" key={profile.id}>
             <div className="settings-row-main">
               <div className="llm-grid">
-                <label className="field">
+                <div className="field">
                   <span className="field-label">名称</span>
-                  <input className="input" value={profile.name} onChange={(event) => edit(profile.id, { name: event.target.value })} />
-                </label>
-                <label className="field">
+                  <span className="input profile-identity" title="配置名称仅可在新建时填写">{profile.name}</span>
+                </div>
+                <div className="field">
                   <span className="field-label">提供商</span>
-                  <select
-                    className="select"
-                    value={profile.provider}
-                    onChange={(event) => {
-                      const provider = event.target.value as TranslationProviderId;
-                      edit(profile.id, { provider, name: PROVIDERS.find((item) => item.id === provider)?.label ?? profile.name });
-                    }}
-                  >
-                    {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-                  </select>
-                </label>
+                  <span className="input profile-identity" title="提供商仅可在新建时选择">{provider.label}</span>
+                </div>
 
                 {profile.provider === 'microsoft' && (
                   <label className="field">
@@ -245,10 +234,6 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
                 >
                   {provider.applyLabel} ↗
                 </a>
-                <label className="check" title="词卡上没指定时默认使用这一套">
-                  <input type="radio" name="translation-active" checked={activeId === profile.id} onChange={() => void onUpdate({ activeProfileId: profile.id })} />
-                  <span>默认</span>
-                </label>
                 {profile.provider !== 'bing' && <button type="button" className="btn btn-sm" disabled={!secretDrafts[profile.id] || saving} onClick={() => void (async () => {
                   const saved = await onSetSecret(profile.id, secretDrafts[profile.id] ?? '');
                   if (saved) setSecretDrafts((current) => ({ ...current, [profile.id]: '' }));
@@ -265,7 +250,7 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
           </div>
           );
         })}
-        <p className="settings-hint">Bing 网页翻译始终可选、无需 Key；新增其他配置后可将其中一套设为默认。</p>
+        <p className="settings-hint">名称与提供商在新建时确定。词卡默认翻译配置在“词卡弹窗”板块设置。</p>
       </div>
     </section>
   );

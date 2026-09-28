@@ -76,7 +76,10 @@ export class LlmService {
         seen.add(normalized.id);
         // 继承已存的 key：渲染进程只拿到 `hasApiKey`，拿不到明文，不继承的话
         // 用户每改一次名字/模型就得重新贴一次 key。
-        normalized.apiKey = existing.get(normalized.id)?.apiKey ?? normalized.apiKey;
+        const persisted = existing.get(normalized.id);
+        // 配置名称是创建时确定的身份；编辑模型或端点不能顺带改名。
+        normalized.name = persisted?.name ?? normalized.name;
+        normalized.apiKey = persisted?.apiKey ?? normalized.apiKey;
         kept.push(normalized);
       }
       next.profiles = kept;

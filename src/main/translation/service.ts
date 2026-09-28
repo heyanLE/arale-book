@@ -75,10 +75,12 @@ export class TranslationService {
       next.profiles = [builtinBing()];
       seen.add(BUILTIN_BING_PROFILE_ID);
       for (const profile of patch.profiles) {
-        const normalized = normalizeProfile(profile);
+        const persisted = existing.get(profile.id);
+        // 名称和提供商属于配置身份，保存后保持不变；其余端点参数可编辑。
+        const normalized = normalizeProfile(persisted ? { ...profile, name: persisted.name, provider: persisted.provider } : profile);
         if (normalized === null || seen.has(normalized.id)) continue;
         seen.add(normalized.id);
-        normalized.secret = existing.get(normalized.id)?.secret ?? '';
+        normalized.secret = persisted?.secret ?? '';
         next.profiles.push(normalized);
       }
     }
