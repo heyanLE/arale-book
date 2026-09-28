@@ -744,6 +744,8 @@ export interface WordCard {
   dictionaryId: string;
   dictionaryTitle: string;
   dictionaryReading: string;
+  /** 词卡第一次保存时的阅读位置；旧卡缺失时为 null。 */
+  source: WordCardSource | null;
   /** 用户的笔记。 */
   note: string;
   /**
@@ -757,6 +759,10 @@ export interface WordCard {
   createdAt: number;
   updatedAt: number;
 }
+
+export type WordCardSource =
+  | { kind: 'comic'; pageIndex: number; pageUrl: string }
+  | { kind: 'epub'; spineIndex: number };
 
 export interface WordCardAnalysis {
   /**
@@ -783,6 +789,7 @@ export interface WordCardDraft {
   dictionaryId: string;
   dictionaryTitle: string;
   dictionaryReading: string;
+  source?: WordCardSource | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +803,9 @@ export type TranslationProviderId =
   | 'google'
   | 'baidu'
   | 'libretranslate';
+
+/** 随应用提供的免 Key 翻译配置，始终存在且不能删除。 */
+export const BUILTIN_BING_PROFILE_ID = 'tr_bing_default';
 
 export interface TranslationProfile {
   id: string;

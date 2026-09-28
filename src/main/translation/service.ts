@@ -2,14 +2,14 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../../core/util/atomic-json';
-import type {
-  TranslationProfile,
-  TranslationProviderId,
-  TranslationRequest,
-  TranslationResult,
-  TranslationSettings,
+import {
+  BUILTIN_BING_PROFILE_ID,
+  type TranslationProfile,
+  type TranslationProviderId,
+  type TranslationRequest,
+  type TranslationResult,
+  type TranslationSettings,
 } from '../../shared/types';
-
 interface StoredProfile extends Omit<TranslationProfile, 'hasSecret'> {
   secret: string;
 }
@@ -29,6 +29,18 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const PROVIDERS = new Set<TranslationProviderId>([
   'bing', 'microsoft', 'deepl', 'google', 'baidu', 'libretranslate',
 ]);
+
+function builtinBing(): StoredProfile {
+  return {
+    id: BUILTIN_BING_PROFILE_ID,
+    name: 'Bing 网页翻译',
+    provider: 'bing',
+    baseUrl: '',
+    region: '',
+    appId: '',
+    secret: '',
+  };
+}
 
 const DEFAULT_URLS: Record<TranslationProviderId, string> = {
   bing: 'https://bing.com',
@@ -60,7 +72,8 @@ export class TranslationService {
     if (patch.profiles !== undefined) {
       const existing = new Map(stored.profiles.map((profile) => [profile.id, profile]));
       const seen = new Set<string>();
-      next.profiles = [];
+      next.profiles = [builtinBing()];
+      seen.add(BUILTIN_BING_PROFILE_ID);
       for (const profile of patch.profiles) {
         const normalized = normalizeProfile(profile);
         if (normalized === null || seen.has(normalized.id)) continue;
@@ -81,6 +94,7 @@ export class TranslationService {
 
   setSecret(profileId: string, secret: string | null): TranslationSettings {
     const stored = this.readStored();
+    if (profileId === BUILTIN_BING_PROFILE_ID) return toPublic(stored);
     const profile = stored.profiles.find((item) => item.id === profileId);
     if (profile !== undefined) {
       profile.secret = (secret ?? '').trim();
@@ -366,9 +380,10 @@ export class TranslationService {
   private readStored(): StoredSettings {
     const raw = readJson<unknown>(this.options.settingsFile, null);
     const object = record(raw);
-    const profiles = Array.isArray(object?.['profiles'])
+    const savedProfiles = Array.isArray(object?.['profiles'])
       ? object['profiles'].map(normalizeStoredProfile).filter((item): item is StoredProfile => item !== null)
       : [];
+    const profiles = [builtinBing(), ...savedProfiles.filter((item) => item.id !== BUILTIN_BING_PROFILE_ID)];
     const active = typeof object?.['activeProfileId'] === 'string' ? object['activeProfileId'] : null;
     const target = object?.['targetLanguage'];
     return {

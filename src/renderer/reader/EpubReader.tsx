@@ -73,6 +73,7 @@ export function EpubReader({
   }, [initialPosition, total]);
 
   const [spineIndex, setSpineIndex] = useState(startIndex);
+  const [cardReturnStack, setCardReturnStack] = useState<number[]>([]);
   const [chapter, setChapter] = useState<ChapterContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -236,6 +237,20 @@ export function EpubReader({
     [flushNow, spine.length],
   );
 
+  const jumpToCardSource = useCallback((source: import('@shared/types').WordCardSource | null) => {
+    if (source?.kind !== 'epub' || source.spineIndex < 0 || source.spineIndex >= spine.length) return;
+    if (source.spineIndex === spineIndexRef.current) return;
+    setCardReturnStack((stack) => [...stack, spineIndexRef.current]);
+    goToSpine(source.spineIndex);
+  }, [goToSpine, spine.length]);
+
+  const returnFromCardSource = useCallback(() => {
+    const target = cardReturnStack.at(-1);
+    if (target === undefined) return;
+    setCardReturnStack((stack) => stack.slice(0, -1));
+    goToSpine(target);
+  }, [cardReturnStack, goToSpine]);
+
   const handleLink = useCallback(
     (href: string) => {
       const currentHref = spine[spineIndexRef.current]?.href ?? '';
@@ -284,6 +299,7 @@ export function EpubReader({
         length: 0,
         anchor,
         result,
+        source: { kind: 'epub', spineIndex: spineIndexRef.current },
       });
 
       // 顺手让 iframe 给命中词画一条临时下划线。tokens 的偏移基准是我们传进去的 context，
@@ -327,6 +343,7 @@ export function EpubReader({
           length: Array.from(message.text).length,
           anchor,
           result,
+          source: { kind: 'epub', spineIndex: spineIndexRef.current },
         }),
       );
       // 划词的高亮**一直画着**（不是点击那种闪一下）：卡片关掉才由下面的 effect 清。
@@ -552,6 +569,7 @@ export function EpubReader({
       </div>
 
       <div className="epub-footer">
+        {cardReturnStack.length > 0 && <button type="button" className="btn btn-sm" onClick={returnFromCardSource}>↩ 返回第 {cardReturnStack.at(-1)! + 1} 章</button>}
         <button
           type="button"
           className="btn btn-sm"
@@ -624,6 +642,8 @@ export function EpubReader({
           word={popup.word}
           result={popup.result}
           anchor={popup.anchor}
+          source={popup.source}
+          onJumpToSource={() => jumpToCardSource(popup.source)}
           pinned={popup.pinned}
           dictionaryId={popup.dictionaryId}
           saved={wordCards.isSaved(popup)}
@@ -632,6 +652,7 @@ export function EpubReader({
           analyzingWord={popup.analyzingWord}
           llmProfileId={popup.llmProfileId}
           llmProfiles={wordCards.llmProfiles}
+          llmDefaultId={wordCards.llmDefaultId}
           translationText={popup.translationText}
           translationSourceReading={popup.translationSourceReading}
           translating={popup.translating}
@@ -639,6 +660,7 @@ export function EpubReader({
           translationProfileName={popup.translationProfileName}
           translationError={popup.translationError}
           translationProfiles={wordCards.translationProfiles}
+          translationDefaultId={wordCards.translationDefaultId}
           lastError={popup.lastError}
           onAnalyze={(target) => wordCards.analyzeWord(popup.id, target)}
           onRemoveAnalysis={(target) => wordCards.removeAnalysis(popup.id, target)}

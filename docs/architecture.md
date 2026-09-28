@@ -17,7 +17,7 @@
 | [src/main/ocr/service.ts](../src/main/ocr/service.ts) | 书级串行队列、进度、取消和文字层写盘 |
 | [学习候选服务](../src/main/study/service.ts)、[审核 UI](../src/renderer/views/StudyPanel.tsx) | Kuromoji 候选、JLPT 参考匹配、每书选择与 Anki 文本导出 |
 | [扩展 provider](../src/main/ocr/providers/extension.ts)、[runner](../src/main/ocr/runner.ts) | 按自描述启动进程，读取逐页 NDJSON |
-| [设置 UI](../src/renderer/components/ExtensionsCard.tsx) | 仓库管理、安装/卸载与进度 |
+| [设置 UI](../src/renderer/components/SettingsPanel.tsx)、[OCR 扩展卡片](../src/renderer/components/ExtensionsCard.tsx) | 通用/小说/漫画设置，OCR 默认与扩展仓库管理 |
 | `native/arale-native/` | Rust 解包 sidecar；不是 OCR 引擎 |
 | [engines](../engines/README.md) | 独立 Git submodule：OCR 源码、模型清单与归档构建 |
 
@@ -65,5 +65,7 @@
   extensions/installed.json
   extensions/<extensionId>/
 ```
+
+新保存的词卡带来源页/章；旧卡没有此字段时读为 null。设置页的默认 OCR 引擎与漫画每书的 OCR 覆盖值是两层状态，不互斥；实现与交互见[设置与词卡 UX](settings-wordcard-ux.md)。
 
 旧 `extensions/catalog.json` 的兼容回退还在服务中，不能据此认为应用源码仍维护一份旧 JSON 清单。UI 部分偏好保存在 localStorage。

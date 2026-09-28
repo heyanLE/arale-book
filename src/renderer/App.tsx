@@ -297,6 +297,7 @@ export function App(): JSX.Element {
     async (patch: Parameters<typeof api.llm.update>[0]) => {
       const next = await call('保存 LLM 配置', () => api.llm.update(patch));
       if (next) setLlmSettings(next);
+      return next;
     },
     [],
   );
@@ -307,6 +308,7 @@ export function App(): JSX.Element {
       setLlmSettings(next);
       setStatus(apiKey === null ? '已清除 API key' : 'API key 已保存');
     }
+    return next;
   }, []);
 
   const loadTranslation = useCallback(async () => {
@@ -324,6 +326,7 @@ export function App(): JSX.Element {
     async (patch: Parameters<typeof api.translation.update>[0]) => {
       const next = await call('保存翻译配置', () => api.translation.update(patch));
       if (next) setTranslationSettings(next);
+      return next;
     },
     [],
   );
@@ -334,6 +337,7 @@ export function App(): JSX.Element {
       setTranslationSettings(next);
       setStatus(secret === null ? '已清除翻译密钥' : '翻译密钥已保存');
     }
+    return next;
   }, []);
 
   const refreshExtensions = useCallback(async () => {
@@ -651,15 +655,15 @@ export function App(): JSX.Element {
               settings: llmSettings,
               loading: llmLoading,
               onReload: () => void loadLlm(),
-              onUpdate: (patch) => void updateLlm(patch),
-              onSetApiKey: (profileId, apiKey) => void setLlmApiKey(profileId, apiKey),
+              onUpdate: updateLlm,
+              onSetApiKey: setLlmApiKey,
             }}
             translation={{
               settings: translationSettings,
               loading: translationLoading,
               onReload: () => void loadTranslation(),
-              onUpdate: (patch) => void updateTranslation(patch),
-              onSetSecret: (profileId, secret) => void setTranslationSecret(profileId, secret),
+              onUpdate: updateTranslation,
+              onSetSecret: setTranslationSecret,
             }}
             extensions={{
               statuses: extensions.statuses,

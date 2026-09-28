@@ -20,7 +20,7 @@
  * 占位符说明「留空表示不改」，清空要用专门的按钮——否则用户没法表达「我要删掉它」。
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { LlmProfile, LlmSettings } from '@shared/types';
 
 export interface LlmCardProps {
@@ -31,8 +31,8 @@ export interface LlmCardProps {
     profiles?: LlmProfile[];
     activeProfileId?: string | null;
     prompt?: string;
-  }) => void;
-  onSetApiKey: (profileId: string, apiKey: string | null) => void;
+  }) => Promise<LlmSettings | null>;
+  onSetApiKey: (profileId: string, apiKey: string | null) => Promise<LlmSettings | null>;
 }
 
 /** 新配置的初始值：指向本机最常见的本地服务，用户改地址比从空白填快。 */
@@ -54,13 +54,11 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
    * diff 只会让「保存」的语义变模糊（保存了什么？）。
    */
   const [draft, setDraft] = useState<LlmProfile[] | null>(null);
+  const [newDraft, setNewDraft] = useState<LlmProfile | null>(null);
+  const [newError, setNewError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [promptDraft, setPromptDraft] = useState<string | null>(null);
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
-
-  // 服务端值变了（保存成功、重新读取）就丢掉草稿，避免界面和磁盘长期不一致。
-  useEffect(() => {
-    setDraft(null);
-  }, [settings]);
 
   const profiles = draft ?? settings?.profiles ?? [];
   const activeId = settings?.activeProfileId ?? null;
@@ -70,23 +68,47 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
     setDraft(profiles.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
-  const commit = () => {
-    if (promptDraft !== null) onUpdate({ prompt: promptDraft });
-    if (draft !== null) onUpdate({ profiles: draft });
-    setDraft(null);
-    setPromptDraft(null);
+  const commit = async () => {
+    if (!dirty) return;
+    setSaving(true);
+    const saved = await onUpdate({
+      ...(promptDraft !== null ? { prompt: promptDraft } : {}),
+      ...(draft !== null ? { profiles: draft } : {}),
+    });
+    setSaving(false);
+    if (saved) { setDraft(null); setPromptDraft(null); }
   };
 
   const addProfile = () => {
-    const id = `llm_${Date.now().toString(36)}`;
-    setDraft([...profiles, { ...NEW_PROFILE, id }]);
+    setNewError('');
+    setNewDraft({ ...NEW_PROFILE, name: '', id: `llm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}` });
   };
 
-  const removeProfile = (id: string) => {
-    const next = profiles.filter((item) => item.id !== id);
-    setDraft(next);
-    // 删掉的如果是当前默认，顺手把默认挪到第一套——否则会留一个悬空 id。
-    if (activeId === id) onUpdate({ activeProfileId: next[0]?.id ?? null });
+  const saveNew = async () => {
+    if (!newDraft) return;
+    if (dirty) { setNewError('请先保存已有配置的修改。'); return; }
+    if (!newDraft.name.trim() || !newDraft.baseUrl.trim()) {
+      setNewError('先填写名称和服务地址；模型与 Key 可在保存后配置。');
+      return;
+    }
+    setSaving(true);
+    const saved = await onUpdate({ profiles: [...(settings?.profiles ?? []), newDraft] });
+    setSaving(false);
+    if (saved?.profiles.some((profile) => profile.id === newDraft.id)) {
+      setNewDraft(null);
+      setDraft(null);
+      setNewError('');
+    }
+  };
+
+  const removeProfile = async (id: string) => {
+    if (dirty) return;
+    if (!window.confirm('删除这套 LLM 配置？')) return;
+    const next = (settings?.profiles ?? []).filter((item) => item.id !== id);
+    setSaving(true);
+    const saved = await onUpdate({ profiles: next, ...(activeId === id ? { activeProfileId: next[0]?.id ?? null } : {}) });
+    setSaving(false);
+    if (saved) setDraft(null);
   };
 
   return (
@@ -94,23 +116,38 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
       <div className="settings-card-head">
         <h2 className="settings-card-title">LLM 配置</h2>
         <div className="settings-card-actions">
-          <button type="button" className="btn btn-sm" onClick={addProfile}>
-            新增
+          <button type="button" className="btn btn-sm" disabled={newDraft !== null || dirty} onClick={addProfile}>
+            新建配置
           </button>
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={commit}
-            disabled={!dirty}
+            onClick={() => void commit()}
+            disabled={!dirty || saving}
             title={dirty ? '把改动写入磁盘' : '没有未保存的改动'}
           >
             {dirty ? '保存 *' : '已保存'}
           </button>
-          <button type="button" className="btn btn-sm" onClick={onReload} disabled={loading}>
+          <button type="button" className="btn btn-sm" onClick={() => { setDraft(null); setPromptDraft(null); onReload(); }} disabled={loading}>
             重新读取
           </button>
         </div>
       </div>
+
+      {newDraft && <div className="settings-row settings-row-block profile-new" aria-label="新建 LLM 配置">
+        <div className="settings-row-main">
+          <span className="settings-row-title">新配置 · 尚未保存</span>
+          <div className="llm-grid">
+            <label className="field"><span className="field-label">名称</span><input className="input" autoFocus value={newDraft.name} onChange={(event) => setNewDraft({ ...newDraft, name: event.target.value })} placeholder="例如：本地 Qwen" /></label>
+            <label className="field llm-grid-wide"><span className="field-label">服务地址</span><input className="input mono" value={newDraft.baseUrl} onChange={(event) => setNewDraft({ ...newDraft, baseUrl: event.target.value })} /></label>
+          </div>
+          {newError && <span className="settings-warn" role="alert">{newError}</span>}
+          <div className="ext-actions llm-actions">
+            <button type="button" className="btn btn-sm btn-primary" disabled={saving} onClick={() => void saveNew()}>保存新配置</button>
+            <button type="button" className="btn btn-sm" onClick={() => { setNewDraft(null); setNewError(''); }}>取消</button>
+          </div>
+        </div>
+      </div>}
 
       <div className="settings-list">
         {profiles.map((profile) => (
@@ -164,23 +201,21 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
                     placeholder={profile.hasApiKey ? '已保存（留空表示不改）' : '本地服务通常不用填'}
                     value={keyDrafts[profile.id] ?? ''}
                     onChange={(e) => setKeyDrafts((prev) => ({ ...prev, [profile.id]: e.target.value }))}
-                    onBlur={() => {
-                      const value = keyDrafts[profile.id];
-                      if (value === undefined || value === '') return;
-                      onSetApiKey(profile.id, value);
-                      setKeyDrafts((prev) => ({ ...prev, [profile.id]: '' }));
-                    }}
                   />
                 </label>
               </div>
 
               <div className="ext-actions llm-actions">
+                <button type="button" className="btn btn-sm" disabled={!keyDrafts[profile.id] || saving} onClick={() => void (async () => {
+                  const saved = await onSetApiKey(profile.id, keyDrafts[profile.id] ?? '');
+                  if (saved) setKeyDrafts((current) => ({ ...current, [profile.id]: '' }));
+                })()}>保存 Key</button>
                 <label className="check" title="词卡上没指定时默认用这一套">
                   <input
                     type="radio"
                     name="llm-active"
                     checked={activeId === profile.id}
-                    onChange={() => onUpdate({ activeProfileId: profile.id })}
+                    onChange={() => void onUpdate({ activeProfileId: profile.id })}
                   />
                   <span>默认</span>
                 </label>
@@ -188,13 +223,13 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
                   <button
                     type="button"
                     className="btn btn-sm"
-                    onClick={() => onSetApiKey(profile.id, null)}
+                    onClick={() => void onSetApiKey(profile.id, null)}
                     title="删掉已保存的 API key"
                   >
                     清除 key
                   </button>
                 )}
-                <button type="button" className="btn btn-sm btn-danger" onClick={() => removeProfile(profile.id)}>
+                <button type="button" className="btn btn-sm btn-danger" disabled={dirty || saving} title={dirty ? '先保存或放弃未保存修改' : '删除配置'} onClick={() => void removeProfile(profile.id)}>
                   删除
                 </button>
               </div>
@@ -204,7 +239,7 @@ export function LlmCard(props: LlmCardProps): JSX.Element {
 
         {profiles.length === 0 && (
           <div className="detail-hint">
-            还没有配置。点「新增」加一套（本地 llama.cpp / Ollama / LM Studio 与各家云端都支持）。
+            还没有配置。点「新建配置」填写名称和地址并保存，再设置模型与 Key。
           </div>
         )}
       </div>

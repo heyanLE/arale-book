@@ -34,6 +34,7 @@ import type {
   LookupTermResult,
   TranslationProfile,
   WordCardAnalysis,
+  WordCardSource,
 } from '@shared/types';
 import { hasAnalysisFor } from '@core/cards/analyses';
 import { placePopup } from '@core/cards/popup-position';
@@ -60,6 +61,8 @@ export interface WordCardPopupProps {
   /** 词典查询结果；null = 没查到（划词时可能出现）。 */
   result: LookupResult | null;
   anchor: AnchorRect;
+  source: WordCardSource | null;
+  onJumpToSource: () => void;
   pinned: boolean;
   /** 当前选中的词典 id；null = 跟随最佳命中。 */
   dictionaryId: string | null;
@@ -75,6 +78,7 @@ export interface WordCardPopupProps {
   llmProfileId: string | null;
   /** 可选的 LLM 配置（设置里那几套）。 */
   llmProfiles: LlmProfile[];
+  llmDefaultId: string | null;
   /** 上一次失败的原文。 */
   lastError: string | null;
   translationText: string | null;
@@ -84,6 +88,7 @@ export interface WordCardPopupProps {
   translationProfileName: string | null;
   translationError: string | null;
   translationProfiles: TranslationProfile[];
+  translationDefaultId: string | null;
   onTranslate: () => void;
   onSelectTranslationProfile: (profileId: string | null) => void;
   onAnalyze: (word: string) => void;
@@ -107,6 +112,8 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     word,
     result,
     anchor,
+    source,
+    onJumpToSource,
     pinned,
     dictionaryId,
     saved,
@@ -115,6 +122,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     analyzingWord,
     llmProfileId,
     llmProfiles,
+    llmDefaultId,
     lastError,
     translationText,
     translationSourceReading,
@@ -123,6 +131,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     translationProfileName,
     translationError,
     translationProfiles,
+    translationDefaultId,
     onTranslate,
     onSelectTranslationProfile,
     onAnalyze,
@@ -141,6 +150,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
   const [scale, setScale] = useState(1);
   const [wordDraft, setWordDraft] = useState(word);
   const [editingWord, setEditingWord] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState({ dictionary: true, translation: true, llm: true });
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   /** 用户手动拖动过之后就别再自动定位了。 */
   const manualRef = useRef(false);
@@ -278,6 +288,16 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
   const noDictionary = result !== null && result.dictionaryCount === 0;
   const noResult = result !== null && result.results.length === 0;
 
+  useEffect(() => {
+    if (result !== null) setSectionOpen((current) => ({ ...current, dictionary: result.results.length > 0 }));
+  }, [result]);
+
+  const toggleSection = (section: keyof typeof sectionOpen) =>
+    setSectionOpen((current) => ({ ...current, [section]: !current[section] }));
+
+  const defaultLlmName = llmProfiles.find((profile) => profile.id === llmDefaultId)?.name ?? '未设置';
+  const defaultTranslationName = translationProfiles.find((profile) => profile.id === translationDefaultId)?.name ?? '未设置';
+
   return (
     <div
       ref={ref}
@@ -378,9 +398,30 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
         </button>
       </div>
 
+      <div className="wordcard-location">
+        <span>来源</span>
+        {source === null ? (
+          <span className="wordcard-location-muted">这张词卡没有保存页位置</span>
+        ) : (
+          <>
+            <button type="button" className="btn btn-sm" onClick={onJumpToSource} title={source.kind === 'comic' ? source.pageUrl : '返回原章节'}>
+              {source.kind === 'comic' ? `第 ${source.pageIndex + 1} 页` : `第 ${source.spineIndex + 1} 章`} · 跳转 ↗
+            </button>
+            {source.kind === 'comic' && <span className="wordcard-location-muted mono cell-ellipsis" title={source.pageUrl}>{source.pageUrl.split('/').at(-1)}</span>}
+          </>
+        )}
+      </div>
+
       <div className="dict-popup-body" style={{ fontSize: `${Math.round(13 * scale)}px` }}>
         {/* ---------- 第一栏：词典释义 ---------- */}
-        {noDictionary ? (
+        <section className="wordcard-section">
+          <div className="wordcard-llm-head">
+            <button type="button" className="wordcard-section-toggle" aria-expanded={sectionOpen.dictionary} onClick={() => toggleSection('dictionary')}>
+              {sectionOpen.dictionary ? '▾' : '▸'} 词典
+            </button>
+            <span className="wordcard-llm-meta">{activeDictionaryId === null ? '未命中' : dictionaries.find((item) => item.id === activeDictionaryId)?.title ?? '词典释义'}</span>
+          </div>
+        {sectionOpen.dictionary && (noDictionary ? (
           <div className="dict-empty">
             <div className="dict-empty-title">未安装词典</div>
             <div className="dict-empty-hint">打开「设置 → 词典」导入 Yamanote 格式的词典包（zip）。</div>
@@ -419,17 +460,20 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
               />
             ))}
           </>
-        )}
+        ))}
+        </section>
 
         {/* ---------- 第二栏：翻译。点击查词翻整段/整框，划词只翻用户选区。 ---------- */}
         <section className="wordcard-translation">
           <div className="wordcard-llm-head">
-            <span className="wordcard-llm-title">翻译</span>
+            <button type="button" className="wordcard-section-toggle" aria-expanded={sectionOpen.translation} onClick={() => toggleSection('translation')}>
+              {sectionOpen.translation ? '▾' : '▸'} 翻译
+            </button>
             {translationProfileName !== null && (
               <span className="wordcard-llm-meta mono">{translationProfileName}</span>
             )}
             <span className="dict-popup-spacer" />
-            {translationProfiles.length > 1 && (
+            {translationProfiles.length > 0 && (
               <select
                 className="select select-sm"
                 value={translationProfileId ?? ''}
@@ -438,7 +482,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
                 }
                 title="这次使用哪个翻译引擎"
               >
-                <option value="">默认引擎</option>
+                <option value="">默认 · {defaultTranslationName}</option>
                 {translationProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>{profile.name}</option>
                 ))}
@@ -448,14 +492,15 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
               type="button"
               className="btn btn-sm btn-primary"
               disabled={translating || translationProfiles.length === 0}
-              onClick={onTranslate}
+              onClick={() => { setSectionOpen((current) => ({ ...current, translation: true })); onTranslate(); }}
               title={selectionLength > 0 ? '翻译选中的文字' : '翻译当前段落或整个漫画框'}
             >
               {translating ? '翻译中…' : translationText === null ? '翻译' : '重新翻译'}
             </button>
           </div>
+          {sectionOpen.translation && <>
           {translationProfiles.length === 0 ? (
-            <div className="wordcard-llm-hint">请先到「设置 → 翻译」配置引擎和 API key。</div>
+            <div className="wordcard-llm-hint">请到「设置 → 通用 → 翻译」选择引擎；Bing 可免 Key 使用。</div>
           ) : translating ? (
             <div className="wordcard-llm-hint">正在等待翻译引擎返回…</div>
           ) : null}
@@ -467,6 +512,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
           )}
           {translationText !== null && <div className="wordcard-translation-text">{translationText}</div>}
           {translationError !== null && <div className="wordcard-llm-error">{translationError}</div>}
+          </>}
         </section>
 
         {/* ---------- 第三栏起：LLM 分析（一个分析过的词一栏） ----------
@@ -474,16 +520,18 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
             已分析过的词」一栏栏列出来（短的在前），最后是当前词自己的那一栏。 */}
         <section className="wordcard-llm">
           <div className="wordcard-llm-head">
-            <span className="wordcard-llm-title">LLM 分析</span>
+            <button type="button" className="wordcard-section-toggle" aria-expanded={sectionOpen.llm} onClick={() => toggleSection('llm')}>
+              {sectionOpen.llm ? '▾' : '▸'} LLM 分析
+            </button>
             <span className="dict-popup-spacer" />
-            {llmProfiles.length > 1 && (
+            {llmProfiles.length > 0 && (
               <select
                 className="select select-sm"
                 value={llmProfileId ?? ''}
                 onChange={(e) => onSelectLlmProfile(e.target.value === '' ? null : e.target.value)}
                 title="这次用哪套 LLM 配置"
               >
-                <option value="">默认配置</option>
+                <option value="">默认 · {defaultLlmName}</option>
                 {llmProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
                     {profile.name}
@@ -492,6 +540,8 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
               </select>
             )}
           </div>
+
+          {sectionOpen.llm && <>
 
           {analyses.map((analysis) => (
             <div className="wordcard-llm-item" key={analysis.word}>
@@ -549,6 +599,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
           )}
 
           {lastError !== null && <div className="wordcard-llm-error">{lastError}</div>}
+          </>}
         </section>
 
         {/* ---------- 底栏：保存 ---------- */}

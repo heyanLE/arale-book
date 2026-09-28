@@ -19,7 +19,7 @@
 
 import * as path from 'node:path';
 
-import type { WordCard, WordCardAnalysis, WordCardDraft } from '../../shared/types';
+import type { WordCard, WordCardAnalysis, WordCardDraft, WordCardSource } from '../../shared/types';
 import { readJson, writeJsonAtomic } from '../../core/util/atomic-json';
 import { makeBookId } from '../../core/util/id';
 import { bookDir } from '../paths';
@@ -66,6 +66,7 @@ export function addCard(bookId: string, draft: WordCardDraft): WordCard {
       context: asString(draft.context),
       offset: asNumber(draft.offset),
       length: asNumber(draft.length),
+      source: normalizeSource(draft.source) ?? existing.source,
       updatedAt: now,
     };
     cards[existingIndex] = refreshed;
@@ -86,6 +87,7 @@ export function addCard(bookId: string, draft: WordCardDraft): WordCard {
     dictionaryId: asString(draft.dictionaryId),
     dictionaryTitle: asString(draft.dictionaryTitle),
     dictionaryReading: asString(draft.dictionaryReading),
+    source: normalizeSource(draft.source),
     note: '',
     analyses: [],
     createdAt: now,
@@ -208,6 +210,7 @@ function normalizeCard(raw: unknown): WordCard | null {
     dictionaryId: asString(raw['dictionaryId']),
     dictionaryTitle: asString(raw['dictionaryTitle']),
     dictionaryReading: asString(raw['dictionaryReading']),
+    source: normalizeSource(raw['source']),
     note: asString(raw['note']),
     analyses: normalizeAnalyses(raw['analyses'], raw['analysis']),
     createdAt: asNumber(raw['createdAt']),
@@ -274,7 +277,18 @@ function resolveWord(rawWord: unknown, rawExpression: unknown): string {
 
 /** 防御性副本：数组是新读出来的，但里层的分析对象也要复制，别让调用方穿透。 */
 function clone(card: WordCard): WordCard {
-  return { ...card, analyses: card.analyses.map((entry) => ({ ...entry })) };
+  return { ...card, source: card.source === null ? null : { ...card.source }, analyses: card.analyses.map((entry) => ({ ...entry })) };
+}
+
+function normalizeSource(raw: unknown): WordCardSource | null {
+  if (!isRecord(raw)) return null;
+  if (raw['kind'] === 'comic' && Number.isInteger(raw['pageIndex']) && (raw['pageIndex'] as number) >= 0 && typeof raw['pageUrl'] === 'string') {
+    return { kind: 'comic', pageIndex: raw['pageIndex'] as number, pageUrl: raw['pageUrl'] };
+  }
+  if (raw['kind'] === 'epub' && Number.isInteger(raw['spineIndex']) && (raw['spineIndex'] as number) >= 0) {
+    return { kind: 'epub', spineIndex: raw['spineIndex'] as number };
+  }
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

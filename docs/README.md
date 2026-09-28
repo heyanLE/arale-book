@@ -9,6 +9,7 @@
 5. 修改 OCR 时读 [引擎当前文档](../engines/docs/current.md)，其中集中维护模型、包体积和性能数据。
 
 漫画分词与 Anki 制卡第一版的实现和后续事项见[方案与状态](manga-vocabulary-anki-plan.md)。
+设置页与词卡来源跳转的交互见[设置与词卡 UX](settings-wordcard-ux.md)。
 
 ## 哪份资料是当前依据
 

@@ -31,6 +31,7 @@ import type {
   PageText,
   ReadingDirection,
   ReadingPosition,
+  WordCardSource,
 } from '@shared/types';
 import {
   SPREAD_OFFSETS,
@@ -159,6 +160,8 @@ export function ComicReader({
     // 或者刚改过偏移量），直接拿它当起点会让并排的两页整体错位一格。
     return spreadPlan(raw, total, spreadOffset, spread).start;
   });
+  /** 从词卡跳页前的页号；可以逐次返回，普通翻页不清掉返回路径。 */
+  const [cardReturnStack, setCardReturnStack] = useState<number[]>([]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
@@ -419,6 +422,24 @@ export function ComicReader({
     [navigate],
   );
 
+  const jumpToCardSource = useCallback((source: WordCardSource | null) => {
+    if (source?.kind !== 'comic') return;
+    const byUrl = pages.findIndex((page) => page.url === source.pageUrl);
+    const raw = byUrl >= 0 ? byUrl : source.pageIndex;
+    if (raw < 0 || raw >= total) return;
+    const target = spreadPlan(raw, total, spreadOffsetRef.current, spreadRef.current).start;
+    if (target === pageIndexRef.current) return;
+    setCardReturnStack((stack) => [...stack, pageIndexRef.current]);
+    navigate(target, target >= pageIndexRef.current);
+  }, [navigate, pages, total]);
+
+  const returnFromCardSource = useCallback(() => {
+    const target = cardReturnStack.at(-1);
+    if (target === undefined) return;
+    setCardReturnStack((stack) => stack.slice(0, -1));
+    navigate(target, target >= pageIndexRef.current);
+  }, [cardReturnStack, navigate]);
+
   /**
    * 翻页滑动动画。
    *
@@ -567,7 +588,7 @@ export function ComicReader({
   // ------------------------------------------------------------------
 
   const handleLookup = useCallback(
-    async (payload: ComicTextLookup) => {
+    async (payload: ComicTextLookup, sourcePageIndex: number) => {
       if (suppressClickRef.current) {
         // 这一次「点击」其实是拖动平移的收尾，别弹词卡。
         suppressClickRef.current = false;
@@ -583,9 +604,10 @@ export function ComicReader({
         length: 0,
         anchor: payload.anchor,
         result,
+        source: { kind: 'comic', pageIndex: sourcePageIndex, pageUrl: pages[sourcePageIndex]?.url ?? '' },
       });
     },
-    [wordCards],
+    [wordCards, pages],
   );
 
   /**
@@ -596,7 +618,7 @@ export function ComicReader({
    * 允许不一样——用户框「食べました」，词典里给「食べる」，这是对的。
    */
   const handleSelect = useCallback(
-    async (payload: ComicTextSelection) => {
+    async (payload: ComicTextSelection, sourcePageIndex: number) => {
       const result = await call('查词', () => api.dict.lookup(payload.context, payload.start));
       if (!result) return;
       // 记下这次划词开出来的卡片：**卡片还开着**就是页面高亮该留着的全部理由。
@@ -608,10 +630,11 @@ export function ComicReader({
           length: payload.end - payload.start,
           anchor: payload.anchor,
           result,
+          source: { kind: 'comic', pageIndex: sourcePageIndex, pageUrl: pages[sourcePageIndex]?.url ?? '' },
         }),
       );
     },
-    [wordCards],
+    [wordCards, pages],
   );
 
   /**
@@ -817,8 +840,8 @@ export function ComicReader({
                     pageHeight={slot.page.height}
                     displayedWidth={width}
                     displayedHeight={height}
-                    onLookup={(payload) => void handleLookup(payload)}
-                    onSelect={(payload) => void handleSelect(payload)}
+                    onLookup={(payload) => void handleLookup(payload, slot.index)}
+                    onSelect={(payload) => void handleSelect(payload, slot.index)}
                     // 只在真的按着空格时让路——否则拖动永远是划词。
                     deferDragToPan={canPan && spaceHeld}
                     // 划词后高亮留到卡片被关掉为止（点别处/换页/重划都会让位）。
@@ -848,6 +871,8 @@ export function ComicReader({
           {total}
         </span>
         {trailingTurn}
+
+        {cardReturnStack.length > 0 && <button type="button" className="btn btn-sm" onClick={returnFromCardSource} title="返回点击词卡前的页面">↩ 返回第 {cardReturnStack.at(-1)! + 1} 页</button>}
 
         <span className="toolbar-sep" />
 
@@ -1014,6 +1039,8 @@ export function ComicReader({
           word={popup.word}
           result={popup.result}
           anchor={popup.anchor}
+          source={popup.source}
+          onJumpToSource={() => jumpToCardSource(popup.source)}
           pinned={popup.pinned}
           dictionaryId={popup.dictionaryId}
           saved={wordCards.isSaved(popup)}
@@ -1022,6 +1049,7 @@ export function ComicReader({
           analyzingWord={popup.analyzingWord}
           llmProfileId={popup.llmProfileId}
           llmProfiles={wordCards.llmProfiles}
+          llmDefaultId={wordCards.llmDefaultId}
           translationText={popup.translationText}
           translationSourceReading={popup.translationSourceReading}
           translating={popup.translating}
@@ -1029,6 +1057,7 @@ export function ComicReader({
           translationProfileName={popup.translationProfileName}
           translationError={popup.translationError}
           translationProfiles={wordCards.translationProfiles}
+          translationDefaultId={wordCards.translationDefaultId}
           lastError={popup.lastError}
           onAnalyze={(target) => wordCards.analyzeWord(popup.id, target)}
           onRemoveAnalysis={(target) => wordCards.removeAnalysis(popup.id, target)}

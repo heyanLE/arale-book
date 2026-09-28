@@ -954,6 +954,85 @@ try {
   })()`);
   check('设置页有「扩展」卡片', extCard?.hasCard === true, JSON.stringify(extCard?.titles));
   check('扩展卡片列出了条目', (extCard?.rows ?? 0) >= 1, JSON.stringify(extCard));
+  const settingsOrder = await client.evaluate("[...document.querySelectorAll('.settings-group')].map((node) => node.textContent.trim())");
+  check('设置顺序为通用、小说、漫画', JSON.stringify(settingsOrder) === JSON.stringify(['通用', '小说', '漫画']), JSON.stringify(settingsOrder));
+  check('LLM、翻译、OCR 与 OCR 扩展都在小说设置之前',
+    ['LLM 配置', '翻译引擎', 'OCR 默认引擎', 'OCR 扩展与仓库'].every((title) =>
+      extCard?.titles?.indexOf(title) >= 0 && extCard.titles.indexOf(title) < extCard.titles.indexOf('小说阅读器')),
+    JSON.stringify(extCard?.titles));
+  const bingDefault = await client.evaluate('window.arale.translation.settings()');
+  check('Bing 免 Key 配置初次存在且为默认',
+    bingDefault?.profiles?.some((item) => item.id === bingDefault.activeProfileId && item.provider === 'bing' && !item.hasSecret));
+
+  await client.evaluate(`window.arale.llm.update({ profiles: [
+    { id: 'llm_smoke_a', name: '冒烟 A', baseUrl: 'http://127.0.0.1:8080/v1', model: 'a', temperature: 0.3, hasApiKey: false },
+    { id: 'llm_smoke_b', name: '冒烟 B', baseUrl: 'http://127.0.0.1:8080/v1', model: 'b', temperature: 0.3, hasApiKey: false }
+  ], activeProfileId: 'llm_smoke_a' })`);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('重新读取'))?.click();
+  })()`);
+  await delay(300);
+  const llmDraftState = await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
+    const radios = [...(card?.querySelectorAll('input[name="llm-active"]') ?? [])];
+    radios[1]?.click();
+    return { form: !!card?.querySelector('.profile-new'), radios: radios.length };
+  })()`);
+  await delay(300);
+  const llmAfterDefault = await client.evaluate(`(async () => ({
+    form: !!document.querySelector('.profile-new[aria-label="新建 LLM 配置"]'),
+    active: (await window.arale.llm.settings()).activeProfileId
+  }))()`);
+  check('LLM 新建草稿在切换默认配置后仍保留', llmDraftState?.form && llmDraftState.radios === 2 && llmAfterDefault?.form && llmAfterDefault?.active === 'llm_smoke_b', JSON.stringify({ llmDraftState, llmAfterDefault }));
+  await client.evaluate(`(() => {
+    const input = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '新建测试 LLM'); input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`document.querySelector('.profile-new[aria-label="新建 LLM 配置"] .btn-primary')?.click()`);
+  await delay(200);
+  const savedNewLlm = await client.evaluate(`window.arale.llm.settings()`);
+  check('LLM 新配置点击独立保存后才进入已保存列表',
+    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.model === '') &&
+    (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建 LLM 配置\"]')")) === true);
+  await client.evaluate(`window.arale.llm.update({ profiles: [], activeProfileId: null })`);
+  await client.evaluate(`window.arale.translation.update({ profiles: [
+    { id: 'tr_smoke', name: '冒烟翻译', provider: 'microsoft', baseUrl: '', region: '', appId: '', hasSecret: false }
+  ], activeProfileId: 'tr_smoke' })`);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('重新读取'))?.click();
+  })()`);
+  await delay(300);
+  const translationDraftState = await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
+    const radios = [...(card?.querySelectorAll('input[name="translation-active"]') ?? [])];
+    radios[0]?.click();
+    return { form: !!card?.querySelector('.profile-new'), radios: radios.length };
+  })()`);
+  await delay(300);
+  const translationAfterDefault = await client.evaluate(`(async () => ({
+    form: !!document.querySelector('.profile-new[aria-label="新建翻译配置"]'),
+    active: (await window.arale.translation.settings()).activeProfileId
+  }))()`);
+  check('翻译新建草稿切回 Bing 默认后仍保留', translationDraftState?.form && translationDraftState.radios === 2 && translationAfterDefault?.form && translationAfterDefault?.active === bingDefault.activeProfileId, JSON.stringify({ translationDraftState, translationAfterDefault }));
+  await client.evaluate(`(() => {
+    const input = document.querySelector('.profile-new[aria-label="新建翻译配置"] input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '新建测试翻译'); input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`document.querySelector('.profile-new[aria-label="新建翻译配置"] .btn-primary')?.click()`);
+  await delay(200);
+  const savedNewTranslation = await client.evaluate(`window.arale.translation.settings()`);
+  check('翻译新配置点击独立保存后才进入已保存列表',
+    savedNewTranslation?.profiles?.some((item) => item.name === '新建测试翻译') &&
+    (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建翻译配置\"]')")) === true);
+  await client.evaluate(`window.arale.translation.update({ profiles: [], activeProfileId: ${JSON.stringify(bingDefault.activeProfileId)} })`);
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,
   );
@@ -1314,6 +1393,31 @@ try {
     return el ? { word: el.querySelector('.wordcard-word')?.textContent.trim() ?? null } : null;
   })()`);
   check('点击后弹出词卡', popupOpen !== null, JSON.stringify(popupOpen));
+
+  const cardSections = await client.evaluate(`(() => {
+    const card = document.querySelector('.dict-popup.wordcard');
+    const buttons = [...(card?.querySelectorAll('.wordcard-section-toggle') ?? [])];
+    return {
+      names: buttons.map((button) => button.textContent.trim()),
+      translationDefault: card?.querySelector('.wordcard-translation select option')?.textContent.trim() ?? null,
+      dictionaryOpen: buttons[0]?.getAttribute('aria-expanded') ?? null,
+    };
+  })()`);
+  check('词典、翻译、LLM 三栏统一可折叠且翻译显示 Bing 默认配置',
+    cardSections?.names?.length === 3 && cardSections.names.some((name) => name.includes('词典')) &&
+    cardSections.names.some((name) => name.includes('翻译')) && cardSections.names.some((name) => name.includes('LLM')) &&
+    cardSections.translationDefault?.includes('Bing'), JSON.stringify(cardSections));
+  const sectionToggle = await client.evaluate(`(() => {
+    const button = document.querySelector('.dict-popup.wordcard .wordcard-section-toggle');
+    const before = button?.getAttribute('aria-expanded');
+    button?.click();
+    return new Promise((resolve) => requestAnimationFrame(() => {
+      const after = button?.getAttribute('aria-expanded');
+      button?.click();
+      resolve({ before, after });
+    }));
+  })()`);
+  check('词典分栏点击标题可收起或展开', sectionToggle?.before !== sectionToggle?.after, JSON.stringify(sectionToggle));
 
   // ★ 这一条守的是本轮修掉的 bug：表头 setPointerCapture 把 click 吞掉，
   //   导致 ×、A−、A+ 全都点不动。
@@ -1842,6 +1946,40 @@ try {
   })()`);
   check('能展开词卡夹并列出保存过的卡', (panel?.items ?? 0) >= 1, JSON.stringify(panel));
   check('词卡夹占据右侧布局空间，不再覆盖漫画', panel?.nonOverlapping === true, JSON.stringify(panel));
+
+  section('词卡来源页与返回');
+  const storedCards = await client.evaluate(`window.arale.cards.list(${JSON.stringify(comicId)})`);
+  const sourcedCard = storedCards?.find((card) => card.source?.kind === 'comic');
+  const sourcePage = sourcedCard?.source?.kind === 'comic' ? sourcedCard.source.pageIndex : -1;
+  check('保存的词卡持久记录漫画来源页', sourcePage >= 0 && !!sourcedCard?.source?.pageUrl, JSON.stringify(sourcedCard?.source));
+  await client.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(sourcePage === 0 ? 'End' : 'Home')}, bubbles: true }))`);
+  await delay(350);
+  const pageBeforeCardJump = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  const openedFromPanel = await client.evaluate(`(() => {
+    const word = ${JSON.stringify(sourcedCard?.word ?? '')};
+    const item = [...document.querySelectorAll('.wordcard-item-main')].find((node) => node.querySelector('.wordcard-item-word')?.textContent.trim() === word);
+    item?.click();
+    return !!item;
+  })()`);
+  await delay(350);
+  const jumpedFromCard = await client.evaluate(`(() => {
+    const word = ${JSON.stringify(sourcedCard?.word ?? '')};
+    const popup = [...document.querySelectorAll('.dict-popup')].find((node) => node.querySelector('.wordcard-word')?.textContent.trim() === word);
+    const button = popup?.querySelector('.wordcard-location button');
+    button?.click();
+    return button?.textContent.trim() ?? null;
+  })()`);
+  await delay(350);
+  const pageAfterCardJump = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  check('词卡来源页可点击并跳转', openedFromPanel && jumpedFromCard?.includes(`第 ${sourcePage + 1} 页`) && pageAfterCardJump?.startsWith(`${sourcePage + 1} /`), JSON.stringify({ jumpedFromCard, pageAfterCardJump }));
+  const returnButton = await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.comic-footer button')].find((node) => node.textContent.includes('返回第'));
+    button?.click();
+    return button?.textContent.trim() ?? null;
+  })()`);
+  await delay(350);
+  const pageAfterReturn = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  check('词卡跳页后能返回原页', !!returnButton && pageAfterReturn === pageBeforeCardJump, JSON.stringify({ returnButton, pageBeforeCardJump, pageAfterReturn }));
 
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,

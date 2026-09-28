@@ -158,6 +158,12 @@ try {
     return 'ok';
   })()`, 2000);
 
+  await shoot('04-comic-wordcard', `(() => {
+    const block = document.querySelector('.comic-text-block');
+    block?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+    return block ? 'ok' : 'not-found';
+  })()`, 1000);
+
   await shoot('05-epub-reader', `(() => {
     const back = [...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'));
     if (back) back.click();
@@ -196,6 +202,12 @@ try {
     if (btn) btn.click();
     return btn ? 'ok' : 'not-found';
   })()`, 1200);
+
+  await shoot('07-settings-services', `(() => {
+    const title = [...document.querySelectorAll('.settings-card-title')].find((node) => node.textContent.includes('LLM 配置'));
+    title?.scrollIntoView({ block: 'start' });
+    return title ? 'ok' : 'not-found';
+  })()`, 700);
 
   client.close();
 } catch (error) {

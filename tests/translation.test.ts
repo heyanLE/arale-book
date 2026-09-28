@@ -6,6 +6,7 @@ import * as path from 'node:path';
 
 import { TranslationService } from '../src/main/translation/service';
 import type { TranslationProfile, TranslationProviderId } from '../src/shared/types';
+import { BUILTIN_BING_PROFILE_ID } from '../src/shared/types';
 
 const tempDirs: string[] = [];
 after(() => tempDirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
@@ -56,10 +57,22 @@ test('settings: 密钥只进不出，更新 profile 不会清掉密钥', () => {
   service.update({ profiles: [item], activeProfileId: item.id });
   service.setSecret(item.id, 'top-secret');
   const renamed = service.update({ profiles: [{ ...item, name: '微软翻译' }] });
-  assert.equal(renamed.profiles[0]?.hasSecret, true);
-  assert.equal(renamed.profiles[0]?.name, '微软翻译');
-  assert.equal(Object.hasOwn(renamed.profiles[0]!, 'secret'), false);
+  const microsoft = renamed.profiles.find((profile) => profile.id === item.id)!;
+  assert.equal(microsoft.hasSecret, true);
+  assert.equal(microsoft.name, '微软翻译');
+  assert.equal(Object.hasOwn(microsoft, 'secret'), false);
   assert.equal(JSON.stringify(renamed).includes('top-secret'), false);
+});
+
+test('settings: 内置 Bing 首次即存在且为默认，删除其条目也会自动恢复', () => {
+  const { service } = makeService();
+  const initial = service.settings();
+  assert.equal(initial.activeProfileId, BUILTIN_BING_PROFILE_ID);
+  assert.equal(initial.profiles[0]?.provider, 'bing');
+  const changed = service.update({ profiles: [] });
+  assert.equal(changed.profiles.length, 1);
+  assert.equal(changed.profiles[0]?.id, BUILTIN_BING_PROFILE_ID);
+  assert.equal(changed.activeProfileId, BUILTIN_BING_PROFILE_ID);
 });
 
 test('translate: Microsoft 请求包含 key、region 和语言参数', async () => {
