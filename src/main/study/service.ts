@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import type { BookRecord, BookSegments, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardRunRequest, StudyFilterRunRequest, StudyList, StudyRunProgress } from '../../shared/types';
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
-import { cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeLevels, parseCardResponse, parseFilterResponse, parseVerifyResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
+import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
 import { createJlptIndex, lookupJlpt, normalizeReading, studyKey, type JlptRow } from '../../core/study/jlpt';
 import { bookDir } from '../paths';
 import { buildAnkiPackage } from './apkg';
@@ -194,48 +194,60 @@ export class StudyService {
     const sourceHash = createHash('sha256').update(JSON.stringify(source.map((item) => ({
       id: item.id, expression: item.expression, reading: item.reading, contextRef: item.contextRef, occurrences: item.occurrences,
     })))).digest('hex');
+    const prior = workflow.pendingFilterRun;
+    const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash;
+    const decisions: NonNullable<NonNullable<StudyList['workflow']>['filterRun']>['decisions'] =
+      resumed ? { ...prior.decisions } : {};
+    const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+    const startedAt = Date.now();
     const job = { cancelled: false, controller: new AbortController() };
     this.running.set(bookId, job);
     try {
-      const prior = workflow.pendingFilterRun;
-      const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash;
-      const decisions: NonNullable<NonNullable<StudyList['workflow']>['filterRun']>['decisions'] =
-        resumed ? { ...prior.decisions } : {};
-      const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
-      const startedAt = Date.now();
-      const batchSize = request.tier === 'F1' ? 12 : 1;
+      const batchSize = FILTER_TIERS[request.tier].batchSize;
+      type FilterRow = { id: string; decision: 'keep' | 'reject' | 'review'; reason: string };
+      const evaluateBatch = async (batch: StudyCandidate[]): Promise<FilterRow[]> => {
+        const first = await llm.complete({ profileId: request.profileId, ...filterHarnessPrompt(request.tier, batch), temperature: 0.1, signal: job.controller.signal });
+        stats.llmCalls += 1;
+        if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+        if (!first.ok) throw batchFailure('LLM 筛选失败', first.error, batch.length);
+        const firstRows = parseFilterResponse(first.text, batch.map((item) => item.id));
+        if (request.tier !== 'F3') return firstRows;
+        const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), temperature: 0.1, signal: job.controller.signal });
+        stats.llmCalls += 1;
+        if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
+        if (!second.ok) throw batchFailure('LLM 复核失败', second.error, batch.length);
+        const checked = parseFilterResponse(second.text, batch.map((item) => item.id));
+        return firstRows.map((row) => {
+          const reviewer = checked.find((item) => item.id === row.id)!;
+          return row.decision === reviewer.decision
+            ? row
+            : { id: row.id, decision: 'review' as const, reason: `两轮意见不一致：${row.reason} / ${reviewer.reason}`.slice(0, 240) };
+        });
+      };
+      const processBatch = async (batch: StudyCandidate[]): Promise<void> => {
+        let rows: FilterRow[];
+        try { rows = await evaluateBatch(batch); }
+        catch (error) {
+          if (!(error instanceof HarnessOutputError) || batch.length === 1) throw error;
+          const midpoint = Math.ceil(batch.length / 2);
+          await processBatch(batch.slice(0, midpoint));
+          await processBatch(batch.slice(midpoint));
+          return;
+        }
+        for (const row of rows) decisions[row.id] = { decision: row.decision, reason: row.reason };
+        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+        writeJsonAtomic(this.fileFor(bookId), list);
+        this.options.workflowProgress?.({ bookId, stage: 'filter', done: Object.keys(decisions).length, total: source.length });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
       for (let offset = 0; offset < source.length; offset += batchSize) {
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
-        const batch = source.slice(offset, offset + batchSize);
-        if (batch.every((item) => decisions[item.id])) {
+        const batch = source.slice(offset, offset + batchSize).filter((item) => !decisions[item.id]);
+        if (batch.length === 0) {
           this.options.workflowProgress?.({ bookId, stage: 'filter', done: Math.min(offset + batchSize, source.length), total: source.length, message: '复用已完成结果' });
           continue;
         }
-        const firstPrompt = filterHarnessPrompt(request.tier, batch);
-        const first = await llm.complete({ profileId: request.profileId, ...firstPrompt, temperature: 0.1, signal: job.controller.signal });
-        if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
-        stats.llmCalls += 1;
-        if (!first.ok) throw new Error(`LLM 筛选失败：${first.error ?? '未知错误'}`);
-        const firstRows = parseFilterResponse(first.text, batch.map((item) => item.id));
-        let finalRows = firstRows;
-        if (request.tier === 'F3') {
-          const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), temperature: 0.1, signal: job.controller.signal });
-          if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
-          stats.llmCalls += 1;
-          if (!second.ok) throw new Error(`LLM 复核失败：${second.error ?? '未知错误'}`);
-          const checked = parseFilterResponse(second.text, batch.map((item) => item.id));
-          finalRows = firstRows.map((row) => {
-            const reviewer = checked.find((item) => item.id === row.id)!;
-            return row.decision === reviewer.decision
-              ? row
-              : { id: row.id, decision: 'review' as const, reason: `两轮意见不一致：${row.reason} / ${reviewer.reason}`.slice(0, 240) };
-          });
-        }
-        for (const row of finalRows) decisions[row.id] = { decision: row.decision, reason: row.reason };
-        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
-        writeJsonAtomic(this.fileFor(bookId), list);
-        this.options.workflowProgress?.({ bookId, stage: 'filter', done: Math.min(offset + batchSize, source.length), total: source.length });
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await processBatch(batch);
       }
       if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
       for (const item of list.candidates) {
@@ -244,6 +256,10 @@ export class StudyService {
       list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
+    } catch (error) {
+      list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+      writeJsonAtomic(this.fileFor(bookId), list);
+      throw error;
     } finally { this.running.delete(bookId); }
   }
 
@@ -260,62 +276,97 @@ export class StudyService {
     const selected = selectedCandidates(list);
     if (selected.length === 0) throw new Error('请先在筛选步骤选择候选词');
     const sourceHash = selectedHash(list);
+    const prior = list.workflow?.pendingCardRun;
+    const resumed = prior?.tier === request.tier &&
+      prior.translationProfileId === request.translationProfileId &&
+      prior.profileId === (request.tier === 'R0' ? null : request.profileId ?? null) &&
+      prior.sourceHash === sourceHash;
+    const drafts: StudyCardDraft[] = resumed ? [...prior.drafts] : [];
+    const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+    const startedAt = Date.now();
     const job = { cancelled: false, controller: new AbortController() };
     this.running.set(bookId, job);
     try {
-      const prior = list.workflow?.pendingCardRun;
-      const resumed = prior?.tier === request.tier &&
-        prior.translationProfileId === request.translationProfileId &&
-        prior.profileId === (request.tier === 'R0' ? null : request.profileId ?? null) &&
-        prior.sourceHash === sourceHash;
-      const drafts: StudyCardDraft[] = resumed ? [...prior.drafts] : [];
-      const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
-      const startedAt = Date.now();
-      for (let index = 0; index < selected.length; index += 1) {
-        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
-        const item = selected[index]!;
-        if (drafts.some((draft) => draft.candidateId === item.id)) {
-          this.options.workflowProgress?.({ bookId, stage: 'cards', done: index + 1, total: selected.length, message: '复用已完成草稿' });
-          continue;
-        }
+      const translated = new Map<string, { candidate: StudyCandidate; translatedWord: string; translatedSentence: string }>();
+      const translateItem = async (item: StudyCandidate): Promise<{ candidate: StudyCandidate; translatedWord: string; translatedSentence: string }> => {
+        const cached = translated.get(item.id);
+        if (cached) return cached;
         const occurrence = chosenOccurrence(item);
         if (!occurrence) throw new Error(`「${item.expression}」没有原文出处`);
         const [word, sentence] = await Promise.all([
           translation.translate({ text: item.expression, profileId: request.translationProfileId, targetLanguage: 'zh-Hans' }),
           translation.translate({ text: occurrence.text, profileId: request.translationProfileId, targetLanguage: 'zh-Hans' }),
         ]);
-        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
         stats.translationCalls += 2;
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
         if (!word.ok || !sentence.ok) throw new Error(`「${item.expression}」翻译失败：${word.error ?? sentence.error ?? '未知错误'}`);
-        let draft: StudyCardDraft = {
-          candidateId: item.id, meaning: word.text, sentenceTranslation: sentence.text,
+        const entry = { candidate: item, translatedWord: word.text, translatedSentence: sentence.text };
+        translated.set(item.id, entry);
+        return entry;
+      };
+      const evaluateBatch = async (entries: Array<{ candidate: StudyCandidate; translatedWord: string; translatedSentence: string }>): Promise<StudyCardDraft[]> => {
+        if (request.tier === 'R0') return entries.map(({ candidate, translatedWord, translatedSentence }) => ({
+          candidateId: candidate.id, meaning: translatedWord, sentenceTranslation: translatedSentence,
           usage: '', nuance: '', needsReview: false, reviewReason: '',
-        };
-        if (request.tier !== 'R0' && llm) {
-          const prompt = cardHarnessPrompt(request.tier, item, word.text, sentence.text);
-          const result = await llm.complete({ profileId: request.profileId, ...prompt, temperature: 0.1, signal: job.controller.signal });
-          if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
-          stats.llmCalls += 1;
-          if (!result.ok) throw new Error(`「${item.expression}」制卡失败：${result.error ?? '未知错误'}`);
-          draft = parseCardResponse(result.text, item.id);
-          if (request.tier === 'R3') {
-            const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(item, draft), temperature: 0.1, signal: job.controller.signal });
-            if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
-            stats.llmCalls += 1;
-            if (!checked.ok) throw new Error(`「${item.expression}」复核失败：${checked.error ?? '未知错误'}`);
-            const verdict = parseVerifyResponse(checked.text);
-            if (!verdict.approved) draft = { ...draft, needsReview: true, reviewReason: verdict.reason || '复核未通过' };
-          }
+        }));
+        if (!llm) throw new Error('LLM 制卡服务未就绪');
+        const result = await llm.complete({ profileId: request.profileId, ...cardHarnessPrompt(request.tier, entries), temperature: 0.1, signal: job.controller.signal });
+        stats.llmCalls += 1;
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        if (!result.ok) throw batchFailure('LLM 制卡失败', result.error, entries.length);
+        const ids = entries.map(({ candidate }) => candidate.id);
+        const generated = parseCardBatchResponse(result.text, ids);
+        const byId = new Map(generated.map((draft) => {
+          const entry = entries.find(({ candidate }) => candidate.id === draft.candidateId)!;
+          const longContext = (chosenOccurrence(entry.candidate)?.text.length ?? 0) > MAX_HARNESS_CONTEXT_CHARS;
+          const longTranslation = entry.translatedSentence.length > MAX_HARNESS_TRANSLATION_CHARS;
+          if (!longContext && !longTranslation) return [draft.candidateId, draft] as const;
+          const reason = [draft.reviewReason, longContext ? '原文仅截取了目标词附近 320 字' : '', longTranslation ? '句译过长已截断' : ''].filter(Boolean).join('；');
+          return [draft.candidateId, { ...draft, needsReview: true, reviewReason: reason }] as const;
+        }));
+        if (request.tier !== 'R3') return ids.map((id) => byId.get(id)!);
+        const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(entries.map(({ candidate }) => ({ candidate, draft: byId.get(candidate.id)! }))), temperature: 0.1, signal: job.controller.signal });
+        stats.llmCalls += 1;
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        if (!checked.ok) throw batchFailure('LLM 复核失败', checked.error, entries.length);
+        const verdicts = new Map(parseVerifyBatchResponse(checked.text, ids).map((verdict) => [verdict.id, verdict]));
+        return ids.map((id) => {
+          const draft = byId.get(id)!;
+          const verdict = verdicts.get(id)!;
+          return verdict.approved ? draft : { ...draft, needsReview: true, reviewReason: verdict.reason || '复核未通过' };
+        });
+      };
+      const processBatch = async (batch: StudyCandidate[]): Promise<void> => {
+        const entries = [];
+        for (const item of batch) entries.push(await translateItem(item));
+        let produced: StudyCardDraft[];
+        try { produced = await evaluateBatch(entries); }
+        catch (error) {
+          if (!(error instanceof HarnessOutputError) || batch.length === 1) throw error;
+          const midpoint = Math.ceil(batch.length / 2);
+          await processBatch(batch.slice(0, midpoint));
+          await processBatch(batch.slice(midpoint));
+          return;
         }
-        drafts.push(draft);
+        drafts.push(...produced);
         list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), pendingCardRun: {
           tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
           translationProfileId: request.translationProfileId, sourceHash, drafts,
           stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
         } };
         writeJsonAtomic(this.fileFor(bookId), list);
-        this.options.workflowProgress?.({ bookId, stage: 'cards', done: index + 1, total: selected.length, message: item.expression });
+        this.options.workflowProgress?.({ bookId, stage: 'cards', done: drafts.length, total: selected.length, message: `完成 ${produced.length} 张` });
         await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      const batchSize = CARD_TIERS[request.tier].batchSize;
+      for (let offset = 0; offset < selected.length; offset += batchSize) {
+        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        const batch = selected.slice(offset, offset + batchSize).filter((item) => !drafts.some((draft) => draft.candidateId === item.id));
+        if (batch.length === 0) {
+          this.options.workflowProgress?.({ bookId, stage: 'cards', done: Math.min(offset + batchSize, selected.length), total: selected.length, message: '复用已完成草稿' });
+          continue;
+        }
+        await processBatch(batch);
       }
       if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
       list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), cardRun: {
@@ -325,6 +376,14 @@ export class StudyService {
       }, pendingCardRun: undefined };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
+    } catch (error) {
+      list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), pendingCardRun: {
+        tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
+        translationProfileId: request.translationProfileId, sourceHash, drafts,
+        stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
+      } };
+      writeJsonAtomic(this.fileFor(bookId), list);
+      throw error;
     } finally { this.running.delete(bookId); }
   }
 
@@ -392,6 +451,14 @@ export class StudyService {
 
 function selectedCandidates(list: StudyList): StudyCandidate[] {
   return list.candidates.filter((item) => item.selected && !item.excluded);
+}
+
+/** 小模型上下文不够时缩批；鉴权、网络故障等原样报错，避免无意义重试。 */
+function batchFailure(label: string, reason: string | undefined, count: number): Error {
+  const detail = reason ?? '未知错误';
+  const message = `${label}：${detail}`;
+  return count > 1 && /context.{0,25}(length|window|limit|exceed)|context_length_exceeded|prompt.{0,20}too long|token.{0,20}limit|上下文.{0,20}(过长|超限|长度)|HTTP 413/i.test(detail)
+    ? new HarnessOutputError(message) : new Error(message);
 }
 
 /** 不把 exportedAt 算入：导出后再次导出仍应命中相同草稿。 */

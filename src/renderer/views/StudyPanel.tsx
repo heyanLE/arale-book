@@ -1,7 +1,7 @@
 /** 漫画学习候选审核：JLPT 筛选、出处核对、人工短语和 Anki 导出。 */
 import { useEffect, useMemo, useState } from 'react';
 import type { LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterTier, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
-import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, directCandidates } from '@core/study/harness';
+import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, directCandidates, estimatedLlmCalls } from '@core/study/harness';
 import { api, call, useIpcEvent } from '../lib/api';
 
 type LevelFilter = 'all' | 'n3plus' | 'n2plus' | 'n1' | 'n2' | 'n3' | 'n4' | 'n5' | 'unknown';
@@ -112,8 +112,8 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const pendingCardCount = list?.workflow?.pendingCardRun?.drafts.length ?? 0;
   const currentCard = cardRun?.drafts.find((item) => item.candidateId === active?.id);
   const reviewCount = cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
-  const filterCalls = filterTier === 'F1' ? Math.ceil(directPreview.length / 12) : directPreview.length * FILTER_TIERS[filterTier].callsPerCandidate;
-  const cardCalls = selectedCount * CARD_TIERS[cardTier].callsPerCard;
+  const filterCalls = estimatedLlmCalls(directPreview.length, FILTER_TIERS[filterTier]);
+  const cardCalls = estimatedLlmCalls(selectedCount, CARD_TIERS[cardTier]);
 
   useEffect(() => {
     setDraft({ expression: active?.expression ?? '', reading: active?.reading ?? '', meaning: active?.meaning ?? '' });
@@ -275,7 +275,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           </section>
           <section className="study-workflow-step">
             <h3>2. LLM 筛选（可选）</h3>
-            <p>{FILTER_TIERS[filterTier].description} 预计 {filterCalls} 次调用；这不是准确率保证。</p>
+            <p>{FILTER_TIERS[filterTier].description} 正常约 {filterCalls} 次 LLM 调用；输出格式错误时自动缩小批次，次数会增加。</p>
             <div className="study-workflow-controls">
               <select aria-label="LLM 筛选档位" value={filterTier} onChange={(event) => setFilterTier(event.target.value as StudyFilterTier)}>
                 {(['F1', 'F2', 'F3'] as const).map((tier) => <option key={tier} value={tier}>{tier} · {FILTER_TIERS[tier].name}</option>)}
@@ -291,7 +291,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           </section>
           <section className="study-workflow-step">
             <h3>3. 制卡</h3>
-            <p>{CARD_TIERS[cardTier].description} 当前已选 {selectedCount} 张，预计 {cardCalls} 次 LLM 调用，每张另需翻译词与原句。</p>
+            <p>{CARD_TIERS[cardTier].description} 当前已选 {selectedCount} 张，正常约 {cardCalls} 次 LLM 调用；每张另需翻译词与原句。</p>
             <div className="study-workflow-controls">
               <select aria-label="制卡档位" value={cardTier} onChange={(event) => setCardTier(event.target.value as StudyCardTier)}>
                 {(['R0', 'R1', 'R2', 'R3'] as const).map((tier) => <option key={tier} value={tier}>{tier} · {CARD_TIERS[tier].name}</option>)}

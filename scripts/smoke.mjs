@@ -2232,6 +2232,15 @@ try {
   check('Anki 页面有直接筛选、LLM 筛选、R0–R3 制卡入口',
     (await client.evaluate("[...document.querySelectorAll('.study-workflow-step h3')].map((node) => node.textContent)"))?.length === 4 &&
     (await client.evaluate("!!document.querySelector('select[aria-label=\"制卡档位\"] option[value=\"R3\"]')")) === true);
+  await client.evaluate(`(() => {
+    const select = document.querySelector('select[aria-label="制卡档位"]');
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    setter.call(select, 'R1');
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await delay(80);
+  check('制卡调用数按批次计算，不再按一张一次',
+    (await client.evaluate("document.querySelectorAll('.study-workflow-step')[2]?.textContent.includes('正常约 2 次 LLM 调用')")) === true);
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
