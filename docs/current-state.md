@@ -63,8 +63,8 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 
 ### 2026-09-28 设置与词卡 UX 验证（macOS / Node 22）
 
-- `npm run typecheck`、`npm run build` 通过；`npm test`：434 项中 429 通过、5 跳过、0 失败，包含漫画与 EPUB 来源位置持久化断言。
-- `npm run smoke`：最新 185/185 通过，覆盖功能卡片顺序、词卡弹窗中默认配置和提示词保存、免 Key Bing 默认、LLM/翻译新建草稿保留与独立保存、已存名称/提供商固定展示、词卡分栏折叠及来源页往返。
+- `npm run typecheck`、`npm run build` 通过；`npm test`：435 项中 430 通过、5 跳过、0 失败，包含漫画与 EPUB 来源位置持久化、LLM 配置及 Key 单次保存断言。
+- `npm run smoke`：最新 186/186 通过，覆盖功能卡片顺序、词卡弹窗中默认配置和提示词保存、免 Key Bing 默认、LLM/翻译新建草稿保留及独立保存、LLM 新建 Key 同次保存且不回显、已存名称/提供商固定展示、词卡分栏折叠及来源页往返。
 - `npm run screenshot` 已在 macOS 生成设置页与漫画词卡截图并人工检查；当前布局和交互说明见[设置与词卡 UX](settings-wordcard-ux.md)。
 - 未验证范围：Windows 上本轮新增交互、EPUB 章节跳转/返回的 GUI 自动验收，以及不同 DPI 和窄窗口的人工视觉检查；历史词卡没有来源位置，无法自动补回旧页号。
 

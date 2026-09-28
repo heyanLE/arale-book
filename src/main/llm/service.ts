@@ -19,6 +19,7 @@ import {
   type LlmAnalyzeRequest,
   type LlmAnalyzeResult,
   type LlmProfile,
+  type LlmProfileInput,
   type LlmSettings,
 } from '../../shared/types';
 import { readJson, writeJsonAtomic } from '../../core/util/atomic-json';
@@ -61,7 +62,7 @@ export class LlmService {
   }
 
   /** 覆盖式写入 profiles / activeProfileId / prompt 中的任意部分。 */
-  update(patch: { profiles?: LlmProfile[]; activeProfileId?: string | null; prompt?: string }): LlmSettings {
+  update(patch: { profiles?: LlmProfileInput[]; activeProfileId?: string | null; prompt?: string }): LlmSettings {
     const stored = this.readStored();
     const next: StoredShape = { ...stored };
 
@@ -79,7 +80,10 @@ export class LlmService {
         const persisted = existing.get(normalized.id);
         // 配置名称是创建时确定的身份；编辑模型或端点不能顺带改名。
         normalized.name = persisted?.name ?? normalized.name;
-        normalized.apiKey = persisted?.apiKey ?? normalized.apiKey;
+        // apiKey 仅在显式传入时替换；未传时保留已存密钥。
+        normalized.apiKey = Object.prototype.hasOwnProperty.call(incoming, 'apiKey')
+          ? (typeof incoming.apiKey === 'string' ? incoming.apiKey.trim() : '')
+          : (persisted?.apiKey ?? '');
         kept.push(normalized);
       }
       next.profiles = kept;

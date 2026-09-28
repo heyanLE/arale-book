@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DictionaryStatus, LibraryInfo, OcrCapability, OcrProviderId } from '@shared/types';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
-import type { LlmProfile, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
+import type { LlmProfileInput, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
 import { ExtensionsCard } from './ExtensionsCard';
@@ -46,11 +46,10 @@ export interface SettingsPanelProps {
     loading: boolean;
     onReload: () => void;
     onUpdate: (patch: {
-      profiles?: LlmProfile[];
+      profiles?: LlmProfileInput[];
       activeProfileId?: string | null;
       prompt?: string;
     }) => Promise<LlmSettings | null>;
-    onSetApiKey: (profileId: string, apiKey: string | null) => Promise<LlmSettings | null>;
   };
   translation?: {
     settings: TranslationSettings | null;
@@ -352,7 +351,6 @@ export function SettingsPanel({
             loading={llm.loading}
             onReload={llm.onReload}
             onUpdate={llm.onUpdate}
-            onSetApiKey={llm.onSetApiKey}
           />
         ) : (
           <section className="settings-card">

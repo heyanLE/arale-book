@@ -23,6 +23,7 @@ import type {
   OcrQueueState,
   LlmAnalyzeRequest,
   LlmAnalyzeResult,
+  LlmProfileInput,
   LlmSettings,
   TranslationRequest,
   TranslationResult,
@@ -251,7 +252,7 @@ export interface AraleApi {
   llm: {
     settings(): Promise<LlmSettings>;
     update(patch: {
-      profiles?: LlmSettings['profiles'];
+      profiles?: LlmProfileInput[];
       activeProfileId?: string | null;
       prompt?: string;
     }): Promise<LlmSettings>;

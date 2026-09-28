@@ -302,15 +302,6 @@ export function App(): JSX.Element {
     [],
   );
 
-  const setLlmApiKey = useCallback(async (profileId: string, apiKey: string | null) => {
-    const next = await call('保存 API key', () => api.llm.setApiKey(profileId, apiKey));
-    if (next) {
-      setLlmSettings(next);
-      setStatus(apiKey === null ? '已清除 API key' : 'API key 已保存');
-    }
-    return next;
-  }, []);
-
   const loadTranslation = useCallback(async () => {
     setTranslationLoading(true);
     const result = await call('读取翻译配置', () => api.translation.settings());
@@ -656,7 +647,6 @@ export function App(): JSX.Element {
               loading: llmLoading,
               onReload: () => void loadLlm(),
               onUpdate: updateLlm,
-              onSetApiKey: setLlmApiKey,
             }}
             translation={{
               settings: translationSettings,

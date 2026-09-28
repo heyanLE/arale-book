@@ -133,6 +133,23 @@ test('setApiKey: 存 key 后 hasApiKey 为 true，传 null / 空串就删掉', (
   assert.equal(service.settings().profiles[0]?.hasApiKey, false);
 });
 
+test('update: LLM 配置与 Key 一次保存；后续未传 Key 时保留，显式 null 时清除', () => {
+  const { service } = makeService();
+  const profile: LlmProfile = {
+    id: 'atomic', name: '原子配置', baseUrl: 'https://api.example.com/v1',
+    model: 'model-1', temperature: 0.5, hasApiKey: false,
+  };
+  const created = service.update({ profiles: [{ ...profile, apiKey: 'sk-once' }] });
+  assert.equal(created.profiles[0]?.hasApiKey, true);
+  assert.ok(!JSON.stringify(created).includes('sk-once'));
+
+  const edited = service.update({ profiles: [{ ...profile, model: 'model-2' }] });
+  assert.equal(edited.profiles[0]?.hasApiKey, true);
+  assert.equal(edited.profiles[0]?.model, 'model-2');
+  const cleared = service.update({ profiles: [{ ...profile, apiKey: null }] });
+  assert.equal(cleared.profiles[0]?.hasApiKey, false);
+});
+
 test('update: 已存配置名称固定，改模型不会把已存的 key 冲掉', () => {
   const { service } = makeService();
   const profile = seed(service);

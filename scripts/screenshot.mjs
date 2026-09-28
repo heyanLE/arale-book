@@ -203,6 +203,17 @@ try {
     return btn ? 'ok' : 'not-found';
   })()`, 1200);
 
+  await shoot('07-settings-llm-new', `(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
+    card?.scrollIntoView({ block: 'start' });
+    return card ? 'ok' : 'not-found';
+  })()`, 700);
+  await client.evaluate(`(() => {
+    const form = document.querySelector('.profile-new[aria-label="新建 LLM 配置"]');
+    [...(form?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('取消'))?.click();
+  })()`);
+
   await shoot('07-settings-services', `(() => {
     const title = [...document.querySelectorAll('.settings-card-title')].find((node) => node.textContent.includes('LLM 配置'));
     title?.scrollIntoView({ block: 'start' });

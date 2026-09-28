@@ -1018,14 +1018,21 @@ try {
     const input = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input');
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     setter.call(input, '新建测试 LLM'); input.dispatchEvent(new Event('input', { bubbles: true }));
+    const modelInput = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input[placeholder*="qwen2.5"]');
+    setter.call(modelInput, 'smoke-model'); modelInput.dispatchEvent(new Event('input', { bubbles: true }));
+    const keyInput = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input[type="password"]');
+    setter.call(keyInput, 'smoke-key'); keyInput.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
   await delay(100);
   await client.evaluate(`document.querySelector('.profile-new[aria-label="新建 LLM 配置"] .btn-primary')?.click()`);
   await delay(200);
   const savedNewLlm = await client.evaluate(`window.arale.llm.settings()`);
   check('LLM 新配置点击独立保存后才进入已保存列表',
-    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.model === '') &&
+    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.model === 'smoke-model') &&
     (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建 LLM 配置\"]')")) === true);
+  check('LLM 新建时填写的 Key 一起保存且不会回显',
+    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.hasApiKey) &&
+    !JSON.stringify(savedNewLlm).includes('smoke-key'));
   check('已保存 LLM 名称显示为固定文本', await client.evaluate(`(() => {
     const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
     return [...(card?.querySelectorAll('.profile-identity') ?? [])].some((node) => node.textContent.trim() === '新建测试 LLM');

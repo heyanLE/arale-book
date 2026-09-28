@@ -872,6 +872,9 @@ export interface LlmProfile {
   hasApiKey: boolean;
 }
 
+/** 仅用于写入配置；apiKey 明文不会出现在 LlmSettings 的返回值中。 */
+export type LlmProfileInput = LlmProfile & { apiKey?: string | null };
+
 export interface LlmSettings {
   profiles: LlmProfile[];
   /** 当前默认用哪套；null = 没选。 */
