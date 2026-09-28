@@ -1924,7 +1924,20 @@ button[aria-disabled='true'] {
 
 .wordcard-location-muted { color: var(--text-faint); }
 
-.wordcard-section { border-bottom: 1px solid var(--border-soft); }
+.wordcard-settings-section { padding: 6px 0; }
+
+.wordcard-settings-section + .wordcard-settings-section {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 7px;
+  padding-top: 12px;
+}
+
+.wordcard-settings-section h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
 
 .wordcard-section-toggle {
   border: 0;
@@ -2727,6 +2740,9 @@ button[aria-disabled='true'] {
 
 /* 顶部的词是**可点的按钮**（点一下变输入框），所以要把它做成不像按钮的样子。 */
 .wordcard-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-weight: 600;
   font-size: var(--ui-size);
   color: var(--text);
@@ -2735,11 +2751,13 @@ button[aria-disabled='true'] {
   border-radius: var(--radius);
   padding: 0 3px;
   max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: left;
+  cursor: pointer;
 }
+
+.wordcard-word-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wordcard-word::after { content: '✎'; opacity: 0.55; flex: none; }
+.wordcard-word:hover::after { opacity: 1; }
 
 .wordcard-word:hover {
   border-color: var(--border);
@@ -2808,10 +2826,9 @@ button[aria-disabled='true'] {
 /* ---- 翻译 / LLM 分析栏 ---- */
 .wordcard-translation,
 .wordcard-llm {
-  margin-top: 10px;
+  margin-top: 8px;
   padding-top: 8px;
-  /* 分栏之间要有看得见的分隔——之前用 --border-soft，在浅色主题下几乎看不见，
-     几栏内容糊成一片，用户分不清哪一栏是哪一栏。 */
+  /* 相邻分栏只画这一条顶线；词典不再额外画底线。 */
   border-top: 1px solid var(--border);
 }
 
@@ -3047,16 +3064,6 @@ button[aria-disabled='true'] {
 
 .comic-viewport.can-pan.is-panning:active {
   cursor: grabbing;
-}
-
-/* 顶部词旁边的编辑按钮：常驻但低调，hover 时才明显——不跟词本身抢注意力。 */
-.wordcard-edit {
-  opacity: 0.55;
-  flex: none;
-}
-
-.wordcard-edit:hover {
-  opacity: 1;
 }
 
 /* ---- 词卡里的逐词分析列表 ---- */

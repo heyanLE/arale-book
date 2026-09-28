@@ -295,8 +295,8 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
   const toggleSection = (section: keyof typeof sectionOpen) =>
     setSectionOpen((current) => ({ ...current, [section]: !current[section] }));
 
-  const defaultLlmName = llmProfiles.find((profile) => profile.id === llmDefaultId)?.name ?? '未设置';
-  const defaultTranslationName = translationProfiles.find((profile) => profile.id === translationDefaultId)?.name ?? '未设置';
+  const selectedLlmId = llmProfileId ?? llmDefaultId ?? '';
+  const selectedTranslationId = translationProfileId ?? translationDefaultId ?? translationProfiles[0]?.id ?? '';
 
   return (
     <div
@@ -339,26 +339,15 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
             }}
           />
         ) : (
-          <>
-            <button
-              type="button"
-              className="wordcard-word"
-              onClick={() => setEditingWord(true)}
-              title="点一下可以改这个词"
-            >
-              {word !== '' ? word : '（无词）'}
-            </button>
-            {/* 光靠「标题能点」没有任何提示——用户不会去点标题。给一个显式的编辑按钮。 */}
-            <button
-              type="button"
-              className="icon-btn wordcard-edit"
-              onClick={() => setEditingWord(true)}
-              title="编辑这个词"
-              aria-label="编辑这个词"
-            >
-              ✎
-            </button>
-          </>
+          <button
+            type="button"
+            className="wordcard-word"
+            onClick={() => setEditingWord(true)}
+            title="编辑这张词卡的词"
+            aria-label={`编辑词：${word !== '' ? word : '（无词）'}`}
+          >
+            <span className="wordcard-word-label">{word !== '' ? word : '（无词）'}</span>
+          </button>
         )}
 
         {selectionLength > 0 && (
@@ -476,15 +465,14 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
             {translationProfiles.length > 0 && (
               <select
                 className="select select-sm"
-                value={translationProfileId ?? ''}
-                onChange={(event) =>
-                  onSelectTranslationProfile(event.target.value === '' ? null : event.target.value)
-                }
+                value={selectedTranslationId}
+                onChange={(event) => onSelectTranslationProfile(
+                  event.target.value === translationDefaultId ? null : event.target.value,
+                )}
                 title="这次使用哪个翻译引擎"
               >
-                <option value="">默认 · {defaultTranslationName}</option>
                 {translationProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>{profile.name}</option>
+                  <option key={profile.id} value={profile.id}>{profile.name}{profile.id === translationDefaultId ? '（默认）' : ''}</option>
                 ))}
               </select>
             )}
@@ -527,14 +515,14 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
             {llmProfiles.length > 0 && (
               <select
                 className="select select-sm"
-                value={llmProfileId ?? ''}
-                onChange={(e) => onSelectLlmProfile(e.target.value === '' ? null : e.target.value)}
+                value={selectedLlmId}
+                onChange={(e) => onSelectLlmProfile(e.target.value === llmDefaultId ? null : e.target.value)}
                 title="这次用哪套 LLM 配置"
               >
-                <option value="">默认 · {defaultLlmName}</option>
+                {llmDefaultId === null && <option value="" disabled>选择 LLM 配置</option>}
                 {llmProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
-                    {profile.name}
+                    {profile.name}{profile.id === llmDefaultId ? '（默认）' : ''}
                   </option>
                 ))}
               </select>

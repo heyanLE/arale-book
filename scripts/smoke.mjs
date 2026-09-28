@@ -968,7 +968,12 @@ try {
       const cards = [...document.querySelectorAll('.settings-card')];
       const popup = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
       const llm = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
-      return !!popup?.querySelector('textarea') && popup?.querySelectorAll('select').length === 2 && !llm?.querySelector('textarea');
+      const sections = [...(popup?.querySelectorAll('.wordcard-settings-section') ?? [])];
+      return sections.length === 2 && sections[0]?.querySelector('h3')?.textContent === '翻译栏配置' &&
+        sections[0]?.querySelectorAll('select').length === 1 &&
+        sections[1]?.querySelector('h3')?.textContent === 'LLM 分析栏配置' &&
+        sections[1]?.querySelectorAll('select').length === 1 && !!sections[1]?.querySelector('textarea') &&
+        !llm?.querySelector('textarea');
     })()`));
   const originalPrompt = (await client.evaluate('window.arale.llm.settings()'))?.prompt ?? '';
   await client.evaluate(`(() => {
@@ -1004,7 +1009,7 @@ try {
     const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
     [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
     const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
-    const select = popupCard?.querySelectorAll('select')[0];
+    const select = popupCard?.querySelectorAll('select')[1];
     if (select) { select.value = 'llm_smoke_b'; select.dispatchEvent(new Event('change', { bubbles: true })); }
     return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
   })()`);
@@ -1050,7 +1055,7 @@ try {
     const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
     [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
     const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
-    const select = popupCard?.querySelectorAll('select')[1];
+    const select = popupCard?.querySelectorAll('select')[0];
     if (select) { select.value = ${JSON.stringify(bingDefault.activeProfileId)}; select.dispatchEvent(new Event('change', { bubbles: true })); }
     return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
   })()`);
@@ -1445,13 +1450,18 @@ try {
     return {
       names: buttons.map((button) => button.textContent.trim()),
       translationDefault: card?.querySelector('.wordcard-translation select option')?.textContent.trim() ?? null,
+      translationOptions: card?.querySelectorAll('.wordcard-translation select option').length ?? 0,
       dictionaryOpen: buttons[0]?.getAttribute('aria-expanded') ?? null,
+      dictionaryBottom: card?.querySelector('.wordcard-section') ? getComputedStyle(card.querySelector('.wordcard-section')).borderBottomWidth : null,
+      translationTop: card?.querySelector('.wordcard-translation') ? getComputedStyle(card.querySelector('.wordcard-translation')).borderTopWidth : null,
     };
   })()`);
-  check('词典、翻译、LLM 三栏统一可折叠且翻译显示 Bing 默认配置',
+  check('词典、翻译、LLM 三栏统一可折叠，词典下方只有一条分隔线',
     cardSections?.names?.length === 3 && cardSections.names.some((name) => name.includes('词典')) &&
     cardSections.names.some((name) => name.includes('翻译')) && cardSections.names.some((name) => name.includes('LLM')) &&
-    cardSections.translationDefault?.includes('Bing'), JSON.stringify(cardSections));
+    cardSections.dictionaryBottom === '0px' && cardSections.translationTop === '1px', JSON.stringify(cardSections));
+  check('仅有 Bing 时翻译选择器只显示 Bing 一项',
+    cardSections.translationOptions === 1 && cardSections.translationDefault?.includes('Bing'), JSON.stringify(cardSections));
   const sectionToggle = await client.evaluate(`(() => {
     const button = document.querySelector('.dict-popup.wordcard .wordcard-section-toggle');
     const before = button?.getAttribute('aria-expanded');
@@ -1877,17 +1887,19 @@ try {
     JSON.stringify(llmUi),
   );
 
-  // --- 顶部词旁边的编辑按钮 ---
+  // --- 顶部词与编辑图标是同一个按钮 ---
   const editBtn = await client.evaluate(`(() => {
     const card = document.querySelector('.dict-popup:not(.is-pinned)');
-    const btn = card?.querySelector('.wordcard-edit');
+    const btn = card?.querySelector('.wordcard-word');
     if (!btn) return null;
+    const zones = card.querySelectorAll('.wordcard-word, .wordcard-edit').length;
+    const glyph = getComputedStyle(btn, '::after').content;
     btn.click();
     return new Promise((resolve) => requestAnimationFrame(() => resolve(
-      !!card.querySelector('.wordcard-word-input')
+      { editing: !!card.querySelector('.wordcard-word-input'), zones, glyph }
     )));
   })()`);
-  check('顶部词右边有显式的编辑按钮，点了就能改', editBtn === true, String(editBtn));
+  check('顶部词和编辑图标共用一个点击区域', editBtn?.editing === true && editBtn.zones === 1 && editBtn.glyph?.includes('✎'), JSON.stringify(editBtn));
 
   // --- 多个子句分析一起展示 + 一起保存 ---
   // 没有真实 LLM，所以直接往词卡里写两条分析，然后从词卡夹打开看是否两栏都在。

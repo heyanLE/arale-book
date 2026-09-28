@@ -24,7 +24,7 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
-| 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片集中管理默认 LLM、默认翻译及分析提示词。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
+| 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片分翻译栏与 LLM 分析栏管理各自默认项及提示词。弹窗引擎下拉只列实际配置，顶部词语与编辑图标共用按钮。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
 
 不要重新引入旧 Rust OCR 来代替当前默认方案，除非用户提出新的实现方向；当前 Windows 工作的目标是移植和验收现有 Python/ORT 包。
 
@@ -64,7 +64,7 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 ### 2026-09-28 设置与词卡 UX 验证（macOS / Node 22）
 
 - `npm run typecheck`、`npm run build` 通过；`npm test`：435 项中 430 通过、5 跳过、0 失败，包含漫画与 EPUB 来源位置持久化、LLM 配置及 Key 单次保存断言。
-- `npm run smoke`：最新 186/186 通过，覆盖功能卡片顺序、词卡弹窗中默认配置和提示词保存、免 Key Bing 默认、LLM/翻译新建草稿保留及独立保存、LLM 新建 Key 同次保存且不回显、已存名称/提供商固定展示、词卡分栏折叠及来源页往返。
+- `npm run smoke`：最新 187/187 通过，覆盖词卡弹窗翻译/LLM 两栏配置、只有 Bing 时翻译下拉仅一项、词典下方单线分隔与顶部统一编辑按钮，以及此前的默认配置、Key 保存、来源页往返等流程。
 - `npm run screenshot` 已在 macOS 生成设置页与漫画词卡截图并人工检查；当前布局和交互说明见[设置与词卡 UX](settings-wordcard-ux.md)。
 - 未验证范围：Windows 上本轮新增交互、EPUB 章节跳转/返回的 GUI 自动验收，以及不同 DPI 和窄窗口的人工视觉检查；历史词卡没有来源位置，无法自动补回旧页号。
 
