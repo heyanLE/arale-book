@@ -20,7 +20,8 @@ export interface SidebarProps {
   allAuthors: string[];
   /** 标签 → 当前结果里的本数。契约没给，也是现算的。 */
   tagCounts: Record<string, number>;
-  onImport: () => void;
+  onImportFiles: () => void;
+  onImportDirectory: () => void;
 }
 
 /** 侧栏最多列多少条分面项，免得一个上万标签的书库把侧栏撑成无限长。 */
@@ -168,8 +169,11 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       </div>
 
       <div className="sidebar-footer">
-        <button type="button" className="btn btn-sm btn-block" onClick={props.onImport}>
-          ＋ 导入书籍…
+        <button type="button" className="btn btn-sm btn-block" onClick={props.onImportFiles}>
+          ＋ 导入文件…
+        </button>
+        <button type="button" className="btn btn-sm btn-block" onClick={props.onImportDirectory}>
+          ＋ 导入文件夹…
         </button>
       </div>
     </nav>

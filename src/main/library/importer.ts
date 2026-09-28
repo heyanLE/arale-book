@@ -45,6 +45,7 @@ import type { AppDefaults } from '../../shared/defaults';
 import { DEFAULT_APP_DEFAULTS } from '../../shared/defaults';
 import { bookContentDir, bookDir } from '../paths';
 import { LibraryStore, makeBaseRecord } from './store';
+import { migrateBookPagePathsToAscii } from './ascii-paths';
 
 /** 单个压缩包的内存上限。超过就拒绝并给出可操作的建议，而不是让进程 OOM。 */
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -139,7 +140,22 @@ export async function importPath(
 
   const collection = await tryImportCollection(source, store, depth, peekZip);
   if (collection !== null) return collection;
-  return [await importSingle(source, store, peekZip)];
+  const outcome = await importSingle(source, store, peekZip);
+  if (outcome.ok && outcome.bookId !== null) {
+    try {
+      await migrateBookPagePathsToAscii(store, outcome.bookId);
+    } catch (error) {
+      // 导入承诺整体成功或整体回滚；不能提示失败却在书架留下一本半成品。
+      store.remove(outcome.bookId);
+      rollback(bookDir(outcome.bookId));
+      return [{
+        ...outcome,
+        ok: false,
+        error: `已导入，但页图英文路径转换失败：${error instanceof Error ? error.message : String(error)}`,
+      }];
+    }
+  }
+  return [outcome];
 }
 
 /**

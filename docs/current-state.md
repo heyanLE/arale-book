@@ -1,11 +1,11 @@
 # 当前状态与接续任务
 
-核对日期：2026-09-26。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
+核对日期：2026-09-27。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
 功能基线：应用提交 `91fc064`、文档整理前提交 `1b57c64`；引擎功能提交 `59eed53`。这些是定位历史的基线，当前 HEAD 用 `git log` 查看。
 
 ## 现在是什么
 
-ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语学习阅读器。当前主流程包括导入、书库、漫画/小说阅读、点词/划词查询、词卡、词典分词、可选 OCR 与 OpenAI 兼容 LLM 分析。
+ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语学习阅读器。当前主流程包括导入、书库、漫画/小说阅读、点词/划词查询、词卡、词典分词、可选 OCR、多提供商翻译与 OpenAI 兼容 LLM 分析。
 纯逻辑在 `src/core/`，Electron 服务在 `src/main/`，UI 在 `src/renderer/`。源码导航见[架构](architecture.md)。
 
 ## 已确定并实现的方向
@@ -21,6 +21,8 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | 正式应用包 | 只携带从 submodule 取得的小型仓库索引，不携带可下载引擎 |
 | 开发/调试包 | 存在 `build/dev-<platform>-<arch>/` 时直接加载；调试应用包会复制该目录 |
 | 发布 | ZIP 已在本机生成，尚未上传 Release；本轮本地提交尚未由本会话 push |
+| 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
+| 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 
 不要重新引入旧 Rust OCR 来代替当前默认方案，除非用户提出新的实现方向；当前 Windows 工作的目标是移植和验收现有 Python/ORT 包。
 
@@ -30,27 +32,35 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 
 | 验证 | 已观察的结果 | 不能据此推断 |
 |---|---|---|
-| 类型与应用测试 | 类型检查通过；407 项中 402 通过、5 跳过 | 不是 Windows 或 GUI 全流程验证 |
+| 类型与应用测试 | Windows / Node 22.19.0 类型检查通过；400 项中 395 通过、5 跳过；Rust 50/50 通过 | 跳过项含真实 RAR 夹具与降级分支，不是这些外部样本已通过 |
 | macOS 引擎 | 包内解释器、解压后的 ZIP、应用扩展服务均跑通单页 OCR | 不是所有 macOS 版本都测过 |
 | KV cache 对照 | 同批 30 页 388 行文字和框与旧无缓存图完全一致 | 不是任意书籍都完全一致 |
 | Mokuro 对照 | 380/387 配对行逐字一致，约 98.2% | 这是与参考程序的一致率，不是人工标注准确率 |
 | 性能 | 8 线程、同批 30 页：126.4 秒 → 96.5 秒 | 运行时默认仍为 4 线程；不能把 8 线程测量当默认保证 |
-| 应用打包 | macOS debug/release `--dir` 构建和资源分流检查通过 | 未做签名、公证、正式安装包发布 |
-| GUI smoke | 该轮 Electron 在 CDP 可用前退出，未完成 | 原因尚未定案，不能认定是业务回归或声称已通过 |
-| Windows | 引擎已交叉打包、ZIP 完整性检查通过、PE 依赖静态扫描完成 | 尚未在 Windows 启动或识别成功 |
+| 应用打包 | macOS debug/release `--dir` 已有旧记录；Windows debug/release `--dir` 与 NSIS 安装包构建通过，资源分流与包内 sidecar/WinRT OCR 已检查 | Windows 安装包尚未在干净机器实际安装/卸载，也未发布或签名验收 |
+| GUI smoke | Windows 普通 smoke 162/162；`ARALE_SMOKE_OCR=1` 真 OCR smoke 183/183，含 ONNX 4 页识别、系统 OCR 队列/进度/排队/取消 | 不是所有 Windows 版本、语言包或真实书籍的全量保证 |
+| Windows | Windows 11 build 26200 上已修复嵌入式 Python `_pth` 与 WinRT PowerShell 5.1 编码/多页参数；30 页 ONNX OCR、系统 OCR、多引擎应用集成和 GUI 均运行成功 | 尚未验证干净 Windows 的 VC++ 条件依赖；Windows 与 Mac 基线存在少量识别/框差异 |
 
 macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14，扩展条目用 `minMacOS: 14` 限制安装。Windows 和 Linux 的应用构建配置存在，但运行/打包仍需逐平台验收。
+
+### 2026-09-27 翻译与词卡定位验证（Windows 11）
+
+- `node .\node_modules\typescript\bin\tsc -p tsconfig.main.json --noEmit`、`tsconfig.renderer.json --noEmit` 与 `tsconfig.test.json` 均通过。
+- `node --test "dist-test/tests/*.test.js"`：420 项中 415 通过、5 跳过、0 失败；其中 Bing 单测覆盖免 Key、网页临时参数解析、表单参数与会话复用，词卡定位单测覆盖下方、上方、侧边避让和视口边缘约束。
+- `node .\node_modules\typescript\bin\tsc -p tsconfig.main.json; node scripts/bundle-preload.mjs; node .\node_modules\vite\bin\vite.js build`：主进程、preload 与 renderer 生产构建通过。
+- 临时 `node -e` 脚本直接请求 Bing 原始接口并实例化 `TranslationService`，真实请求 `猫が好きです。`（`ja` → `zh-Hans`）：返回译文 `我喜欢猫。`、原文罗马音 `Neko ga suki desu.`，另有译文拼音；当前 UI 按需求只展示原文读音。
+- 未验证范围：未做长时间/高频限流、验证码、各地区 Bing 子域、代理环境及离线恢复测试；Microsoft、DeepL、Google、百度与 LibreTranslate 本轮只有注入假 HTTP 的协议测试，没有使用真实用户 Key 联网调用；词卡避让尚未在不同 DPI、多显示器和所有内容长度下逐一做 GUI 人工验收。
 
 ## 下一步：Windows 兼容与修复
 
 优先顺序及具体命令见 [Windows 交接](windows-handoff.md)。
 
 1. push 两个仓库并搬迁 Windows OCR ZIP，恢复模型和 Windows 运行时。
-2. 检查嵌入式 Python `_pth` 的 `ocr/` 搜索路径，再跑 `--probe` 和单页 OCR。
+2. `_pth`、`--probe`、30 页进程 OCR、应用 provider/队列与 GUI 已通过；继续分析 Windows 与 Mac 基线差异。
 3. 在干净 Windows 上解决/验证 `msvcp140.dll` 条件依赖。
-4. 修复 Rust **解包器**构建脚本的工具链路径、PATH 分隔符；修复应用打包的 `.exe` 资源和命令启动方式。
-5. 验证导入、阅读、查词、OCR 队列/取消、系统 OCR、debug/release 安装包。
-6. 验收后才开放 Windows 仓库资产并上传 Release；同时更新当前文档的证据。
+4. Rust **解包器**脚本、`.exe` 资源、Windows 命令启动和平台资源分流已修复；补测真实 RAR 夹具。
+5. 导入、阅读、查词、OCR 队列/取消、系统 OCR、debug/release 目录包和 NSIS 构建已通过；仍需在干净机器实际安装/卸载 NSIS。
+6. 完成干净环境与跨平台差异评估后，才开放 Windows 仓库资产并上传 Release；同时更新当前文档的证据。
 
 ## 其他已知限制
 

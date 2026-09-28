@@ -71,18 +71,8 @@ files:
   # `files:` —— 平台级 files 会**替换**顶层 files 而不是合并，那样 `.rust/`（1GB
   # 工具链）会被整个打进包（实测 22MB → 1.2GB）。
 
-# 真文件（不可进 asar）：原生工具 + 扩展清单。
+# 真文件（不可进 asar）：跨平台公共资源。平台原生工具分别在 mac/win/linux 下声明。
 extraResources:
-  - from: native/arale-native/target/release/arale-native
-    to: native/arale-native
-  # macOS 系统 OCR 小工具（`npm run build:vision-ocr` 产出）。缺了它系统 OCR 引擎
-  # 会以「找不到组件」判为不可用——不会崩，但那个引擎就用不了了。
-  - from: native/arale-vision-ocr/arale-vision-ocr
-    to: native/arale-vision-ocr
-  # Windows 系统 OCR（PowerShell + Windows.Media.Ocr）。到 Windows 上打包时要确认它
-  # 跟着走；本机是 macOS，这条路径没有被验证过。
-  - from: native/arale-winrt-ocr.ps1
-    to: native/arale-winrt-ocr.ps1
   # 索引源文件在 submodule 中；正式包只带小型 JSONL，不带引擎归档。
   - from: engines/repositories/default.jsonl
     to: extensions/default.jsonl
@@ -97,6 +87,11 @@ npmRebuild: false
 mac:
   category: public.app-category.books
   icon: build/icon.icns
+  extraResources:
+    - from: native/arale-native/target/release/arale-native
+      to: native/arale-native
+    - from: native/arale-vision-ocr/arale-vision-ocr
+      to: native/arale-vision-ocr
   darkModeSupport: true
   # 本机没有 Developer ID 证书 → 不签名。用户首次打开需要右键 →「打开」，
   # 或者 `xattr -dr com.apple.quarantine /Applications/ARaLeBook.app`。
@@ -123,6 +118,11 @@ win:
   # 素材包里带的是**多尺寸内嵌**的 ico（16/24/32/48/64/128/256），比让 electron-builder
   # 从一个 png 现场转出来的更完整——16/24px 那两档素材用的是简化头像，小尺寸下更清楚。
   icon: build/icon.ico
+  extraResources:
+    - from: native/arale-native/target/release/arale-native.exe
+      to: native/arale-native.exe
+    - from: native/arale-winrt-ocr.ps1
+      to: native/arale-winrt-ocr.ps1
   artifactName: '${productName}-${version}-setup.${ext}'
 
 nsis:
@@ -136,4 +136,7 @@ linux:
       arch: [x64]
   category: Office
   icon: build/icon.png
+  extraResources:
+    - from: native/arale-native/target/release/arale-native
+      to: native/arale-native
   artifactName: '${productName}-${version}.${ext}'

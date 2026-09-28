@@ -32,9 +32,11 @@ import type {
   LlmProfile,
   LookupResult,
   LookupTermResult,
+  TranslationProfile,
   WordCardAnalysis,
 } from '@shared/types';
 import { hasAnalysisFor } from '@core/cards/analyses';
+import { placePopup } from '@core/cards/popup-position';
 import { capturePointer } from '../lib/pointer';
 
 export interface AnchorRect {
@@ -75,6 +77,15 @@ export interface WordCardPopupProps {
   llmProfiles: LlmProfile[];
   /** 上一次失败的原文。 */
   lastError: string | null;
+  translationText: string | null;
+  translationSourceReading: string | null;
+  translating: boolean;
+  translationProfileId: string | null;
+  translationProfileName: string | null;
+  translationError: string | null;
+  translationProfiles: TranslationProfile[];
+  onTranslate: () => void;
+  onSelectTranslationProfile: (profileId: string | null) => void;
   onAnalyze: (word: string) => void;
   onRemoveAnalysis: (word: string) => void;
   onSelectLlmProfile: (profileId: string | null) => void;
@@ -89,8 +100,6 @@ export interface WordCardPopupProps {
 
 const GAP = 6;
 const EDGE = 8;
-/** 多个弹窗叠放时的错位量，避免完全重合到看不见下面那张。 */
-const CASCADE_STEP = 18;
 
 export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
   const {
@@ -107,6 +116,15 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     llmProfileId,
     llmProfiles,
     lastError,
+    translationText,
+    translationSourceReading,
+    translating,
+    translationProfileId,
+    translationProfileName,
+    translationError,
+    translationProfiles,
+    onTranslate,
+    onSelectTranslationProfile,
     onAnalyze,
     onRemoveAnalysis,
     onSelectLlmProfile,
@@ -137,33 +155,39 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     if (editingWord) wordInputRef.current?.select();
   }, [editingWord]);
 
-  // 先按「锚点下方」渲染一帧量尺寸，再决定是否翻转。
-  useLayoutEffect(() => {
+  const place = useCallback(() => {
     if (manualRef.current) return;
     const el = ref.current;
     if (!el) return;
-    const width = el.offsetWidth;
-    const height = el.offsetHeight;
-
-    let left = anchor.x;
-    if (left + width > window.innerWidth - EDGE) {
-      left = anchor.x + anchor.width - width;
-    }
-    left = Math.max(EDGE, Math.min(left, window.innerWidth - width - EDGE));
-
-    let top = anchor.y + anchor.height + GAP;
-    if (top + height > window.innerHeight - EDGE) {
-      const above = anchor.y - height - GAP;
-      top = above >= EDGE ? above : Math.max(EDGE, window.innerHeight - height - EDGE);
-    }
-
-    // 多张卡叠放时按序错开；叠满一轮就绕回来，不让它越堆越偏。
-    const shift = (cascade % 6) * CASCADE_STEP;
-    setPos({
-      left: Math.max(EDGE, Math.min(left + shift, window.innerWidth - width - EDGE)),
-      top: Math.max(EDGE, Math.min(top + shift, window.innerHeight - height - EDGE)),
+    const next = placePopup({
+      anchor,
+      popupWidth: el.offsetWidth,
+      popupHeight: el.offsetHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      cascade,
+      gap: GAP,
+      edge: EDGE,
     });
-  }, [anchor, cascade, result]);
+    setPos((current) =>
+      current?.left === next.left && current.top === next.top ? current : next,
+    );
+  }, [anchor, cascade]);
+
+  // 首帧量尺寸后定位；翻译/LLM 返回让卡片变高时，ResizeObserver 会再次选边，
+  // 避免“按钮时没遮挡，结果展开后反而盖住选区”。窗口缩放也重新计算。
+  useLayoutEffect(() => place(), [place]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(place);
+    observer.observe(el);
+    window.addEventListener('resize', place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', place);
+    };
+  }, [place]);
 
   // Esc 关闭。捕获阶段监听，避免被阅读器自己的键盘处理先吃掉。
   // **pinned 的卡不响应 Esc** —— 它存在的意义就是「别自己消失」。
@@ -397,7 +421,55 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
           </>
         )}
 
-        {/* ---------- 第二栏起：LLM 分析（一个分析过的词一栏） ----------
+        {/* ---------- 第二栏：翻译。点击查词翻整段/整框，划词只翻用户选区。 ---------- */}
+        <section className="wordcard-translation">
+          <div className="wordcard-llm-head">
+            <span className="wordcard-llm-title">翻译</span>
+            {translationProfileName !== null && (
+              <span className="wordcard-llm-meta mono">{translationProfileName}</span>
+            )}
+            <span className="dict-popup-spacer" />
+            {translationProfiles.length > 1 && (
+              <select
+                className="select select-sm"
+                value={translationProfileId ?? ''}
+                onChange={(event) =>
+                  onSelectTranslationProfile(event.target.value === '' ? null : event.target.value)
+                }
+                title="这次使用哪个翻译引擎"
+              >
+                <option value="">默认引擎</option>
+                {translationProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>{profile.name}</option>
+                ))}
+              </select>
+            )}
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={translating || translationProfiles.length === 0}
+              onClick={onTranslate}
+              title={selectionLength > 0 ? '翻译选中的文字' : '翻译当前段落或整个漫画框'}
+            >
+              {translating ? '翻译中…' : translationText === null ? '翻译' : '重新翻译'}
+            </button>
+          </div>
+          {translationProfiles.length === 0 ? (
+            <div className="wordcard-llm-hint">请先到「设置 → 翻译」配置引擎和 API key。</div>
+          ) : translating ? (
+            <div className="wordcard-llm-hint">正在等待翻译引擎返回…</div>
+          ) : null}
+          {translationSourceReading !== null && (
+            <div className="wordcard-translation-reading">
+              <span>原文读音</span>
+              <span className="mono">{translationSourceReading}</span>
+            </div>
+          )}
+          {translationText !== null && <div className="wordcard-translation-text">{translationText}</div>}
+          {translationError !== null && <div className="wordcard-llm-error">{translationError}</div>}
+        </section>
+
+        {/* ---------- 第三栏起：LLM 分析（一个分析过的词一栏） ----------
             用户会从短划到长：先划 A 分析，再划 AB。所以这里把「当前词包含的所有
             已分析过的词」一栏栏列出来（短的在前），最后是当前词自己的那一栏。 */}
         <section className="wordcard-llm">

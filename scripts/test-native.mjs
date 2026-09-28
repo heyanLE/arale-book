@@ -8,33 +8,39 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const crateDir = join(root, 'native', 'arale-native');
 const cargoHome = join(root, '.rust', 'cargo');
 const rustupHome = join(root, '.rust', 'rustup');
-const cargoBin = join(cargoHome, 'bin', 'cargo');
+const localCargo = join(cargoHome, 'bin', process.platform === 'win32' ? 'cargo.exe' : 'cargo');
+const systemCargo = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
 
 if (!existsSync(crateDir)) {
   console.log('native/arale-native 不存在，跳过');
   process.exit(0);
 }
-if (!existsSync(cargoBin)) {
-  console.warn('没有找到 Rust 工具链（.rust/cargo/bin/cargo），跳过原生测试');
+const useLocalToolchain = existsSync(localCargo);
+const cargoBin = useLocalToolchain ? localCargo : systemCargo;
+const cargoProbe = spawnSync(cargoBin, ['--version'], { stdio: 'ignore' });
+if (cargoProbe.status !== 0) {
+  console.warn('没有找到 Rust 工具链（系统 Cargo 或仓库 .rust/），跳过原生测试');
   process.exit(0);
+}
+
+const env = { ...process.env };
+if (useLocalToolchain) {
+  env.PATH = `${join(cargoHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
+  env.CARGO_HOME = cargoHome;
+  env.RUSTUP_HOME = rustupHome;
 }
 
 const result = spawnSync(cargoBin, ['test', '--release'], {
   cwd: crateDir,
   stdio: 'inherit',
-  env: {
-    ...process.env,
-    PATH: `${join(cargoHome, 'bin')}:${process.env.PATH ?? ''}`,
-    CARGO_HOME: cargoHome,
-    RUSTUP_HOME: rustupHome,
-  },
+  env,
 });
 
 process.exit(result.status ?? 1);

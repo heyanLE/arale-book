@@ -9,11 +9,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DictionaryStatus, LibraryInfo, OcrCapability, OcrProviderId } from '@shared/types';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
-import type { LlmProfile, LlmSettings } from '@shared/types';
+import type { LlmProfile, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
 import { ExtensionsCard } from './ExtensionsCard';
 import { LlmCard } from './LlmCard';
+import { TranslationCard } from './TranslationCard';
 import { api, call, reportApiError, useIpcEvent } from '../lib/api';
 import {
   DEFAULT_SETTINGS,
@@ -50,6 +51,17 @@ export interface SettingsPanelProps {
     }) => void;
     onSetApiKey: (profileId: string, apiKey: string | null) => void;
   };
+  translation?: {
+    settings: TranslationSettings | null;
+    loading: boolean;
+    onReload: () => void;
+    onUpdate: (patch: {
+      profiles?: TranslationProfile[];
+      activeProfileId?: string | null;
+      targetLanguage?: TranslationSettings['targetLanguage'];
+    }) => void;
+    onSetSecret: (profileId: string, secret: string | null) => void;
+  };
   extensions?: {
     statuses: ExtensionStatus[];
     repositories: OcrRepository[];
@@ -75,6 +87,7 @@ export function SettingsPanel({
   onSelectOcrProvider,
   extensions,
   llm,
+  translation,
   defaults,
 }: SettingsPanelProps): JSX.Element {
   const settings = useSettings();
@@ -332,7 +345,7 @@ export function SettingsPanel({
                 checked={settings.autoHideChrome}
                 onChange={(e) => patch({ autoHideChrome: e.target.checked })}
               />
-              <span>阅读时自动隐藏上下工具栏（鼠标一动就回来）</span>
+              <span>沉浸阅读（右上角退出；Windows 隐藏系统标题栏）</span>
             </label>
           </div>
         </section>
@@ -462,6 +475,23 @@ export function SettingsPanel({
             偏移 N = 前 N 页单独成页，从第 N+1 页开始两两配对（只在双页时生效）。
           </p>
         </section>
+
+        {/* =====================================================================
+            翻译 —— 整个漫画框/选区的直译。
+            ===================================================================== */}
+        <h2 className="settings-group">翻译</h2>
+
+        {translation ? (
+          <TranslationCard
+            settings={translation.settings}
+            loading={translation.loading}
+            onReload={translation.onReload}
+            onUpdate={translation.onUpdate}
+            onSetSecret={translation.onSetSecret}
+          />
+        ) : (
+          <section className="settings-card"><div className="detail-hint">翻译配置还没载入。</div></section>
+        )}
 
         {/* =====================================================================
             LLM —— 词卡分析用。

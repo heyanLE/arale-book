@@ -23,6 +23,7 @@ import { clampFontScale, readerAppearance, useBookSettings } from '../lib/reader
 import { WordCardPopup } from '../dict/WordCardPopup';
 import type { UseWordCardsResult } from '../dict/word-cards';
 import type { AnchorRect } from '../dict/WordCardPopup';
+import { ReaderEdgeTurns } from './ReaderEdgeTurns';
 
 export interface EpubReaderProps {
   book: BookRecord;
@@ -491,6 +492,15 @@ export function EpubReader({
           />
         )}
 
+        <ReaderEdgeTurns
+          direction={book.direction}
+          onBack={() => goToSpine(spineIndex - 1)}
+          onForward={() => goToSpine(spineIndex + 1)}
+          backDisabled={spineIndex <= 0}
+          forwardDisabled={spineIndex >= total - 1}
+          unit="章"
+        />
+
         {loading && <div className="reader-overlay">正在加载章节…</div>}
         {!loading && loadError !== null && (
           <div className="reader-overlay reader-overlay-error">
@@ -622,10 +632,21 @@ export function EpubReader({
           analyzingWord={popup.analyzingWord}
           llmProfileId={popup.llmProfileId}
           llmProfiles={wordCards.llmProfiles}
+          translationText={popup.translationText}
+          translationSourceReading={popup.translationSourceReading}
+          translating={popup.translating}
+          translationProfileId={popup.translationProfileId}
+          translationProfileName={popup.translationProfileName}
+          translationError={popup.translationError}
+          translationProfiles={wordCards.translationProfiles}
           lastError={popup.lastError}
           onAnalyze={(target) => wordCards.analyzeWord(popup.id, target)}
           onRemoveAnalysis={(target) => wordCards.removeAnalysis(popup.id, target)}
           onSelectLlmProfile={(profileId) => wordCards.selectLlmProfile(popup.id, profileId)}
+          onTranslate={() => wordCards.translatePopup(popup.id)}
+          onSelectTranslationProfile={(profileId) =>
+            wordCards.selectTranslationProfile(popup.id, profileId)
+          }
           selectionLength={popup.length}
           onClose={() => wordCards.closePopup(popup.id)}
           onTogglePin={() => wordCards.togglePin(popup.id)}

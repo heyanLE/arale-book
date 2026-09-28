@@ -159,7 +159,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
       }
       if (paths.length === 0) {
         // 连一个路径都解不出来（例如从浏览器拖来的虚拟文件）——给明确出路，别静默吞。
-        onStatus('拖进来的不是本地文件（拿不到路径），请用「＋ 导入」按钮选择');
+        onStatus('拖进来的不是本地文件（拿不到路径），请用「＋ 文件」按钮选择');
         return;
       }
       void importPaths(paths);
@@ -167,8 +167,8 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
     [importPaths, onStatus],
   );
 
-  const importViaDialog = useCallback(async () => {
-    const outcomes = await call('导入', () => api.library.importViaDialog());
+  const importViaDialog = useCallback(async (kind: 'files' | 'directory') => {
+    const outcomes = await call('导入', () => api.library.importViaDialog(kind));
     if (!outcomes) return;
     onStatus(summarizeImportOutcome(outcomes));
     if (outcomes.some((o) => o.ok)) onLibraryChanged();
@@ -296,7 +296,8 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
               allSeries={page.data?.allSeries ?? []}
               allAuthors={page.data?.allAuthors ?? []}
               tagCounts={tagCounts}
-              onImport={() => void importViaDialog()}
+              onImportFiles={() => void importViaDialog('files')}
+              onImportDirectory={() => void importViaDialog('directory')}
             />
           </div>
           <div

@@ -193,6 +193,12 @@ button:disabled {
   opacity: 0.45;
 }
 
+/* 翻页按钮使用软禁用：配对偏移切换的过渡帧仍能接住点击，边界动作本身会安全地 no-op。 */
+button[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.45;
+}
+
 :focus {
   outline: none;
 }
@@ -817,6 +823,9 @@ button:disabled {
 }
 
 .sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   flex: none;
   padding: 6px;
   border-top: 1px solid var(--border-soft);
@@ -1387,6 +1396,60 @@ button:disabled {
   background: var(--book-bg);
 }
 
+/* 阅读区左右边缘翻页：热区始终存在，提示只在靠近或键盘聚焦时出现。 */
+.reader-edge-turn {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  width: clamp(44px, 7vw, 88px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.reader-edge-turn.is-left {
+  left: 0;
+}
+
+.reader-edge-turn.is-right {
+  right: 0;
+}
+
+.reader-edge-turn > span {
+  display: inline-block;
+  font-size: 42px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75));
+}
+
+.reader-edge-turn.is-left:hover,
+.reader-edge-turn.is-left:focus-visible {
+  opacity: 1;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.42), transparent);
+}
+
+.reader-edge-turn.is-right:hover,
+.reader-edge-turn.is-right:focus-visible {
+  opacity: 1;
+  background: linear-gradient(270deg, rgba(0, 0, 0, 0.42), transparent);
+}
+
+.reader-edge-turn.is-disabled:hover {
+  opacity: 0;
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-edge-turn {
+    transition: none;
+  }
+}
+
 .epub-footer {
   display: flex;
   align-items: center;
@@ -1601,6 +1664,14 @@ button:disabled {
   cursor: text;
 }
 
+/* 一个气泡/旁白框的视觉边界。它不接管事件，下面的单行块继续负责精确拖选。 */
+.comic-text-group {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+
 /*
  * 鼠标悬停：**只描边、不填底色**。
  *
@@ -1609,8 +1680,7 @@ button:disabled {
  * hover = 一圈描边（提示这里可点可划），选区 = 文字底色块（表示已选中）。
  * 而且 OCR 框正好套在文字上，半透明底色会把画面里那行字压灰。
  */
-.comic-text-block:hover,
-.comic-text-block.is-hovered {
+.comic-text-group.is-hovered {
   border-color: var(--accent);
   background: transparent;
 }
@@ -2676,7 +2746,8 @@ button:disabled {
   color: var(--text-inverse);
 }
 
-/* ---- LLM 分析栏 ---- */
+/* ---- 翻译 / LLM 分析栏 ---- */
+.wordcard-translation,
 .wordcard-llm {
   margin-top: 10px;
   padding-top: 8px;
@@ -2766,16 +2837,34 @@ button:disabled {
    -------------------------------------------------------------------------- */
 
 .wordcard-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 60;
+  position: relative;
+  flex: 0 0 268px;
   width: 268px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
+}
+
+.wordcard-translation-text {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.wordcard-translation-reading {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: var(--ui-size-sm);
+}
+
+.wordcard-translation-reading > :first-child {
+  flex: 0 0 auto;
+  color: var(--text-faint);
 }
 
 .wordcard-panel-head {
@@ -2941,19 +3030,10 @@ button:disabled {
 }
 
 /* --------------------------------------------------------------------------
-   6.4 沉浸模式：工具栏浮在阅读区上，按边缘带显隐
+   6.4 沉浸模式：只保留阅读内容与右上角退出按钮
    -------------------------------------------------------------------------- */
 
-/*
- * 关键：**浮层，不是折叠**。
- *
- * 之前是把工具栏 transform 出去、把 reader-header/footer `display:none` —— 两者都会
- * 改变布局，于是"显示/隐藏工具栏"会让画面跳一下。沉浸模式要的是**阅读区恒定满窗**，
- * 所以这里把四条栏全部 `position: fixed` 覆盖在内容上：它们进不了文档流，阅读区
- * 从头到尾就是整个窗口大小，显隐只是浮层的透明度与位移。
- */
 .app.is-immersive .app-main {
-  /* 让位：四条栏都不再占位，阅读区直接顶到窗口上下边。 */
   height: 100vh;
 }
 
@@ -2962,56 +3042,42 @@ button:disabled {
 .app.is-immersive .reader-header,
 .app.is-immersive .comic-footer,
 .app.is-immersive .epub-footer {
+  display: none;
+}
+
+.immersive-exit-zone {
   position: fixed;
-  left: 0;
-  right: 0;
-  z-index: 40;
-  transition: transform 0.16s ease, opacity 0.16s ease;
-}
-
-.app.is-immersive .toolbar,
-.app.is-immersive .reader-header {
   top: 0;
+  right: 0;
+  z-index: 80;
+  width: 120px;
+  height: 76px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 10px;
 }
 
-.app.is-immersive .statusbar,
-.app.is-immersive .comic-footer,
-.app.is-immersive .epub-footer {
-  bottom: 0;
-}
-
-/* reader-header 紧贴在 toolbar 下面（两条都在顶部时不能重叠）。 */
-.app.is-immersive .reader-header {
-  top: var(--toolbar-h);
-}
-
-.app.is-immersive .comic-footer,
-.app.is-immersive .epub-footer {
-  bottom: var(--statusbar-h);
-}
-
-/* 默认收起：向上/向下移出视野，并且不可点 —— 否则鼠标扫过顶部会误触看不见的按钮。 */
-.app.is-immersive:not(.chrome-top) .toolbar,
-.app.is-immersive:not(.chrome-top) .reader-header {
-  transform: translateY(-120%);
+.immersive-exit {
+  height: 28px;
+  padding: 0 10px;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
   opacity: 0;
-  pointer-events: none;
+  transform: translateY(-5px);
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 
-.app.is-immersive:not(.chrome-bottom) .statusbar,
-.app.is-immersive:not(.chrome-bottom) .comic-footer,
-.app.is-immersive:not(.chrome-bottom) .epub-footer {
-  transform: translateY(120%);
-  opacity: 0;
-  pointer-events: none;
+.immersive-exit-zone:hover .immersive-exit,
+.immersive-exit:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app.is-immersive .toolbar,
-  .app.is-immersive .statusbar,
-  .app.is-immersive .reader-header,
-  .app.is-immersive .comic-footer,
-  .app.is-immersive .epub-footer {
+  .immersive-exit {
     transition: none;
   }
 }

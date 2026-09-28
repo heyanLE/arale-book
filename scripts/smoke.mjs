@@ -48,7 +48,11 @@ if (!existsSync(join(root, 'dist', 'main', 'index.js'))) {
 rmSync(userDataDir, { recursive: true, force: true });
 mkdirSync(userDataDir, { recursive: true });
 
-const electronBin = join(root, 'node_modules', '.bin', 'electron');
+const electronBin = process.platform === 'win32'
+  ? join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+  : join(root, 'node_modules', '.bin', 'electron');
+const electronEnv = { ...process.env };
+delete electronEnv.ELECTRON_RUN_AS_NODE;
 const stderrLines = [];
 const child = spawn(
   electronBin,
@@ -63,7 +67,7 @@ const child = spawn(
     '--disable-software-rasterizer',
     '--disable-dev-shm-usage',
   ],
-  { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] },
+  { cwd: root, env: electronEnv, stdio: ['ignore', 'pipe', 'pipe'] },
 );
 
 child.stdout.setEncoding('utf8');
@@ -177,11 +181,20 @@ try {
     if (!mounted) await delay(250);
   }
   check('渲染进程挂载了 React 应用（不是白屏）', mounted);
+  const importActions = await client.evaluate(`({
+    files: document.querySelector('[data-testid="toolbar-import-files"]')?.textContent.trim() ?? null,
+    directory: document.querySelector('[data-testid="toolbar-import-directory"]')?.textContent.trim() ?? null,
+  })`);
+  check(
+    'Windows 导入入口已拆成文件与文件夹两个按钮',
+    importActions?.files?.includes('文件') === true && importActions?.directory?.includes('文件夹') === true,
+    JSON.stringify(importActions),
+  );
   check('页面标题', (await client.evaluate('document.title')) !== '');
 
   check('preload 挂上了 window.arale', (await client.evaluate('typeof window.arale')) === 'object');
   const apiShape = await client.evaluate(
-    "['library','book','dict','paths','cards','llm','ocr','extensions'].every(k => typeof window.arale[k] === 'object') && ['info','list','importPaths','open','savePosition','remove'].every(m => typeof window.arale.library[m] === 'function') && ['list','add','update','remove'].every(m => typeof window.arale.cards[m] === 'function') && ['settings','update','setApiKey','analyze'].every(m => typeof window.arale.llm[m] === 'function')",
+    "['window','library','book','dict','paths','cards','llm','ocr','extensions'].every(k => typeof window.arale[k] === 'object') && typeof window.arale.window.setImmersive === 'function' && ['info','list','importPaths','open','savePosition','remove'].every(m => typeof window.arale.library[m] === 'function') && ['list','add','update','remove'].every(m => typeof window.arale.cards[m] === 'function') && ['settings','update','setApiKey','analyze'].every(m => typeof window.arale.llm[m] === 'function')",
   );
   check('window.arale 的 API 形状完整', apiShape === true);
 
@@ -802,6 +815,35 @@ try {
       const secondLabel = await pairLabel();
       check('偏移 1：接下来是第 2-3 页并排', secondLabel === '2–3/4' || secondLabel === '2-3/4', `label=${secondLabel}`);
 
+      // 回归：旧配对已经到书尾时，切换偏移会让“下一页”重新变得可用。
+      // select change 与 click 刻意放在同一个 JS 任务里，覆盖 React 尚未提交新 disabled/
+      // callback 的竞争窗口；用户快速操作时丢点击就是从这里来的。
+      await client.evaluate(`(() => {
+        const sel = document.querySelector('[data-testid="comic-spread-offset"]');
+        sel.value = '0';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      await delay(180);
+      await client.evaluate(`document.querySelector('[data-testid="comic-next"]')?.click()`);
+      await delay(180);
+      const oldEndLabel = await pairLabel();
+      check('偏移 0：先走到最后一个双页', oldEndLabel === '3–4/4' || oldEndLabel === '3-4/4', `label=${oldEndLabel}`);
+
+      await client.evaluate(`(() => {
+        const sel = document.querySelector('[data-testid="comic-spread-offset"]');
+        const next = document.querySelector('[data-testid="comic-next"]');
+        sel.value = '1';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        next?.click();
+      })()`);
+      await delay(220);
+      const immediateTurnLabel = await pairLabel();
+      check(
+        '切换偏移后立即点下一页不会丢点击',
+        immediateTurnLabel === '4/4',
+        `label=${immediateTurnLabel}`,
+      );
+
       // --- OCR 队列的 IPC 契约（此刻没有任务） ---
       const queueSnapshot = await client.evaluate('window.arale.ocr.queue()');
       check(
@@ -886,14 +928,14 @@ try {
       `window.arale.extensions.install(${JSON.stringify('ocr-arale_onnx_v1')})`,
     );
     check(
-      '★ 归档未发布（sha 为空）时安装被明确拒绝，且不去联网',
-      refused?.ok === false && /sha256|发布/.test(String(refused?.error)),
+      '★ 归档未发布时不联网安装（空 SHA 拒绝，或本地开发包直接短路）',
+      refused?.ok === false && /sha256|发布|开发包已直接加载|无需安装/.test(String(refused?.error)),
       JSON.stringify(refused),
     );
   }
 
   check(
-    '本机（macOS arm64）判为可安装',
+    `本机（${process.platform} ${process.arch}）判为可安装`,
     ankiEntry?.supported === true,
     JSON.stringify({ supported: ankiEntry?.supported, why: ankiEntry?.unsupportedReason }),
   );
@@ -1787,10 +1829,19 @@ try {
     }
     return new Promise((resolve) => setTimeout(() => {
       const p = document.querySelector('.wordcard-panel');
-      resolve(p ? { items: p.querySelectorAll('.wordcard-item').length } : null);
+      const reader = document.querySelector('.comic-reader, .epub-reader');
+      const panelRect = p?.getBoundingClientRect();
+      const readerRect = reader?.getBoundingClientRect();
+      resolve(p ? {
+        items: p.querySelectorAll('.wordcard-item').length,
+        panelLeft: panelRect?.left ?? null,
+        readerRight: readerRect?.right ?? null,
+        nonOverlapping: !!panelRect && !!readerRect && readerRect.right <= panelRect.left + 0.5,
+      } : null);
     }, 250));
   })()`);
   check('能展开词卡夹并列出保存过的卡', (panel?.items ?? 0) >= 1, JSON.stringify(panel));
+  check('词卡夹占据右侧布局空间，不再覆盖漫画', panel?.nonOverlapping === true, JSON.stringify(panel));
 
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,
@@ -1819,7 +1870,7 @@ try {
   }
   check('阅读器顶栏有沉浸开关', immersiveBtnReady === true);
 
-  const chromeOff = await client.evaluate(`(() => {
+  const immersive = await client.evaluate(`(() => {
     const app = document.querySelector('.app');
     const before = app.className;
     document.querySelector('[data-testid="reader-immersive-toggle"]')?.click();
@@ -1828,15 +1879,14 @@ try {
       const tick = () => {
         const cls = document.querySelector('.app').className;
         if (cls.includes('is-immersive') || tries++ > 40) {
-          const bar = document.querySelector('.toolbar');
+          const selectors = ['.toolbar', '.reader-header', '.comic-footer', '.statusbar'];
+          const exit = document.querySelector('[data-testid="immersive-exit"]');
           resolve({
             before,
             after: cls,
-            toolbarPosition: getComputedStyle(bar).position,
-            // 收起状态用 pointer-events 判定：transform/opacity 都有过渡，读到的可能是
-            // 动画中间值（identity 也会被误判成"已移出"）。pointer-events 是立即生效的，
-            // 而且它才是真正要紧的性质 —— 收起时不能误触到看不见的按钮。
-            toolbarPointerEvents: getComputedStyle(bar).pointerEvents,
+            displays: selectors.map((selector) => getComputedStyle(document.querySelector(selector)).display),
+            exitExists: !!exit,
+            exitOpacity: exit ? getComputedStyle(exit).opacity : null,
             mainHeight: document.querySelector('.app-main')?.getBoundingClientRect().height ?? 0,
             windowHeight: window.innerHeight,
           });
@@ -1848,92 +1898,55 @@ try {
     });
   })()`);
   check(
-    '沉浸模式：工具变浮层（不再占布局），阅读区拿满窗口高度',
-    chromeOff?.after.includes('is-immersive') === true &&
-      chromeOff.toolbarPosition === 'fixed' &&
-      Math.abs((chromeOff.mainHeight ?? 0) - (chromeOff.windowHeight ?? 0)) < 2,
-    JSON.stringify(chromeOff),
+    '沉浸模式：顶部、书籍栏和底栏全部隐藏，阅读区拿满窗口',
+    immersive?.after.includes('is-immersive') === true &&
+      immersive.displays?.every((display) => display === 'none') === true &&
+      Math.abs((immersive.mainHeight ?? 0) - (immersive.windowHeight ?? 0)) < 2,
+    JSON.stringify(immersive),
   );
   check(
-    '沉浸模式：收起时工具栏不可点击（不会误触看不见的按钮）',
-    chromeOff.after.includes('chrome-top') === false && chromeOff.toolbarPointerEvents === 'none',
-    JSON.stringify({ pointerEvents: chromeOff.toolbarPointerEvents, cls: chromeOff.after }),
+    '沉浸模式只保留一个默认隐藏的退出按钮',
+    immersive?.exitExists === true && Number(immersive.exitOpacity) === 0,
+    JSON.stringify({ exitExists: immersive?.exitExists, opacity: immersive?.exitOpacity }),
   );
 
-  // 鼠标移到顶部边缘带 → 顶部工具栏出现；移回中间 → 收起。
-  const edgeTrigger = await client.evaluate(`(async () => {
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    const cls = () => document.querySelector('.app').className;
-    // **轮询**而不是固定 sleep：应用刚起来/正忙时，React 的一次重渲染可能晚于 250ms，
-    // 于是「鼠标到边缘 → 工具栏出现」会偶发地量成没出现（这不是功能坏了）。要断言的是
-    // 「最终会到那个状态」，等它到就行。
-    const until = async (fn, ms = 2000) => {
-      const t0 = Date.now();
-      while (Date.now() - t0 < ms) { if (fn()) return true; await wait(50); }
-      return false;
-    };
-    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: 5 }));
-    await until(() => cls().includes('chrome-top'));
-    const topZone = cls();
-    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: window.innerHeight / 2 }));
-    await until(() => !cls().includes('chrome-top') && !cls().includes('chrome-bottom'));
-    const middle = cls();
-    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: window.innerHeight - 5 }));
-    await until(() => cls().includes('chrome-bottom'));
-    return { topZone, middle, bottomZone: cls() };
+  const immersiveSize = await client.evaluate(`({ width: window.innerWidth, height: window.innerHeight })`);
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: Math.max(1, immersiveSize.width - 8),
+    y: 8,
+  });
+  await delay(180);
+  const exitHover = await client.evaluate(`(() => {
+    const exit = document.querySelector('[data-testid="immersive-exit"]');
+    return exit ? { opacity: getComputedStyle(exit).opacity, text: exit.textContent.trim() } : null;
   })()`);
   check(
-    '沉浸模式：鼠标到顶部/底部边缘带才显形，回中间就收',
-    edgeTrigger.topZone.includes('chrome-top') &&
-      !edgeTrigger.middle.includes('chrome-top') &&
-      !edgeTrigger.middle.includes('chrome-bottom') &&
-      edgeTrigger.bottomZone.includes('chrome-bottom'),
-    JSON.stringify(edgeTrigger),
+    '鼠标靠近右上角时才显示“退出沉浸”按钮',
+    Number(exitHover?.opacity) > 0.9 && exitHover?.text === '退出沉浸',
+    JSON.stringify(exitHover),
   );
-  const chromeBack = await client.evaluate(`(() => {
-    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 300, clientY: 300 }));
-    return new Promise((resolve) => setTimeout(() => resolve(
-      document.querySelector('.app').classList.contains('chrome-hidden')
-    ), 250));
-  })()`);
-  check('沉浸模式：鼠标一动工具栏就回来', chromeBack === false, String(chromeBack));
 
-  // ★ 「沉浸模式下翻页也不要出现」：翻页键要把页面翻过去，但**不能**把工具栏顶出来。
-  //   守的是本轮修的 bug：`onKey` 原本对任何按键都把顶栏露出来，于是按 ← / → 翻页时
-  //   工具栏每页闪一次——而翻页键恰好是阅读器里按得最多的键。
-  //   同时对照一个命令键（+ 缩放）：它**应该**露出来，否则「什么都没弹」也会让这条过。
-  const turnQuiet = await client.evaluate(`(async () => {
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    const cls = () => document.querySelector('.app').className;
-    const key = (k) => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
-      window.dispatchEvent(new KeyboardEvent('keyup', { key: k, bubbles: true }));
-    };
-    // 先把指针放到屏幕中间（离开上下边缘带），再按键
-    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 400, clientY: Math.round(window.innerHeight / 2) }));
-    await wait(260);
-    const before = cls();
-    // 翻页键：**必须等一段**才能断言「它没把工具栏顶出来」（不能轮询一个「不出现」）。
-    key('ArrowLeft');
-    await wait(600);
-    const afterTurn = cls();
-    // 命令键：应该出现，所以轮询等它（等的是「最终会到」，不是「立刻到」）。
-    key('+');
-    const t0 = Date.now();
-    while (Date.now() - t0 < 2000 && !cls().includes('chrome-top')) await wait(50);
-    return { before, afterTurn, afterCommand: cls() };
-  })()`);
+  const nativeFullscreen = await client.evaluate(`window.arale.window.setImmersive(true)`);
   check(
-    '★ 沉浸模式：翻页键不会把工具栏顶出来（命令键仍然会）',
-    !turnQuiet.afterTurn.includes('chrome-top') &&
-      !turnQuiet.afterTurn.includes('chrome-bottom') &&
-      turnQuiet.afterCommand.includes('chrome-top'),
-    JSON.stringify(turnQuiet),
+    'Windows 沉浸模式隐藏系统标题栏（原生全屏）',
+    process.platform !== 'win32' || nativeFullscreen === true,
+    String(nativeFullscreen),
   );
 
-  // 关掉，别影响后面
-  await client.evaluate(`document.querySelector('[data-testid="reader-immersive-toggle"]')?.click()`);
-  await delay(200);
+  // 用唯一的右上角按钮退出，别影响后面。
+  await client.evaluate(`document.querySelector('[data-testid="immersive-exit"]')?.click()`);
+  await delay(300);
+  const immersiveExit = await client.evaluate(`({
+    active: document.querySelector('.app').classList.contains('is-immersive'),
+    exitExists: !!document.querySelector('[data-testid="immersive-exit"]'),
+    toolbarDisplay: getComputedStyle(document.querySelector('.toolbar')).display,
+  })`);
+  check(
+    '点击右上角按钮退出沉浸并恢复工具栏',
+    immersiveExit.active === false && immersiveExit.exitExists === false && immersiveExit.toolbarDisplay !== 'none',
+    JSON.stringify(immersiveExit),
+  );
 
   // 底部那行操作提示**整个去掉**了（用户：很突兀、没意义）。
   // 断言它不在，而不是「透明」——透明只是藏起来，DOM 还在就会挡视线、也可能被误点。

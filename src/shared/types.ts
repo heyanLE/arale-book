@@ -730,6 +730,57 @@ export interface WordCardDraft {
 }
 
 // ---------------------------------------------------------------------------
+// 翻译（多提供商）
+// ---------------------------------------------------------------------------
+
+export type TranslationProviderId =
+  | 'bing'
+  | 'microsoft'
+  | 'deepl'
+  | 'google'
+  | 'baidu'
+  | 'libretranslate';
+
+export interface TranslationProfile {
+  id: string;
+  name: string;
+  provider: TranslationProviderId;
+  /** 自定义服务地址；留空时使用该提供商的官方默认地址。 */
+  baseUrl: string;
+  /** Microsoft 需要；其他提供商忽略。 */
+  region: string;
+  /** 百度的 App ID；其他提供商忽略。 */
+  appId: string;
+  /** 主进程是否已经保存密钥；密钥明文永不经过 IPC 返回。 */
+  hasSecret: boolean;
+}
+
+export interface TranslationSettings {
+  profiles: TranslationProfile[];
+  activeProfileId: string | null;
+  targetLanguage: 'zh-Hans' | 'zh-Hant' | 'en';
+}
+
+export interface TranslationRequest {
+  text: string;
+  sourceLanguage?: string;
+  targetLanguage?: TranslationSettings['targetLanguage'];
+  profileId?: string;
+}
+
+export interface TranslationResult {
+  ok: boolean;
+  text: string;
+  /** 翻译提供商返回的原文读音；没有时为空串。 */
+  sourceReading: string;
+  profileName: string;
+  provider: TranslationProviderId | '';
+  sourceLanguage: string;
+  targetLanguage: string;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // LLM（chat completions 兼容）
 // ---------------------------------------------------------------------------
 

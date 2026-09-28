@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
-import type { LlmSettings } from '@shared/types';
+import type { LlmSettings, TranslationSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { DEFAULT_APP_DEFAULTS } from '@shared/defaults';
 import type {
@@ -29,6 +29,7 @@ import {
   api,
   call,
   notifyMain,
+  run,
   subscribeApiErrors,
   summarizeImportOutcome,
   useAsync,
@@ -45,30 +46,6 @@ import { ReaderView } from './views/ReaderView';
 import { SegmentView } from './views/SegmentView';
 
 export type ViewName = 'library' | 'reader' | 'settings' | 'segments';
-
-/**
- * 沉浸模式下**按了也不弹工具栏**的键。
- *
- * 只改变阅读位置（翻页 / 跳转）或只关掉浮层的键，动作本身就有即时反馈——画面翻了、
- * 卡片关了。工具栏跟着一起冒出来纯属打扰：用户报的正是「沉浸模式下按 ← / → 翻页，
- * 工具栏每翻一页闪一次」。而翻页恰恰是阅读器里按得最多的键，所以这个「露一下」的
- * 待遇只能留给真正会改状态的命令键（缩放、竖排、双页、字号…）。
- *
- * `Space` 与 `Spacebar` 都要列：不同环境给的名字不一样。
- */
-const QUIET_KEYS = new Set([
-  'ArrowLeft',
-  'ArrowRight',
-  'ArrowUp',
-  'ArrowDown',
-  'PageUp',
-  'PageDown',
-  'Home',
-  'End',
-  ' ',
-  'Spacebar',
-  'Escape',
-]);
 
 export function App(): JSX.Element {
   const settings = useSettings();
@@ -119,58 +96,18 @@ export function App(): JSX.Element {
   /** LLM 配置（含 API key 的存在性，不含 key 本身）。 */
   const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
+  /** 翻译配置（只包含密钥是否存在，不包含密钥本身）。 */
+  const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
+  const [translationLoading, setTranslationLoading] = useState(false);
   /** 主进程侧默认值（新书阅读方向）。 */
   const [appDefaults, setAppDefaults] = useState<AppDefaults>(DEFAULT_APP_DEFAULTS);
 
-  /**
-   * 沉浸模式：鼠标停在上/下哪条边缘带上。
-   *
-   * 只在阅读器里生效——书库里工具栏是导航（切视图、导入、搜索），藏起来就没法用了。
-   *
-   * 两个刻意的决定：
-   * 1. **按边缘带触发，不按"鼠标一动就显形"**。后者的结果是一边拖动画布一边工具栏
-   *    在眼前反复闪，比一直显示还烦。现在只有指针进到上下各 72px 的带子里才出现，
-   *    离开就收 —— 和视频播放器一致，用户想点工具栏时自然会把鼠标挪到边上。
-   * 2. **工具栏是浮层，不占布局**。所以阅读区在沉浸模式下是**满窗**的，而且是恒定的：
-   *    显示/隐藏工具栏不会让画面跳一下（这一点比"藏起来"重要得多）。
-   */
-  const EDGE_ZONE_PX = 72;
-  const [chromeZone, setChromeZone] = useState<'none' | 'top' | 'bottom'>('none');
+  /** 沉浸只在阅读器生效；Windows 同步进原生全屏以隐藏系统标题栏。 */
   const immersiveActive = settings.autoHideChrome && view === 'reader';
 
   useEffect(() => {
-    if (!immersiveActive) {
-      setChromeZone('none');
-      return;
-    }
-    const onMove = (event: MouseEvent) => {
-      const zone =
-        event.clientY <= EDGE_ZONE_PX
-          ? 'top'
-          : event.clientY >= window.innerHeight - EDGE_ZONE_PX
-            ? 'bottom'
-            : 'none';
-      // 只在跨带时 setState：mousemove 一次拖动能触发几百次，无条件 setState 会让
-      // 整个应用跟着重渲染。
-      setChromeZone((current) => (current === zone ? current : zone));
-    };
-    // 键盘操作时把上边那条露出来（纯键盘用户不该摸黑按快捷键）。
-    // **翻页键与关闭键除外**（`QUIET_KEYS`）：翻页本身就在眼前发生，工具栏跟着每翻
-    // 一页闪一次才是真打扰。
-    const onKey = (event: KeyboardEvent) => {
-      if (QUIET_KEYS.has(event.key)) return;
-      setChromeZone((current) => (current === 'none' ? 'top' : current));
-    };
-    window.addEventListener('mousemove', onMove, { passive: true });
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('keydown', onKey);
-    };
+    run('切换沉浸窗口', () => api.window.setImmersive(immersiveActive));
   }, [immersiveActive]);
-
-  const showTop = !immersiveActive || chromeZone === 'top';
-  const showBottom = !immersiveActive || chromeZone === 'bottom';
 
   /**
    * 分词状态。
@@ -372,6 +309,33 @@ export function App(): JSX.Element {
     }
   }, []);
 
+  const loadTranslation = useCallback(async () => {
+    setTranslationLoading(true);
+    const result = await call('读取翻译配置', () => api.translation.settings());
+    setTranslationLoading(false);
+    if (result) setTranslationSettings(result);
+  }, []);
+
+  useEffect(() => {
+    void loadTranslation();
+  }, [loadTranslation]);
+
+  const updateTranslation = useCallback(
+    async (patch: Parameters<typeof api.translation.update>[0]) => {
+      const next = await call('保存翻译配置', () => api.translation.update(patch));
+      if (next) setTranslationSettings(next);
+    },
+    [],
+  );
+
+  const setTranslationSecret = useCallback(async (profileId: string, secret: string | null) => {
+    const next = await call('保存翻译密钥', () => api.translation.setSecret(profileId, secret));
+    if (next) {
+      setTranslationSettings(next);
+      setStatus(secret === null ? '已清除翻译密钥' : '翻译密钥已保存');
+    }
+  }, []);
+
   const refreshExtensions = useCallback(async () => {
     setExtensionsLoading(true);
     const result = await call('刷新扩展清单', () => api.extensions.refresh());
@@ -448,9 +412,9 @@ export function App(): JSX.Element {
   // 操作
   // ------------------------------------------------------------------
 
-  const importViaDialog = useCallback(async () => {
+  const importViaDialog = useCallback(async (kind: 'files' | 'directory') => {
     setBusy(true);
-    const outcomes = await call('导入', () => api.library.importViaDialog());
+    const outcomes = await call('导入', () => api.library.importViaDialog(kind));
     setBusy(false);
     if (!outcomes) return;
     setStatus(summarizeImportOutcome(outcomes));
@@ -498,7 +462,7 @@ export function App(): JSX.Element {
   useShellCommand((command) => {
     switch (command) {
       case 'import':
-        void importViaDialog();
+        void importViaDialog('files');
         break;
       case 'settings':
         openSettings();
@@ -583,8 +547,6 @@ export function App(): JSX.Element {
       className={[
         'app',
         immersiveActive ? 'is-immersive' : '',
-        showTop ? 'chrome-top' : '',
-        showBottom ? 'chrome-bottom' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -619,10 +581,25 @@ export function App(): JSX.Element {
         busy={busy}
         theme={settings.theme}
         onCycleTheme={cycleTheme}
-        onImport={() => void importViaDialog()}
+        onImportFiles={() => void importViaDialog('files')}
+        onImportDirectory={() => void importViaDialog('directory')}
         onOpenSettings={openSettings}
         onLeaveReader={leaveReader}
       />
+
+      {immersiveActive && (
+        <div className="immersive-exit-zone">
+          <button
+            type="button"
+            className="btn immersive-exit"
+            onClick={() => updateSettings({ autoHideChrome: false })}
+            title="退出沉浸模式"
+            data-testid="immersive-exit"
+          >
+            退出沉浸
+          </button>
+        </div>
+      )}
 
       <div className="app-main">
         {view === 'library' && (
@@ -676,6 +653,13 @@ export function App(): JSX.Element {
               onReload: () => void loadLlm(),
               onUpdate: (patch) => void updateLlm(patch),
               onSetApiKey: (profileId, apiKey) => void setLlmApiKey(profileId, apiKey),
+            }}
+            translation={{
+              settings: translationSettings,
+              loading: translationLoading,
+              onReload: () => void loadTranslation(),
+              onUpdate: (patch) => void updateTranslation(patch),
+              onSetSecret: (profileId, secret) => void setTranslationSecret(profileId, secret),
             }}
             extensions={{
               statuses: extensions.statuses,

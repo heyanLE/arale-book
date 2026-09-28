@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { IMPORTABLE_EXTENSIONS, IPC } from '../src/shared/ipc';
+import { IMPORTABLE_EXTENSIONS, IPC, importDialogProperties } from '../src/shared/ipc';
 import { NATIVE_ONLY_EXTENSIONS } from '../src/shared/native-protocol';
 import { COMIC_IMAGE_EXTENSIONS } from '../src/core/comic/pages';
 import { detectImportKind } from '../src/main/library/importer';
@@ -45,6 +45,18 @@ test('对话框过滤器覆盖导入器接受的全部扩展名（防两张表�
   const all = new Set(IMPORTABLE_EXTENSIONS.all as readonly string[]);
   const notInAll = [...ACCEPTED].filter((ext) => !all.has(ext));
   assert.deepEqual(notInAll, [], `这些格式不在「电子书与漫画」过滤器里：${notInAll.join(', ')}`);
+});
+
+test('Windows 导入文件与导入文件夹使用两个互斥的对话框模式', () => {
+  assert.deepEqual(importDialogProperties('files'), ['openFile', 'multiSelections']);
+  assert.deepEqual(importDialogProperties('directory'), ['openDirectory']);
+  for (const kind of ['files', 'directory'] as const) {
+    const properties = importDialogProperties(kind);
+    assert.ok(
+      !(properties.includes('openFile') && properties.includes('openDirectory')),
+      `${kind} 对话框不能同时设置 openFile 与 openDirectory`,
+    );
+  }
 });
 
 test('原生解包格式全部在可导入清单里', () => {

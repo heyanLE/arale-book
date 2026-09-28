@@ -25,7 +25,8 @@ const debug = args.includes('--debug');
 
 function run(label, command, commandArgs, options = {}) {
   process.stdout.write(`\n▸ ${label}\n`);
-  const result = spawnSync(command, commandArgs, { cwd: root, stdio: 'inherit', ...options });
+  const shell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(command);
+  const result = spawnSync(command, commandArgs, { cwd: root, stdio: 'inherit', shell, ...options });
   if (result.status !== 0) {
     console.error(`\n✗ ${label} 失败（exit ${result.status}）`);
     process.exit(result.status ?? 1);
@@ -33,7 +34,8 @@ function run(label, command, commandArgs, options = {}) {
 }
 
 // 1) 编译应用
-run('编译应用（main + preload + renderer）', 'npm', ['run', 'build']);
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+run('编译应用（main + preload + renderer）', npmCommand, ['run', 'build']);
 
 // 2) Rust sidecar —— 打包前必须已经构建
 const exeName = process.platform === 'win32' ? 'arale-native.exe' : 'arale-native';
@@ -63,12 +65,16 @@ if (debug) {
   const target = `${process.platform}-${process.arch}`;
   const devDir = join(root, 'engines', 'arale_onnx_v1', 'build', `dev-${target}`);
   const resources = [
-    { from: 'native/arale-native/target/release/arale-native', to: 'native/arale-native' },
-    { from: 'native/arale-vision-ocr/arale-vision-ocr', to: 'native/arale-vision-ocr' },
-    { from: 'native/arale-winrt-ocr.ps1', to: 'native/arale-winrt-ocr.ps1' },
+    { from: `native/arale-native/target/release/${exeName}`, to: `native/${exeName}` },
     { from: 'resources/dictionaries', to: 'dictionaries' },
     { from: 'engines/repositories/default.jsonl', to: 'debug-engines/default.jsonl' },
   ];
+  if (process.platform === 'darwin') {
+    resources.push({ from: 'native/arale-vision-ocr/arale-vision-ocr', to: 'native/arale-vision-ocr' });
+  }
+  if (process.platform === 'win32') {
+    resources.push({ from: 'native/arale-winrt-ocr.ps1', to: 'native/arale-winrt-ocr.ps1' });
+  }
   if (existsSync(join(devDir, 'extension.json'))) {
     resources.push({ from: devDir, to: 'debug-engines/ocr-arale_onnx_v1' });
   } else {
@@ -89,7 +95,8 @@ if (args.includes('--dir')) builderArgs.push('--dir');
 builderArgs.push('--publish', 'never');
 
 try {
-  run('electron-builder 装箱', join(root, 'node_modules', '.bin', 'electron-builder'), builderArgs);
+  const builderName = process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder';
+  run('electron-builder 装箱', join(root, 'node_modules', '.bin', builderName), builderArgs);
 } finally {
   if (debugConfig) rmSync(debugConfig, { force: true });
 }
@@ -100,18 +107,23 @@ if (process.platform === 'darwin' && !args.includes('--dir') && !debug) {
   run('打 DMG（hdiutil）', 'node', ['scripts/make-dmg.mjs']);
 }
 
-process.stdout.write(
-  [
-    '',
-    '✓ 打包完成',
-    `  产物目录：${join(root, debug ? 'release-debug' : 'release')}`,
-    ...(!args.includes('--dir') ? ['    · ARaLeBook-<版本>-arm64-mac.zip    压缩包（解压即用）'] : []),
-    ...(!args.includes('--dir') && !debug ? ['    · ARaLeBook-<版本>-arm64.dmg        磁盘映像（拖进「应用程序」）'] : []),
-    '    · mac-arm64/ARaLeBook.app           解包后的应用本体',
-    '',
-    '  macOS 首次打开若提示「已损坏」或「无法验证开发者」（因为没签名）：',
-    '    xattr -dr com.apple.quarantine "/Applications/ARaLeBook.app"',
-    '  或者右键点图标 →「打开」。',
-    '',
-  ].join('\n'),
-);
+const targetPlatform = args.includes('--win') ? 'win32'
+  : args.includes('--mac') ? 'darwin'
+    : args.includes('--linux') ? 'linux'
+      : process.platform;
+const outputs = targetPlatform === 'win32'
+  ? [
+      ...(!args.includes('--dir') ? ['    · ARaLeBook-<版本>-setup.exe       NSIS 安装包'] : []),
+      '    · win-unpacked/ARaLeBook.exe      解包后的应用本体',
+    ]
+  : targetPlatform === 'darwin'
+    ? [
+        ...(!args.includes('--dir') ? ['    · ARaLeBook-<版本>-arm64-mac.zip  压缩包（解压即用）'] : []),
+        ...(!args.includes('--dir') && !debug ? ['    · ARaLeBook-<版本>-arm64.dmg      磁盘映像（拖进「应用程序」）'] : []),
+        '    · mac-arm64/ARaLeBook.app         解包后的应用本体',
+      ]
+    : [
+        ...(!args.includes('--dir') ? ['    · ARaLeBook-<版本>.AppImage       AppImage'] : []),
+        '    · linux-unpacked/ARaLeBook        解包后的应用本体',
+      ];
+process.stdout.write(['', '✓ 打包完成', `  产物目录：${join(root, debug ? 'release-debug' : 'release')}`, ...outputs, ''].join('\n'));

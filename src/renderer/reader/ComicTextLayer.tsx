@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
 import type { Box, PageText, TextBlock } from '@shared/types';
+import { buildContextGroups } from '@core/comic/context-groups';
 import { boundaryAt, charIndexAt, charRangeRects } from '@core/comic/text-geometry';
 import {
   SELECT_GAP_TOLERANCE_PX,
@@ -118,7 +119,8 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
     holdSelection,
   } = props;
   const layerRef = useRef<HTMLDivElement>(null);
-  const [hovered, setHovered] = useState<number | null>(null);
+  /** hover 展示整个上下文框；单行块仍留在下面负责精确点击与拖选。 */
+  const [hoveredGroup, setHoveredGroup] = useState<number | null>(null);
   /**
    * 正在拖选时的**锚点与当前点**（都是「方块下标 + 字符边界」）。
    *
@@ -168,6 +170,18 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
     () => (text === null ? [] : text.blocks.map((block) => boxToStyle(block, scaleX, scaleY))),
     [text, scaleX, scaleY],
   );
+
+  const contextGroups = useMemo(
+    () => (text === null ? [] : buildContextGroups(text.blocks)),
+    [text],
+  );
+  const groupByBlock = useMemo(() => {
+    const out = new Map<number, (typeof contextGroups)[number]>();
+    for (const group of contextGroups) {
+      for (const index of group.indices) out.set(index, group);
+    }
+    return out;
+  }, [contextGroups]);
 
   /**
    * 拖选中的每一块各画哪一段。**由锚点/当前点现算**，不存在 state 里：区间只有一套
@@ -337,28 +351,47 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
 
   /** 普通点击（没拖动）→ 沿用原来的「点哪查哪 + 最长匹配」逻辑。 */
   const handleClick = useCallback(
-    (block: TextBlock) => (event: React.MouseEvent<HTMLDivElement>) => {
+    (block: TextBlock, blockIndex: number) => (event: React.MouseEvent<HTMLDivElement>) => {
       if (movedRef.current) {
         movedRef.current = false;
         return;
       }
       const point = toImage(event.clientX, event.clientY);
-      const context = block.lines.join('');
+      const group = groupByBlock.get(blockIndex);
+      const context = group?.text ?? block.lines.join('');
       if (context.length === 0) return;
-      const boxRect = event.currentTarget.getBoundingClientRect();
+      const offset = (group?.starts[blockIndex] ?? 0) + charIndexAt(block, point.x, point.y);
+      const layerRect = layerRef.current?.getBoundingClientRect();
+      const groupBox = group?.box ?? block.box;
+      const fallback = event.currentTarget.getBoundingClientRect();
+      const anchor = layerRect === undefined
+        ? { x: fallback.left, y: fallback.top, width: fallback.width, height: fallback.height }
+        : {
+            x: layerRect.left + groupBox[0] * scaleX,
+            y: layerRect.top + groupBox[1] * scaleY,
+            width: Math.max(0, groupBox[2] - groupBox[0]) * scaleX,
+            height: Math.max(0, groupBox[3] - groupBox[1]) * scaleY,
+          };
       onLookup({
         context,
-        offset: charIndexAt(block, point.x, point.y),
-        anchor: { x: boxRect.left, y: boxRect.top, width: boxRect.width, height: boxRect.height },
+        offset,
+        anchor,
       });
     },
-    [onLookup, toImage],
+    [groupByBlock, onLookup, scaleX, scaleY, toImage],
   );
 
   if (text === null || text.blocks.length === 0) return null;
 
   return (
     <div ref={layerRef} className="comic-text-layer">
+      {contextGroups.map((group) => (
+        <div
+          key={`group-${group.id}`}
+          className={`comic-text-group${hoveredGroup === group.id ? ' is-hovered' : ''}`}
+          style={boxToRectStyle(group.box, scaleX, scaleY)}
+        />
+      ))}
       {text.blocks.map((block, index) => {
         const style = boxes[index];
         if (!style) return null;
@@ -369,15 +402,19 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
             key={index}
             // 命中测试靠这个属性认下标（DOM 顺序与 blocks 顺序不一定一致，别靠位置猜）。
             data-block-index={index}
-            className={`comic-text-block${hovered === index ? ' is-hovered' : ''}`}
+            className="comic-text-block"
             style={style}
-            onMouseEnter={() => setHovered(index)}
-            onMouseLeave={() => setHovered((current) => (current === index ? null : current))}
+            onMouseEnter={() => setHoveredGroup(groupByBlock.get(index)?.id ?? null)}
+            onMouseLeave={() =>
+              setHoveredGroup((current) =>
+                current === (groupByBlock.get(index)?.id ?? null) ? null : current,
+              )
+            }
             onPointerDown={handlePointerDown(block, index)}
             onPointerMove={handlePointerMove(block)}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            onClick={handleClick(block)}
+            onClick={handleClick(block, index)}
           >
             {/* 选区高亮：方块本身是空的命中区（没有文字节点），所以选中的范围
                 只能由我们按几何画出来，没法靠浏览器原生 ::selection。 */}
@@ -442,6 +479,16 @@ function boxToStyle(block: TextBlock, scaleX: number, scaleY: number): React.CSS
     height: `${Math.max(0, y2 - y1) * scaleY}px`,
     fontSize: `${Math.max(1, block.fontSize * scaleY)}px`,
     writingMode: block.vertical ? 'vertical-rl' : 'horizontal-tb',
+  };
+}
+
+function boxToRectStyle(box: Box, scaleX: number, scaleY: number): React.CSSProperties {
+  const [x1, y1, x2, y2] = box;
+  return {
+    left: `${x1 * scaleX}px`,
+    top: `${y1 * scaleY}px`,
+    width: `${Math.max(0, x2 - x1) * scaleX}px`,
+    height: `${Math.max(0, y2 - y1) * scaleY}px`,
   };
 }
 

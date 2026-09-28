@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   arale-winrt-ocr —— 用 Windows.Media.Ocr 做 OCR，输出与应用约定的 NDJSON。
 
@@ -29,11 +29,7 @@
   代价是启动比原生二进制慢（几百毫秒），对一本几百页的任务完全可以忽略。
 #>
 
-[CmdletBinding()]
-param(
-  [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$Rest
-)
+$Rest = @($args)
 
 $ErrorActionPreference = 'Stop'
 
@@ -69,10 +65,10 @@ function Await($WinRtTask, $ResultType) {
 }
 
 # 加载 WinRT 类型。少了这一步后面每个类型名都会报「找不到类型」。
-[Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
-[Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
-[Windows.Storage.StorageFile, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
-[Windows.Globalization.Language, Windows.Foundation, ContentType = WindowsRuntime] | Out-Null
+[Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+[Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+[Windows.Storage.StorageFile, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+[Windows.Globalization.Language, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
 
 function New-OcrEngine {
   param([string[]]$Languages)

@@ -1,5 +1,3 @@
-
-
 <a href="https://github.com/heyanLE/arale-book">
     <img src="./assets/arale-icons-v2/app/256.png" alt="ARaLeBook logo" title="あられブック · ARaLeBook" width="80"/>
 </a>
@@ -114,4 +112,3 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see &lt;https://www.gnu.org/licenses/&gt;.
 </pre>
-

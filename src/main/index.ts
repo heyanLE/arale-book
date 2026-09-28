@@ -17,10 +17,12 @@ import { DictionaryService } from './dict/service';
 import { installBundledDictionaries } from './dict/bundled';
 import { registerIpc } from './ipc';
 import { LibraryStore, PositionStore } from './library/store';
+import { migrateLibraryPagePathsToAscii } from './library/ascii-paths';
 import { installMenu } from './menu';
 import { OpenFileQueue, openFilesFromArgv } from './open-files';
 import { ExtensionService } from './extensions/service';
 import { LlmService } from './llm/service';
+import { TranslationService } from './translation/service';
 import { setImportDefaults } from './library/importer';
 import { readAppDefaults } from './settings';
 import { OcrService } from './ocr/service';
@@ -36,6 +38,7 @@ import {
   systemOcrToolDirs,
   bundledDictionariesDir,
   llmSettingsPath,
+  translationSettingsPath,
   preloadPath,
   rendererIndexPath,
   settingsPath,
@@ -123,6 +126,9 @@ async function bootstrap(): Promise<void> {
   setImportDefaults(readAppDefaults(settingsPath()));
   const store = new LibraryStore();
   store.load();
+  // OpenCV on Windows cannot reliably open CJK paths. This is idempotent: old
+  // libraries migrate once, while later starts only scan already-ASCII paths.
+  await migrateLibraryPagePathsToAscii(store);
   positions = new PositionStore();
   positions.load();
 
@@ -177,6 +183,7 @@ async function bootstrap(): Promise<void> {
 
   // LLM：给词卡做分析。配置里含 API key，所以走独立的 llm.json。
   const llm = new LlmService({ settingsFile: llmSettingsPath() });
+  const translation = new TranslationService({ settingsFile: translationSettingsPath() });
 
   // 分词：同样是可选能力，同样在后台跑。文本来源按格式分两条。
   const segment = new SegmentService({
@@ -243,7 +250,7 @@ async function bootstrap(): Promise<void> {
   });
 
   installBookProtocol((bookId) => store.get(bookId));
-  registerIpc({ store, positions, dict, ocr, segment, extensions, llm });
+  registerIpc({ store, positions, dict, ocr, segment, extensions, llm, translation });
 
   // 命令行里带的文件（Windows/Linux）。此时窗口还没建，队列会先攒着，
   // 等 `did-finish-load` 再派发。

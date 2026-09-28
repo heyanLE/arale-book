@@ -80,7 +80,7 @@ test('工具栏用的是素材头像，而不是「あ」字占位块', () => {
 
 test('打包配置指向的是这三张（mac icns / win ico / linux png）', () => {
   const yml = fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8');
-  assert.match(yml, /mac:\n(?:.|\n)*?icon: build\/icon\.icns/, 'mac.icon');
-  assert.match(yml, /win:\n(?:.|\n)*?icon: build\/icon\.ico/, 'win.icon（多尺寸 ico，比现场转 png 清楚）');
-  assert.match(yml, /linux:\n(?:.|\n)*?icon: build\/icon\.png/, 'linux.icon');
+  assert.match(yml, /mac:\r?\n[\s\S]*?icon: build\/icon\.icns/, 'mac.icon');
+  assert.match(yml, /win:\r?\n[\s\S]*?icon: build\/icon\.ico/, 'win.icon（多尺寸 ico，比现场转 png 清楚）');
+  assert.match(yml, /linux:\r?\n[\s\S]*?icon: build\/icon\.png/, 'linux.icon');
 });

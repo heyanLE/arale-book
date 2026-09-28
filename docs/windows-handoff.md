@@ -78,7 +78,7 @@ Push-Location $bundle
 Pop-Location
 ```
 
-`--probe` 是 Windows 兼容性工作的第一个验收点，尚未在 Windows 上通过。若失败，先处理下面的已知问题；不要从系统 Python 安装包来掩盖自包含运行时的问题。源文件应修改 `engines/arale_onnx_v1/python/`，再重跑 `build.mjs --debug`，不要只改生成目录 `build/dev-win32-x64/ocr/`。
+`--probe` 是 Windows 兼容性工作的第一个验收点；2026-09-26 已在 Windows 11 build 26200 通过。若迁移到别的机器失败，仍应先处理下面的已知问题；不要从系统 Python 安装包来掩盖自包含运行时的问题。源文件应修改 `engines/arale_onnx_v1/python/`，再重跑 `build.mjs --debug`，不要只改生成目录 `build/dev-win32-x64/ocr/`。
 
 ## 4. 应用依赖和原生解包器
 
@@ -93,14 +93,14 @@ npm test
 npm start
 ```
 
-此处 Rust 只用于 `.rar/.7z` 解包器，OCR 本身是包内 Python + ORT。暂用上述直接 cargo 命令：现有 `scripts/build-native.mjs` / `test-native.mjs` 仍假设 Mac 上的 `.rust/cargo/bin/cargo` 和冒号 PATH 分隔符，需要在 Windows 修正。
+此处 Rust 只用于 `.rar/.7z` 解包器，OCR 本身是包内 Python + ORT。`scripts/build-native.mjs` / `test-native.mjs` 已支持仓库 `.rust/` 和系统 Cargo，并使用平台 PATH 分隔符；Windows 上 `npm run build:native` 与 50 项 Rust 测试均已通过。
 
 ## 5. Windows 待修复与验收
 
-1. **嵌入式 Python 搜索路径**：当前 `python312._pth` 只列标准库、`.`、`..\engine` 和 `..\`，没有 `..\ocr`。需在 Windows 检查 `mokuro_compat` 能否导入；若失败，在 `prepare-runtime.mjs` 中生成正确的 `_pth`（包含 `..\ocr`），修复要落回源码/运行时准备流程。
+1. **嵌入式 Python 搜索路径**：2026-09-26 在 Windows 11 build 26200 复现 `mokuro_compat` 导入失败；`prepare-runtime.mjs` 已改为校验唯一的 `python*._pth` 并补入 `..\ocr`。重新生成 debug 引擎后，包内 `--probe` 返回 `ok: true`。旧迁移 ZIP 自身仍缺该行，恢复后必须用修正过的 runtime 重新构建，不能直接把旧 ZIP 当作已修复发布物。
 2. **VC++ 运行库**：新 headless OpenCV 已消除普通 OpenCV 的 Media Foundation 静态依赖。扫描 186 个 PE 文件没有硬缺失，但仍提示 `msvcp140.dll` 条件依赖；必须在干净 Windows 环境验证，不能仅凭开发机已装运行库判断可分发。
-3. **应用打包脚本**：`scripts/pack.mjs` / `electron-builder.yml` 仍有 `arale-native` 未加 `.exe` 的资源路径、Mac Vision 资源和 Mac 输出说明；Node `spawnSync('npm', ...)` / `.bin/electron-builder` 也需要按 Windows 命令启动方式验证。
-4. **功能验收**：包内 Python `--probe` → 单页 OCR → 应用扩展服务 → 队列/取消 → CBZ/EPUB/RAR/7Z 导入 → 系统 OCR → debug/release 安装包。
+3. **应用打包脚本**：已按平台选择 `arale-native(.exe)`、Vision/WinRT 资源，并在 Windows 调用 `npm.cmd` / `electron-builder.cmd`；debug/release `--dir` 与 NSIS 构建通过。仍需在干净机器实际安装/卸载生成的 NSIS。
+4. **功能验收**：包内 Python `--probe`、30 页 OCR、应用扩展服务、队列/取消、CBZ/EPUB/伪装 CBR 原生路径、系统 OCR 和 GUI smoke 已通过；真实 RAR/7Z 私有夹具、干净系统和实际安装仍待补测。
 5. **仓库资产**：Windows ZIP 是交叉构建，JSONL 的 Windows sha256 故意为空，应用拒绝安装。只有完成 Windows 真机验收后，才能写入真实 SHA 并上传 Release。主仓库和引擎库的源码先后推送，不代表 Release 已上传。
 
 ## 6. 可选搬迁材料
@@ -121,9 +121,11 @@ npm start
 - 上述是 8 线程测量；运行时默认 4 线程。详细口径集中在[当前引擎文档](../engines/docs/current.md)。
 - 对 Mokuro 0.2.5：同批抽样约 98.2% 配对文字逐字一致；并非全量质量保证。
 - macOS 引擎 ZIP 688.8 MiB，Windows 交叉 ZIP 690.5 MiB；当前图为 fp32。
-- 类型检查通过；407 项应用测试中 402 通过、5 跳过。
+- Windows / Node 22.19.0 类型检查通过；400 项应用测试中 395 通过、5 跳过；Rust 50/50 通过。
 - macOS 包内解释器、解压后的归档、应用扩展服务均已实际跑过单页 OCR。
-- Windows 尚无运行验收；当前 Mac 工具环境中的 GUI smoke 在 Electron 启动前退出，未完成 GUI 验收。
+- Windows GUI smoke 162/162 通过；开启 `ARALE_SMOKE_OCR=1` 后 183/183 通过，包含 ONNX 4 页真识别、Windows.Media.Ocr 队列/进度/排队/取消。WinRT 脚本必须保存为带 BOM 的 UTF-8，且用 `$args` 接多页参数，才能兼容 Windows PowerShell 5.1。
+- 2026-09-26 Windows 11 build 26200 首轮进程验收：嵌入式 Python 3.12.10、ORT 1.30.0、OpenCV 5.0.0、NumPy 2.5.3；`node engines/arale_onnx_v1/build.mjs --target win32-x64 --debug` 与包内 `--probe` 通过。默认 4 线程跑迁移的 30 页耗时 118.948 秒，30/30 页成功、388 行；对缓存版 Mac 预期输出按同页同行比较，文字 379/388、框 343/388、方向 387/388 精确一致，8/30 页完全一致。该结果是 Windows 独立基线，差异尚未判定可接受。
+- 同日生成 `ARaLeBook-0.1.0-setup.exe`（127,028,004 字节，SHA-256 `1bc95025f6a79abf1b80016eef220ed5f7a613d6e12be3bfd0482b09897f5e30`）。这是本地未签名/未发布构建记录，不代表已在干净机器完成安装验收。
 - 换机前检查两个仓库的 `git status` 和远端分支，确认本地提交已经推送；不要只 clone 旧的远端 main 后就丢弃 Mac 工作区。
 
-给 Windows 上新会话的任务：阅读此文与 [当前引擎文档](../engines/docs/current.md)，先恢复大文件，修复 `_pth`/原生构建/打包兼容性，再用包内解释器和真实 OCR 完成 Windows 验收。保持 Mokuro 文字结果与 KV cache 基线，不把 PyTorch 加回用户运行包。
+给后续会话的任务：阅读此文与 [当前引擎文档](../engines/docs/current.md)，优先在干净 Windows 验证 VC++ 条件依赖与 NSIS 安装/卸载，补真实 RAR/7Z 夹具，并评估 Windows/Mac OCR 输出差异。保持 Mokuro 文字结果与 KV cache 基线，不把 PyTorch 加回用户运行包。

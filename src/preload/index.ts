@@ -48,11 +48,14 @@ function ensureEventBridge(): void {
 }
 
 const api: AraleApi = {
+  window: {
+    setImmersive: (enabled) => ipcRenderer.invoke(IPC.windowSetImmersive, enabled),
+  },
   library: {
     info: () => ipcRenderer.invoke(IPC.libraryInfo),
     list: (query) => ipcRenderer.invoke(IPC.libraryList, query),
     importPaths: (paths) => ipcRenderer.invoke(IPC.libraryImport, paths),
-    importViaDialog: () => ipcRenderer.invoke(IPC.libraryImportDialog),
+    importViaDialog: (kind) => ipcRenderer.invoke(IPC.libraryImportDialog, kind),
     remove: (bookIds) => ipcRenderer.invoke(IPC.libraryRemove, bookIds),
     open: (bookId) => ipcRenderer.invoke(IPC.libraryOpen, bookId),
     savePosition: (position) => ipcRenderer.invoke(IPC.librarySavePosition, position),
@@ -117,6 +120,12 @@ const api: AraleApi = {
     update: (patch) => ipcRenderer.invoke(IPC.llmUpdate, patch),
     setApiKey: (profileId, apiKey) => ipcRenderer.invoke(IPC.llmSetApiKey, profileId, apiKey),
     analyze: (request) => ipcRenderer.invoke(IPC.llmAnalyze, request),
+  },
+  translation: {
+    settings: () => ipcRenderer.invoke(IPC.translationSettings),
+    update: (patch) => ipcRenderer.invoke(IPC.translationUpdate, patch),
+    setSecret: (profileId, secret) => ipcRenderer.invoke(IPC.translationSetSecret, profileId, secret),
+    translate: (request) => ipcRenderer.invoke(IPC.translationTranslate, request),
   },
   segment: {
     status: (bookId) => ipcRenderer.invoke(IPC.segmentStatus, bookId),

@@ -515,7 +515,7 @@ test(
     };
     walk(out);
     assert.deepEqual(
-      walked.map((file) => path.relative(out, file)).sort(),
+      walked.map((file) => path.relative(out, file).split(path.sep).join('/')).sort(),
       ['deep/dir/p3.jpg', 'vol1/p1.jpg', 'vol2/p1.jpg'],
     );
     assert.ok(!fs.existsSync(path.join(dir, 'escape.jpg')), 'zip-slip：escape.jpg 被写到了 out 之外');

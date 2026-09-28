@@ -88,6 +88,11 @@ export function llmSettingsPath(): string {
   return path.join(root(), 'llm.json');
 }
 
+/** 翻译提供商配置（含用户自带的 API key/secret）。 */
+export function translationSettingsPath(): string {
+  return path.join(root(), 'translation.json');
+}
+
 export function settingsPath(): string {
   return path.join(root(), 'settings.json');
 }

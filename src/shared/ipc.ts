@@ -24,6 +24,9 @@ import type {
   LlmAnalyzeRequest,
   LlmAnalyzeResult,
   LlmSettings,
+  TranslationRequest,
+  TranslationResult,
+  TranslationSettings,
   SegmentJobResult,
   SegmentProgress,
   WordCard,
@@ -42,13 +45,16 @@ export const IPC = {
   libraryList: 'library:list',
   /** 导入用户拖进来/命令行给出的具体路径。 */
   libraryImport: 'library:import',
-  /** 弹系统「选文件 / 选文件夹」对话框再导入。 */
+  /** 弹系统文件或文件夹对话框再导入；两种模式必须分开。 */
   libraryImportDialog: 'library:importDialog',
   libraryRemove: 'library:remove',
   libraryOpen: 'library:open',
   librarySavePosition: 'library:savePosition',
   libraryUpdateMeta: 'library:updateMeta',
   libraryReveal: 'library:reveal',
+
+  /** Windows 沉浸阅读：切换原生全屏以隐藏系统标题栏。 */
+  windowSetImmersive: 'window:setImmersive',
 
   chapterContent: 'book:chapter',
   comicPageText: 'comic:pageText',
@@ -73,6 +79,11 @@ export const IPC = {
   llmUpdate: 'llm:update',
   llmSetApiKey: 'llm:setApiKey',
   llmAnalyze: 'llm:analyze',
+
+  translationSettings: 'translation:settings',
+  translationUpdate: 'translation:update',
+  translationSetSecret: 'translation:setSecret',
+  translationTranslate: 'translation:translate',
 
   ocrCapability: 'ocr:capability',
   ocrStatus: 'ocr:status',
@@ -100,15 +111,31 @@ export const IPC = {
   segmentClear: 'segment:clear',
 } as const;
 
+export type ImportDialogKind = 'files' | 'directory';
+
+/**
+ * Windows/Linux 不允许同一个 Electron 对话框同时选文件和目录。
+ * 集中在这里生成配置，防止以后又把 `openFile` / `openDirectory` 混回去。
+ */
+export function importDialogProperties(
+  kind: ImportDialogKind,
+): Array<'openFile' | 'openDirectory' | 'multiSelections'> {
+  return kind === 'directory' ? ['openDirectory'] : ['openFile', 'multiSelections'];
+}
+
 /** 预加载脚本挂到 `window.arale` 上的完整 API。 */
 export interface AraleApi {
+  window: {
+    /** 返回切换后的原生全屏状态；非 Windows 始终为 false。 */
+    setImmersive(enabled: boolean): Promise<boolean>;
+  };
   library: {
     info(): Promise<LibraryInfo>;
     list(query: LibraryQuery): Promise<LibraryPage>;
     /** `paths` 可以是文件也可以是目录。 */
     importPaths(paths: string[]): Promise<ImportOutcome[]>;
-    /** 弹对话框，取消返回 `[]`。 */
-    importViaDialog(): Promise<ImportOutcome[]>;
+    /** 弹文件或文件夹对话框，取消返回 `[]`。 */
+    importViaDialog(kind: ImportDialogKind): Promise<ImportOutcome[]>;
     remove(bookIds: string[]): Promise<void>;
     open(bookId: string): Promise<OpenBookResult>;
     savePosition(position: ReadingPosition): Promise<void>;
@@ -221,6 +248,17 @@ export interface AraleApi {
     setApiKey(profileId: string, apiKey: string | null): Promise<LlmSettings>;
     /** 跑一次分析。失败也 resolve，看 `ok`。 */
     analyze(request: LlmAnalyzeRequest): Promise<LlmAnalyzeResult>;
+  };
+  /** 多提供商翻译；secret 与 LLM key 一样只进不出。 */
+  translation: {
+    settings(): Promise<TranslationSettings>;
+    update(patch: {
+      profiles?: TranslationSettings['profiles'];
+      activeProfileId?: string | null;
+      targetLanguage?: TranslationSettings['targetLanguage'];
+    }): Promise<TranslationSettings>;
+    setSecret(profileId: string, secret: string | null): Promise<TranslationSettings>;
+    translate(request: TranslationRequest): Promise<TranslationResult>;
   };
   /**
    * **扩展**：可下载安装的能力包。

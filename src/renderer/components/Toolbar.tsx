@@ -29,7 +29,8 @@ export interface ToolbarProps {
   busy: boolean;
   theme: ThemeMode;
   onCycleTheme: () => void;
-  onImport: () => void;
+  onImportFiles: () => void;
+  onImportDirectory: () => void;
   onOpenSettings: () => void;
   onLeaveReader: () => void;
 }
@@ -54,7 +55,8 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     busy,
     theme,
     onCycleTheme,
-    onImport,
+    onImportFiles,
+    onImportDirectory,
     onOpenSettings,
     onLeaveReader,
   } = props;
@@ -137,8 +139,23 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
               ▥ 详情
             </button>
 
-            <button type="button" className="tool-btn" onClick={onImport} title="导入书籍（也可拖放文件）">
-              ＋ 导入
+            <button
+              type="button"
+              className="tool-btn"
+              onClick={onImportFiles}
+              title="导入书籍文件（可多选，也可拖放）"
+              data-testid="toolbar-import-files"
+            >
+              ＋ 文件
+            </button>
+            <button
+              type="button"
+              className="tool-btn"
+              onClick={onImportDirectory}
+              title="把页图文件夹导入为漫画"
+              data-testid="toolbar-import-directory"
+            >
+              ＋ 文件夹
             </button>
           </>
         )}

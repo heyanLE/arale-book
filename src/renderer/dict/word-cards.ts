@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   LlmProfile,
   LookupResult,
+  TranslationProfile,
   WordCard,
   WordCardAnalysis,
   WordCardDraft,
@@ -51,6 +52,13 @@ export interface WordCardPopupState extends WordCardLookupInput {
   lastError: string | null;
   /** 上一次成功用的配置名（显示用）。 */
   llmProfileName: string | null;
+  /** 当前翻译结果；点击查词翻整段/整框，划词只翻选区。 */
+  translationText: string | null;
+  translationSourceReading: string | null;
+  translating: boolean;
+  translationProfileId: string | null;
+  translationProfileName: string | null;
+  translationError: string | null;
   saving: boolean;
 }
 
@@ -81,6 +89,9 @@ export interface UseWordCardsResult {
    * 它只在词卡上用，为它把 App → ReaderView → 两个阅读器一路加参数不值得。
    */
   llmProfiles: LlmProfile[];
+  translationProfiles: TranslationProfile[];
+  translatePopup: (id: string) => void;
+  selectTranslationProfile: (id: string, profileId: string | null) => void;
 }
 
 let popupSeq = 0;
@@ -154,6 +165,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
   const [cards, setCards] = useState<WordCard[]>([]);
   const [panelOpen, setPanelOpenState] = useState(false);
   const [llmProfiles, setLlmProfiles] = useState<LlmProfile[]>([]);
+  const [translationProfiles, setTranslationProfiles] = useState<TranslationProfile[]>([]);
   /**
    * 最新词卡列表的 ref。
    *
@@ -168,6 +180,13 @@ export function useWordCards(bookId: string): UseWordCardsResult {
     void api.llm
       .settings()
       .then((settings) => setLlmProfiles(settings.profiles))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    void api.translation
+      .settings()
+      .then((settings) => setTranslationProfiles(settings.profiles))
       .catch(() => undefined);
   }, []);
 
@@ -220,6 +239,12 @@ export function useWordCards(bookId: string): UseWordCardsResult {
         llmProfileId: null,
         lastError: null,
         llmProfileName: null,
+        translationText: null,
+        translationSourceReading: null,
+        translating: false,
+        translationProfileId: null,
+        translationProfileName: null,
+        translationError: null,
         saving: false,
       },
     ]);
@@ -411,6 +436,60 @@ export function useWordCards(bookId: string): UseWordCardsResult {
     [patchPopup],
   );
 
+  const selectTranslationProfile = useCallback(
+    (id: string, profileId: string | null) =>
+      patchPopup(id, {
+        translationProfileId: profileId,
+        translationText: null,
+        translationSourceReading: null,
+        translationProfileName: null,
+        translationError: null,
+      }),
+    [patchPopup],
+  );
+
+  const translatePopup = useCallback(
+    (id: string) => {
+      const popup = popups.find((item) => item.id === id);
+      if (popup === undefined) return;
+      // `word` 是阅读器传来的精确选区原文；不要再按 length 切一次。EPUB 的 length
+      // 历史上按码点计，而 String.slice 按 UTF-16 计，碰到扩展汉字会少/多切字符。
+      const selected = popup.length > 0 ? popup.word : popup.context;
+      const text = selected.trim();
+      if (text === '') {
+        patchPopup(id, { translationError: '没有可翻译的文字。' });
+        return;
+      }
+      patchPopup(id, { translating: true, translationError: null });
+      void api.translation
+        .translate({
+          text,
+          sourceLanguage: 'ja',
+          ...(popup.translationProfileId !== null
+            ? { profileId: popup.translationProfileId }
+            : {}),
+        })
+        .then((result) => {
+          patchPopup(id, {
+            translating: false,
+            translationText: result.ok ? result.text : null,
+            translationSourceReading: result.ok && result.sourceReading !== '' ? result.sourceReading : null,
+            translationProfileName: result.profileName || null,
+            translationError: result.ok ? null : (result.error ?? '翻译失败'),
+          });
+        })
+        .catch((error: unknown) => {
+          patchPopup(id, {
+            translating: false,
+            translationText: null,
+            translationSourceReading: null,
+            translationError: error instanceof Error ? error.message : String(error),
+          });
+        });
+    },
+    [patchPopup, popups],
+  );
+
   const openCard = useCallback(
     async (card: WordCard) => {
       // 词卡只存「用户查的是什么」，不存释义——释义要现查，这样换词典/更新词典之后
@@ -481,5 +560,8 @@ export function useWordCards(bookId: string): UseWordCardsResult {
     removeCard,
     isSaved,
     llmProfiles,
+    translationProfiles,
+    translatePopup,
+    selectTranslationProfile,
   };
 }

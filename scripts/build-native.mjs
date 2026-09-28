@@ -12,40 +12,44 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const crateDir = join(root, 'native', 'arale-native');
 const cargoHome = join(root, '.rust', 'cargo');
 const rustupHome = join(root, '.rust', 'rustup');
-const cargoBin = join(cargoHome, 'bin', 'cargo');
+const localCargo = join(cargoHome, 'bin', process.platform === 'win32' ? 'cargo.exe' : 'cargo');
+const systemCargo = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
 
 if (!existsSync(crateDir)) {
   console.log('native/arale-native 不存在，跳过原生构建');
   process.exit(0);
 }
 
-if (!existsSync(cargoBin)) {
+const useLocalToolchain = existsSync(localCargo);
+const cargoBin = useLocalToolchain ? localCargo : systemCargo;
+const cargoProbe = spawnSync(cargoBin, ['--version'], { stdio: 'ignore' });
+if (cargoProbe.status !== 0) {
   console.warn(
     [
       '',
       '⚠️  没有找到 Rust 工具链，跳过原生 sidecar 构建。',
       '   影响：.rar / .cbr / .7z / .cb7 漫画压缩包无法导入。',
       '         .zip / .cbz / EPUB / 图片文件夹 / .mokuro 不受影响（走纯 JS）。',
-      '   修复：见 README「原生 sidecar」一节。',
+      '   修复：安装系统 Rust，或按 README 把工具链放到仓库 `.rust/`。',
       '',
     ].join('\n'),
   );
   process.exit(0);
 }
 
-const env = {
-  ...process.env,
-  PATH: `${join(cargoHome, 'bin')}:${process.env.PATH ?? ''}`,
-  CARGO_HOME: cargoHome,
-  RUSTUP_HOME: rustupHome,
-};
+const env = { ...process.env };
+if (useLocalToolchain) {
+  env.PATH = `${join(cargoHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
+  env.CARGO_HOME = cargoHome;
+  env.RUSTUP_HOME = rustupHome;
+}
 
 console.log('building native/arale-native (release)…');
 const result = spawnSync(cargoBin, ['build', '--release'], {

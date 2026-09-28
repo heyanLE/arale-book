@@ -45,6 +45,7 @@ import { useBookSettings } from '../lib/reader-settings';
 import { WordCardPopup } from '../dict/WordCardPopup';
 import type { UseWordCardsResult } from '../dict/word-cards';
 import { ComicTextLayer, type ComicTextLookup, type ComicTextSelection } from './ComicTextLayer';
+import { ReaderEdgeTurns } from './ReaderEdgeTurns';
 import { ocrControlState } from './ocr-controls';
 import { capturePointer } from '../lib/pointer';
 
@@ -186,6 +187,10 @@ export function ComicReader({
   const dragRef = useRef<{ x: number; y: number; px: number; py: number; moved: boolean } | null>(null);
   const pageIndexRef = useRef(pageIndex);
   pageIndexRef.current = pageIndex;
+  const spreadRef = useRef(spread);
+  spreadRef.current = spread;
+  const spreadOffsetRef = useRef(spreadOffset);
+  spreadOffsetRef.current = spreadOffset;
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
 
@@ -248,7 +253,11 @@ export function ComicReader({
   // 配对规则变了（开/关双页、改偏移量）→ 把当前页重新归到它所属的跨页。
   // 不做这一步的话，改偏移量之后当前页会停在「第二个半页」上，画面看着像跳了一页。
   useEffect(() => {
-    setPageIndex((current) => spreadPlan(current, total, spreadOffset, spread).start);
+    setPageIndex((current) => {
+      const aligned = spreadPlan(current, total, spreadOffset, spread).start;
+      pageIndexRef.current = aligned;
+      return aligned;
+    });
   }, [spreadOffset, spread, total]);
 
   // ------------------------------------------------------------------
@@ -362,19 +371,46 @@ export function ComicReader({
       const clamped = Math.min(Math.max(0, target), Math.max(0, total - 1));
       if (clamped === pageIndexRef.current) return;
       pendingSlideRef.current = forward ? 'forward' : 'back';
+      // React 提交下一帧之前，连续点击仍要从刚到达的页继续算，不能重复算同一个目标。
+      pageIndexRef.current = clamped;
       setPageIndex(clamped);
     },
     [total],
   );
 
   const next = useCallback(
-    () => navigate(stepSpread(pageIndexRef.current, total, spreadOffset, spread, true), true),
-    [navigate, total, spreadOffset, spread],
+    () =>
+      navigate(
+        stepSpread(pageIndexRef.current, total, spreadOffsetRef.current, spreadRef.current, true),
+        true,
+      ),
+    [navigate, total],
   );
 
   const prev = useCallback(
-    () => navigate(stepSpread(pageIndexRef.current, total, spreadOffset, spread, false), false),
-    [navigate, total, spreadOffset, spread],
+    () =>
+      navigate(
+        stepSpread(pageIndexRef.current, total, spreadOffsetRef.current, spreadRef.current, false),
+        false,
+      ),
+    [navigate, total],
+  );
+
+  /**
+   * 配对设置与页码必须在同一次用户操作里同步写进 ref。
+   * 否则 select 的 React 更新尚未提交时立刻点翻页，旧按钮回调会按旧偏移计算一次。
+   */
+  const applySpreadConfig = useCallback(
+    (nextSpread: boolean, nextOffset: number) => {
+      const offset = clampSpreadOffset(nextOffset);
+      spreadRef.current = nextSpread;
+      spreadOffsetRef.current = offset;
+      const aligned = spreadPlan(pageIndexRef.current, total, offset, nextSpread).start;
+      pageIndexRef.current = aligned;
+      setPageIndex(aligned);
+      patchBook({ comicSpread: nextSpread, comicSpreadOffset: offset });
+    },
+    [patchBook, total],
   );
 
   /** 跳到某个跨页；方向按目标与当前页的相对位置推断（目录跳转、Home/End 都走这里）。 */
@@ -626,7 +662,7 @@ export function ComicReader({
         setZoom(1);
       } else if (event.key === 's' || event.key === 'S') {
         event.preventDefault();
-        patchBook({ comicSpread: !spread });
+        applySpreadConfig(!spreadRef.current, spreadOffsetRef.current);
       } else if (event.key === 'Escape') {
         // 词卡自己处理 Esc（它在捕获阶段收，并且固定住的卡不响应），
         // 这里只在没有卡的时候让 Esc 顺便关掉词典兜底状态。
@@ -636,7 +672,7 @@ export function ComicReader({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeUnpinned, goTo, next, prev, rtl, total, spread, patchBook]);
+  }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total]);
 
   useShellCommand((command) => {
     switch (command) {
@@ -713,7 +749,7 @@ export function ComicReader({
     <button
       type="button"
       className="btn btn-sm"
-      disabled={atStart}
+      aria-disabled={atStart}
       onClick={prev}
       title={`上一页（${rtl ? '→' : '←'} / PageUp）`}
       data-testid="comic-prev"
@@ -725,7 +761,7 @@ export function ComicReader({
     <button
       type="button"
       className="btn btn-sm"
-      disabled={atEnd}
+      aria-disabled={atEnd}
       onClick={next}
       title={`下一页（${rtl ? '←' : '→'} / PageDown）`}
       data-testid="comic-next"
@@ -794,6 +830,14 @@ export function ComicReader({
           })}
           </div>
         </div>
+
+        <ReaderEdgeTurns
+          direction={direction}
+          onBack={prev}
+          onForward={next}
+          backDisabled={atStart}
+          forwardDisabled={atEnd}
+        />
       </div>
 
       <div className="comic-footer">
@@ -823,7 +867,7 @@ export function ComicReader({
         <button
           type="button"
           className={`btn btn-sm${spread ? ' btn-primary' : ''}`}
-          onClick={() => patchBook({ comicSpread: !spread })}
+          onClick={() => applySpreadConfig(!spreadRef.current, spreadOffsetRef.current)}
           title="双页跨页（s）"
           data-testid="comic-spread"
         >
@@ -835,9 +879,7 @@ export function ComicReader({
           <select
             className="select select-sm"
             value={String(spreadOffset)}
-            onChange={(e) =>
-              patchBook({ comicSpreadOffset: clampSpreadOffset(Number(e.target.value)) })
-            }
+            onChange={(e) => applySpreadConfig(true, Number(e.target.value))}
             title={`配对偏移：${spreadOffsetLabel(spreadOffset)}`}
             data-testid="comic-spread-offset"
           >
@@ -980,10 +1022,21 @@ export function ComicReader({
           analyzingWord={popup.analyzingWord}
           llmProfileId={popup.llmProfileId}
           llmProfiles={wordCards.llmProfiles}
+          translationText={popup.translationText}
+          translationSourceReading={popup.translationSourceReading}
+          translating={popup.translating}
+          translationProfileId={popup.translationProfileId}
+          translationProfileName={popup.translationProfileName}
+          translationError={popup.translationError}
+          translationProfiles={wordCards.translationProfiles}
           lastError={popup.lastError}
           onAnalyze={(target) => wordCards.analyzeWord(popup.id, target)}
           onRemoveAnalysis={(target) => wordCards.removeAnalysis(popup.id, target)}
           onSelectLlmProfile={(profileId) => wordCards.selectLlmProfile(popup.id, profileId)}
+          onTranslate={() => wordCards.translatePopup(popup.id)}
+          onSelectTranslationProfile={(profileId) =>
+            wordCards.selectTranslationProfile(popup.id, profileId)
+          }
           selectionLength={popup.length}
           onClose={() => wordCards.closePopup(popup.id)}
           onTogglePin={() => wordCards.togglePin(popup.id)}

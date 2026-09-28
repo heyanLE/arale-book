@@ -177,13 +177,13 @@ test('parseCatalog: sha256 缺失时**仍然解析成功**，由安装时拒绝'
 // ---------------------------------------------------------------------------
 
 test('resolveInside: 正常相对路径解析到根内', () => {
-  const root = '/tmp/ext/ocr-arale_onnx_v1';
+  const root = path.resolve(path.sep, 'tmp', 'ext', 'ocr-arale_onnx_v1');
   assert.equal(resolveInside(root, 'bin/ocr-run'), path.join(root, 'bin/ocr-run'));
   assert.equal(resolveInside(root, './bin/../bin/ocr-run'), path.join(root, 'bin/ocr-run'));
 });
 
 test('resolveInside: 拒绝越界、绝对路径与空路径', () => {
-  const root = '/tmp/ext/ocr-arale_onnx_v1';
+  const root = path.resolve(path.sep, 'tmp', 'ext', 'ocr-arale_onnx_v1');
   for (const evil of [
     '../evil.sh',
     '../../../../bin/sh',
@@ -196,9 +196,9 @@ test('resolveInside: 拒绝越界、绝对路径与空路径', () => {
 });
 
 test('resolveInside: 前缀相同但不是子目录的路径要被拒绝', () => {
-  // `/tmp/ext/ocr-arale_onnx_v1evil` 以 `/tmp/ext/ocr-arale_onnx_v1` 开头，
+  // 相邻的 `ocr-arale_onnx_v1evil` 以根目录名开头，
   // 朴素的 startsWith 检查会放它过去。
-  const root = '/tmp/ext/ocr-arale_onnx_v1';
+  const root = path.resolve(path.sep, 'tmp', 'ext', 'ocr-arale_onnx_v1');
   assert.equal(resolveInside(root, '../ocr-manga-ankievil/x'), null);
 });
 
@@ -297,7 +297,16 @@ test('install: 清单里没有这个 id → 明确的失败，不是抛', async 
 test('install: 没有有效 sha256 → 拒绝安装（这是安全红线）', async () => {
   const root = makeRoot();
   const bundled = path.join(root, 'bundled.json');
-  fs.writeFileSync(bundled, catalog([{ ...VALID_ENTRY, sha256: '太短' }]), 'utf8');
+  fs.writeFileSync(
+    bundled,
+    catalog([{
+      ...VALID_ENTRY,
+      platforms: [process.platform],
+      arch: [process.arch],
+      sha256: '太短',
+    }]),
+    'utf8',
+  );
   const service = new ExtensionService({ root: path.join(root, 'ext'), bundledCatalogFile: bundled });
 
   const result = await service.install('ocr-arale_onnx_v1');

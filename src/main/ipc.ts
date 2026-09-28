@@ -34,8 +34,14 @@ import type {
   PageText,
   ReadingPosition,
   SegmentToken,
+  TranslationRequest,
 } from '../shared/types';
-import { IMPORTABLE_EXTENSIONS, IPC } from '../shared/ipc';
+import {
+  IMPORTABLE_EXTENSIONS,
+  IPC,
+  importDialogProperties,
+  type ImportDialogKind,
+} from '../shared/ipc';
 
 /**
  * Electron 的 `filters[].extensions` 要的是**不带点**的扩展名（`rar` 而不是 `.rar`），
@@ -53,6 +59,7 @@ import { setImportDefaults } from './library/importer';
 import { readAppDefaults, writeAppDefaults } from './settings';
 import type { AppDefaults } from '../shared/defaults';
 import type { LlmService } from './llm/service';
+import type { TranslationService } from './translation/service';
 import type { OcrService } from './ocr/service';
 import type { SegmentService } from './segment/service';
 import { getChapterContent, getPageText, invalidateContentCache } from './reader/content';
@@ -68,10 +75,11 @@ export interface Services {
   segment: SegmentService;
   extensions: ExtensionService;
   llm: LlmService;
+  translation: TranslationService;
 }
 
 export function registerIpc(services: Services): void {
-  const { store, positions, dict, ocr, segment, extensions, llm } = services;
+  const { store, positions, dict, ocr, segment, extensions, llm, translation } = services;
 
   const requireBook = (bookId: string): BookRecord => {
     const book = store.get(bookId);
@@ -90,6 +98,13 @@ export function registerIpc(services: Services): void {
     });
   };
 
+  handle(IPC.windowSetImmersive, (enabled: boolean): boolean => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    if (!window || window.isDestroyed() || process.platform !== 'win32') return false;
+    window.setFullScreen(enabled === true);
+    return window.isFullScreen();
+  });
+
   // --- 书库 ---
 
   handle(IPC.libraryInfo, (): LibraryInfo => store.info());
@@ -102,22 +117,28 @@ export function registerIpc(services: Services): void {
     return outcomes;
   });
 
-  handle(IPC.libraryImportDialog, async (): Promise<ImportOutcome[]> => {
+  handle(IPC.libraryImportDialog, async (kind: ImportDialogKind = 'files'): Promise<ImportOutcome[]> => {
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const selectingDirectory = kind === 'directory';
     const options: OpenDialogOptions = {
-      title: '导入漫画 / 小说',
-      // 目录也要能选：一堆页图的文件夹是最常见的漫画来源。
-      properties: ['openFile', 'openDirectory', 'multiSelections'],
+      title: selectingDirectory ? '导入漫画文件夹' : '导入漫画 / 小说文件',
+      // Windows/Linux 不能在一个原生对话框里同时设置 openFile + openDirectory：
+      // 同时设置会退化成目录选择器，让 .rar 等所有文件都无法选中。
+      properties: importDialogProperties(kind),
       // 从 `IMPORTABLE_EXTENSIONS` 生成，**不要**在这里手写扩展名列表：
       // 这里漏一个，那个格式就在文件选择器里变灰、只能靠拖放导入。
-      filters: [
-        { name: '电子书与漫画', extensions: stripDots(IMPORTABLE_EXTENSIONS.all) },
-        { name: 'EPUB', extensions: stripDots(IMPORTABLE_EXTENSIONS.epub) },
-        { name: '漫画压缩包', extensions: stripDots(IMPORTABLE_EXTENSIONS.comics) },
-        { name: 'mokuro 清单', extensions: stripDots(IMPORTABLE_EXTENSIONS.mokuro) },
-        { name: '图片', extensions: stripDots(IMPORTABLE_EXTENSIONS.images) },
-        { name: '全部文件', extensions: ['*'] },
-      ],
+      ...(selectingDirectory
+        ? {}
+        : {
+            filters: [
+              { name: '电子书与漫画', extensions: stripDots(IMPORTABLE_EXTENSIONS.all) },
+              { name: 'EPUB', extensions: stripDots(IMPORTABLE_EXTENSIONS.epub) },
+              { name: '漫画压缩包', extensions: stripDots(IMPORTABLE_EXTENSIONS.comics) },
+              { name: 'mokuro 清单', extensions: stripDots(IMPORTABLE_EXTENSIONS.mokuro) },
+              { name: '图片', extensions: stripDots(IMPORTABLE_EXTENSIONS.images) },
+              { name: '全部文件', extensions: ['*'] },
+            ],
+          }),
     };
     const result = window
       ? await dialog.showOpenDialog(window, options)
@@ -297,6 +318,17 @@ export function registerIpc(services: Services): void {
   );
 
   handle(IPC.llmAnalyze, (request: LlmAnalyzeRequest) => llm.analyze(request));
+
+  // --- 翻译（用户自带 key）---
+
+  handle(IPC.translationSettings, () => translation.settings());
+  handle(IPC.translationUpdate, (patch: Parameters<TranslationService['update']>[0]) =>
+    translation.update(patch),
+  );
+  handle(IPC.translationSetSecret, (profileId: string, secret: string | null) =>
+    translation.setSecret(profileId, secret),
+  );
+  handle(IPC.translationTranslate, (request: TranslationRequest) => translation.translate(request));
 
   // --- 扩展（清单 + 下载器）---
 
