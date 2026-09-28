@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { LlmSettings, TranslationSettings } from '@shared/types';
+import { CURRENT_SEGMENT_ENGINE } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { DEFAULT_APP_DEFAULTS } from '@shared/defaults';
 import type {
@@ -174,6 +175,7 @@ export function App(): JSX.Element {
     const data = await call('读取分词结果', () => api.segment.read(bookId));
     setSegmentLoading(false);
     setSegmentData(data);
+    return data;
   }, []);
 
   useIpcEvent('segment:progress', (progress) => {
@@ -205,7 +207,11 @@ export function App(): JSX.Element {
       setSegmentBookTitle(title);
       setView('segments');
       setSegmentData(null);
-      await reloadSegments(bookId);
+      const data = await reloadSegments(bookId);
+      if (data !== null && data.engine !== CURRENT_SEGMENT_ENGINE) {
+        const outcome = await call('升级旧分词结果', () => api.segment.start(bookId));
+        if (outcome?.ok) setStatus('正在把旧词表升级为日语形态分析…');
+      }
     },
     [reloadSegments],
   );

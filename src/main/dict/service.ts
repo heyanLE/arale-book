@@ -66,6 +66,14 @@ export class DictionaryService {
     }
   }
 
+  hasExpression(expression: string): boolean {
+    try {
+      return this.store.hasExpression(expression);
+    } catch {
+      return false;
+    }
+  }
+
   async importZip(zipPath: string): Promise<DictionaryStatus> {
     await this.store.importZip(zipPath);
     await this.store.load();

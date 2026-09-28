@@ -2163,6 +2163,7 @@ try {
     await delay(300);
   }
   check('分词产物已落盘并能读回', segData !== null, segData ? `${segData.units.length} 单元` : 'null');
+  check('整书词表使用 Kuromoji 形态分析', segData?.engine === 'kuromoji-morph-v1', segData?.engine ?? 'null');
   check(
     '小说分词按章节切单元',
     Array.isArray(segData?.units) && segData.units.length > 0 && segData.units.every((u) => u.ref.startsWith('chapter:')),

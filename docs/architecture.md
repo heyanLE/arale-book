@@ -16,6 +16,7 @@
 | [src/main/extensions/service.ts](../src/main/extensions/service.ts) | JSONL 仓库、缓存、下载校验、安装与开发目录加载 |
 | [src/main/ocr/service.ts](../src/main/ocr/service.ts) | 书级串行队列、进度、取消和文字层写盘 |
 | [学习候选服务](../src/main/study/service.ts)、[审核 UI](../src/renderer/views/StudyPanel.tsx) | Kuromoji 候选、JLPT 参考匹配、每书选择与 Anki 文本导出 |
+| [整书分词服务](../src/main/segment/service.ts)、[形态结果映射](../src/core/segment/morph.ts) | 漫画文字块和 EPUB 章节用 Kuromoji 切词，词典只标记收录；旧产物按引擎标识自动重建 |
 | [扩展 provider](../src/main/ocr/providers/extension.ts)、[runner](../src/main/ocr/runner.ts) | 按自描述启动进程，读取逐页 NDJSON |
 | [设置 UI](../src/renderer/components/SettingsPanel.tsx)、[OCR 扩展卡片](../src/renderer/components/ExtensionsCard.tsx) | 通用/小说/漫画设置，OCR 默认与扩展仓库管理 |
 | `native/arale-native/` | Rust 解包 sidecar；不是 OCR 引擎 |

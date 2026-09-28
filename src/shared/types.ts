@@ -589,8 +589,10 @@ export interface SegmentRecord {
   start: number;
   /** 单元内 UTF-16 偏移（不含）。 */
   end: number;
-  /** 词典里有没有这个词。false 时它只是个占位切分。 */
+  /** 当前词典是否收录这个词；不决定切词边界。 */
   matched: boolean;
+  /** 形态分析词性；旧产物可能缺失。 */
+  partOfSpeech?: string;
 }
 
 /** 分词的粒度单位。漫画是一页里的一个文字块；小说是一章。 */
@@ -623,8 +625,10 @@ export interface BookSegments {
   vocabulary: SegmentVocabularyEntry[];
 }
 
+export const CURRENT_SEGMENT_ENGINE = 'kuromoji-morph-v1';
+
 export interface SegmentVocabularyEntry {
-  /** 辞书形；没查到词典时用表面形。 */
+  /** 辞书形；形态分析没有基本形时用表面形。 */
   base: string;
   count: number;
   surfaces: string[];
