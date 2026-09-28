@@ -12,6 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +67,10 @@ const child = spawn(
     '--disable-gpu',
     '--disable-software-rasterizer',
     '--disable-dev-shm-usage',
+    // 用户同时操作另一个窗口时，后台 rAF 被暂停会让若干交互断言一直等不到结果。
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
   ],
   { cwd: root, env: electronEnv, stdio: ['ignore', 'pipe', 'pipe'] },
 );
@@ -167,6 +172,7 @@ function connect(wsUrl) {
 // ---------------------------------------------------------------------------
 
 let client = null;
+let studyLlmServer = null;
 try {
   const target = await waitForTarget();
   client = await connect(target.webSocketDebuggerUrl);
@@ -2211,6 +2217,28 @@ try {
     check('人工选择和释义能经 IPC 保存',
       savedStudy?.candidates?.find((item) => item.id === firstStudy.id)?.meaning === '冒烟测试释义');
   }
+  studyLlmServer = createServer(async (request, response) => {
+    try {
+      let raw = '';
+      for await (const chunk of request) raw += chunk.toString();
+      const input = JSON.parse(raw);
+      const user = input.messages.findLast((message) => message.role === 'user');
+      const candidates = JSON.parse(user.content);
+      await delay(450);
+      const items = candidates.map((item, index) => ({
+        id: item.id, decision: ['keep', 'reject', 'review'][index % 3], reason: '冒烟测试判断',
+      }));
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items }) } }] }));
+    } catch (error) {
+      response.writeHead(500);
+      response.end(String(error));
+    }
+  });
+  await new Promise((resolve) => studyLlmServer.listen(0, '127.0.0.1', resolve));
+  const mockLlmPort = studyLlmServer.address().port;
+  await client.evaluate(`window.arale.llm.update({profiles:[{id:'llm_study_mock',name:'冒烟筛选模型',baseUrl:'http://127.0.0.1:${mockLlmPort}/v1',model:'mock',temperature:0.1,hasApiKey:false}],activeProfileId:'llm_study_mock'})`);
+  await client.evaluate(`window.arale.study.directFilter(${JSON.stringify(comicId)}, [1,2,3,4,5], true)`);
   const openedStudyTab = await client.evaluate(`(() => {
     const open = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '分词');
     if (!open) return 'missing-open';
@@ -2240,7 +2268,27 @@ try {
   })()`);
   await delay(80);
   check('制卡调用数按批次计算，不再按一张一次',
-    (await client.evaluate("document.querySelectorAll('.study-workflow-step')[2]?.textContent.includes('正常约 2 次 LLM 调用')")) === true);
+    (await client.evaluate("document.querySelectorAll('.study-workflow-step')[2]?.textContent.includes('正常约 7 次 LLM 调用')")) === true);
+  await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.study-workflow-step button')].find((node) => node.textContent.trim() === '运行 LLM 筛选');
+    button?.click();
+  })()`);
+  await delay(780);
+  const liveFilter = await client.evaluate(`({
+    summary: document.querySelector('.study-workflow summary')?.textContent ?? '',
+    progress: document.querySelector('.study-workflow-progress')?.textContent ?? '',
+    badges: document.querySelectorAll('.study-filter-preview').length,
+  })`);
+  check('LLM 筛选处理中可见批次进度和临时判断',
+    liveFilter.summary.includes('LLM 正在筛选') && liveFilter.progress.includes('临时判断') && liveFilter.badges > 0,
+    JSON.stringify(liveFilter));
+  let finishedFilter = false;
+  for (let i = 0; i < 30; i += 1) {
+    finishedFilter = await client.evaluate("document.querySelector('.study-notice[role=status]')?.textContent.includes('筛选完成') === true");
+    if (finishedFilter) break;
+    await delay(200);
+  }
+  check('LLM 筛选完成后正式应用结果', finishedFilter);
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
@@ -2356,6 +2404,10 @@ try {
 } catch (error) {
   check('冒烟测试执行完成', false, error instanceof Error ? error.message : String(error));
 } finally {
+  if (studyLlmServer) {
+    studyLlmServer.closeAllConnections();
+    await new Promise((resolve) => studyLlmServer.close(resolve));
+  }
   child.kill('SIGTERM');
   await delay(600);
   if (!exited) child.kill('SIGKILL');

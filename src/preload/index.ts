@@ -144,6 +144,7 @@ const api: AraleApi = {
     export: (bookId) => ipcRenderer.invoke(IPC.studyExport, bookId),
     directFilter: (bookId, levels, includeUnknown) => ipcRenderer.invoke(IPC.studyDirectFilter, bookId, levels, includeUnknown),
     runFilter: (bookId, request) => ipcRenderer.invoke(IPC.studyRunFilter, bookId, request),
+    applyCompletedFilter: (bookId) => ipcRenderer.invoke(IPC.studyApplyCompletedFilter, bookId),
     runCards: (bookId, request) => ipcRenderer.invoke(IPC.studyRunCards, bookId, request),
     patchCard: (bookId, candidateId, patch) => ipcRenderer.invoke(IPC.studyPatchCard, bookId, candidateId, patch),
     exportPackage: (bookId) => ipcRenderer.invoke(IPC.studyExportPackage, bookId),

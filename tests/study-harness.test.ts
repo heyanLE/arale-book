@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { unzipSync } from 'fflate';
 
-import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type BookRecord, type StudyCandidate, type StudyList } from '../src/shared/types';
+import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type BookRecord, type StudyCandidate, type StudyList, type StudyRunProgress } from '../src/shared/types';
 import { CARD_TIERS, FILTER_TIERS, cardHarnessPrompt, defaultStudyWorkflow, directCandidates, estimatedLlmCalls, filterHarnessPrompt, parseCardBatchResponse, parseCardResponse, parseFilterResponse, parseVerifyBatchResponse } from '../src/core/study/harness';
 import { cropRect } from '../src/main/study/crop';
 import { StudyService } from '../src/main/study/service';
@@ -239,6 +239,7 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
     } satisfies StudyList));
     let filterCalls = 0;
     let cardCalls = 0;
+    const liveProgress: StudyRunProgress[] = [];
     const service = new StudyService({
       getBook: () => ({ id: bookId, title: '测试', format: 'comic' } as BookRecord),
       getSegments: () => null, ensureDictionary: async () => undefined, lookupMeaning: () => '',
@@ -255,11 +256,15 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
         return { ok: true, text, profileName: 'test', model: 'test' };
       } },
       translation: { translate: async () => ({ ok: true, text: '翻译', sourceReading: '', profileName: 'test', provider: 'bing', sourceLanguage: 'ja', targetLanguage: 'zh-Hans' }) },
+      workflowProgress: (progress) => liveProgress.push(progress),
     });
     service.directFilter(bookId, [3], false);
     const filtered = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1' });
     assert.equal(filterCalls, 3);
     assert.equal(filtered.workflow?.filterRun?.stats?.llmCalls, 3);
+    const filterEvents = liveProgress.filter((event) => event.stage === 'filter' && (event.filter?.updates.length ?? 0) > 0);
+    assert.deepEqual(filterEvents.map((event) => event.done), [8, 16, 17]);
+    assert.deepEqual(filterEvents.map((event) => event.filter?.keep), [8, 16, 17]);
     const made = await service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing' });
     assert.equal(cardCalls, 3);
     assert.equal(made.workflow?.cardRun?.stats?.llmCalls, 3);
@@ -423,6 +428,47 @@ test('R1 第二批失败后只续跑未完成的卡片批次', async () => {
     assert.equal(translated.filter((text) => text === '詞0').length, 1);
     assert.equal(finished.workflow?.cardRun?.drafts.length, 8);
     assert.equal(finished.workflow?.cardRun?.stats?.llmCalls, 3, '失败批次的 LLM 请求也计入实际调用');
+  } finally {
+    setUserDataRootForTesting(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('筛选中断后可只使用已完成结果，未处理项暂不制卡且仍能续跑', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arale-filter-partial-'));
+  const bookId = 'bk_filter_partial';
+  const dir = path.join(root, 'library', bookId);
+  fs.mkdirSync(dir, { recursive: true });
+  setUserDataRootForTesting(root);
+  try {
+    const candidates = Array.from({ length: 9 }, (_, index) => candidate(`詞${index}`, 3));
+    fs.writeFileSync(path.join(dir, 'study-list.json'), JSON.stringify({
+      bookId, generatedAt: 1, segmentGeneratedAt: 1, jlptSource: 'test', candidates, workflow: defaultStudyWorkflow(),
+    } satisfies StudyList));
+    let calls = 0;
+    const service = new StudyService({
+      getBook: () => ({ id: bookId, title: '测试', format: 'comic' } as BookRecord),
+      getSegments: () => null, ensureDictionary: async () => undefined, lookupMeaning: () => '',
+      llm: { complete: async ({ user }) => {
+        calls += 1;
+        if (calls === 2) return { ok: false, text: '', profileName: 'test', model: 'test', error: '暂时失败' };
+        const rows = JSON.parse(user) as Array<{ id: string }>;
+        return { ok: true, text: JSON.stringify({ items: rows.map((item, index) => ({ id: item.id, decision: index === 0 ? 'reject' : 'keep', reason: '测试' })) }), profileName: 'test', model: 'test' };
+      } },
+    });
+    service.directFilter(bookId, [3], false);
+    await assert.rejects(service.runFilter(bookId, { tier: 'F2', profileId: 'p1' }), /暂时失败/);
+    assert.equal(service.read(bookId)?.workflow?.pendingFilterRun?.decisions['詞8'], undefined);
+    assert.match(service.read(bookId)?.workflow?.pendingFilterRun?.lastError ?? '', /暂时失败/);
+    const partial = service.applyCompletedFilter(bookId);
+    assert.equal(partial.candidates[0]?.selected, false, '已判拒绝');
+    assert.equal(partial.candidates[1]?.selected, true, '已判保留');
+    assert.equal(partial.candidates[8]?.selected, false, '尚未处理，暂不制卡');
+    assert.equal(Object.keys(partial.workflow?.pendingFilterRun?.decisions ?? {}).length, 8);
+    const complete = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1' });
+    assert.equal(calls, 3);
+    assert.equal(complete.workflow?.pendingFilterRun, undefined);
+    assert.equal(complete.workflow?.filterRun?.stats?.llmCalls, 3);
   } finally {
     setUserDataRootForTesting(null);
     fs.rmSync(root, { recursive: true, force: true });

@@ -202,9 +202,18 @@ export class StudyService {
     const startedAt = Date.now();
     const job = { cancelled: false, controller: new AbortController() };
     this.running.set(bookId, job);
+    type FilterRow = { id: string; decision: 'keep' | 'reject' | 'review'; reason: string };
+    const emitFilterProgress = (updates: FilterRow[] = [], message?: string): void => {
+      const counts = { keep: 0, reject: 0, review: 0 };
+      for (const value of Object.values(decisions)) counts[value.decision] += 1;
+      this.options.workflowProgress?.({
+        bookId, stage: 'filter', done: Object.keys(decisions).length, total: source.length, message,
+        filter: { ...counts, llmCalls: stats.llmCalls, elapsedMs: stats.elapsedMs + Date.now() - startedAt, updates },
+      });
+    };
     try {
       const batchSize = FILTER_TIERS[request.tier].batchSize;
-      type FilterRow = { id: string; decision: 'keep' | 'reject' | 'review'; reason: string };
+      emitFilterProgress([], resumed ? '从已保存的批次续跑' : '正在筛选');
       const evaluateBatch = async (batch: StudyCandidate[]): Promise<FilterRow[]> => {
         const first = await llm.complete({ profileId: request.profileId, ...filterHarnessPrompt(request.tier, batch), temperature: 0.1, signal: job.controller.signal });
         stats.llmCalls += 1;
@@ -237,14 +246,14 @@ export class StudyService {
         for (const row of rows) decisions[row.id] = { decision: row.decision, reason: row.reason };
         list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
         writeJsonAtomic(this.fileFor(bookId), list);
-        this.options.workflowProgress?.({ bookId, stage: 'filter', done: Object.keys(decisions).length, total: source.length });
+        emitFilterProgress(rows);
         await new Promise<void>((resolve) => setImmediate(resolve));
       };
       for (let offset = 0; offset < source.length; offset += batchSize) {
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         const batch = source.slice(offset, offset + batchSize).filter((item) => !decisions[item.id]);
         if (batch.length === 0) {
-          this.options.workflowProgress?.({ bookId, stage: 'filter', done: Math.min(offset + batchSize, source.length), total: source.length, message: '复用已完成结果' });
+          emitFilterProgress([], '复用已完成结果');
           continue;
         }
         await processBatch(batch);
@@ -257,10 +266,30 @@ export class StudyService {
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
     } catch (error) {
-      list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+      list.workflow = { ...workflow, pendingFilterRun: {
+        tier: request.tier, profileId: request.profileId, sourceHash, decisions,
+        stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
+        lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+      } };
       writeJsonAtomic(this.fileFor(bookId), list);
+      emitFilterProgress([], '本次中断，已保存进度');
       throw error;
     } finally { this.running.delete(bookId); }
+  }
+
+  /** 中断后只使用已判断的候选；未处理项暂不制卡，检查点仍可续跑。 */
+  applyCompletedFilter(bookId: string): StudyList {
+    if (this.running.has(bookId)) throw new Error('LLM 筛选仍在运行，请先取消或等待完成');
+    const list = this.read(bookId);
+    const workflow = list?.workflow;
+    const decisions = workflow?.pendingFilterRun?.decisions;
+    if (!list || !workflow || !decisions || Object.keys(decisions).length === 0) throw new Error('没有可使用的筛选检查点');
+    for (const item of directCandidates(list.candidates, workflow.levels, workflow.includeUnknown)) {
+      item.selected = !!decisions[item.id] && decisions[item.id]?.decision !== 'reject';
+    }
+    list.workflow = { ...workflow, filterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return list;
   }
 
   /** 第三步：R0 翻译或 R1–R3 LLM Harness 制作草稿。每张原句都来自固定的漫画文字块。 */
@@ -381,6 +410,7 @@ export class StudyService {
         tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
         translationProfileId: request.translationProfileId, sourceHash, drafts,
         stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
+        lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
       } };
       writeJsonAtomic(this.fileFor(bookId), list);
       throw error;

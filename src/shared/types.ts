@@ -729,6 +729,7 @@ export interface StudyWorkflow {
     sourceHash: string;
     decisions: Record<string, { decision: StudyFilterDecision; reason: string }>;
     stats?: StudyRunStats;
+    lastError?: string;
   };
   cardRun?: {
     tier: StudyCardTier;
@@ -747,6 +748,7 @@ export interface StudyWorkflow {
     sourceHash: string;
     drafts: StudyCardDraft[];
     stats?: StudyRunStats;
+    lastError?: string;
   };
 }
 
@@ -767,6 +769,15 @@ export interface StudyRunProgress {
   done: number;
   total: number;
   message?: string;
+  /** 筛选的临时判断：供页面边跑边展示；全部完成前不改变正式选择。 */
+  filter?: {
+    keep: number;
+    reject: number;
+    review: number;
+    llmCalls: number;
+    elapsedMs: number;
+    updates: Array<{ id: string; decision: StudyFilterDecision; reason: string }>;
+  };
 }
 
 export interface StudyFilterRunRequest {

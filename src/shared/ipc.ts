@@ -127,6 +127,7 @@ export const IPC = {
   studyExport: 'study:export',
   studyDirectFilter: 'study:directFilter',
   studyRunFilter: 'study:runFilter',
+  studyApplyCompletedFilter: 'study:applyCompletedFilter',
   studyRunCards: 'study:runCards',
   studyPatchCard: 'study:patchCard',
   studyExportPackage: 'study:exportPackage',
@@ -323,6 +324,7 @@ export interface AraleApi {
     export(bookId: string): Promise<StudyExportResult>;
     directFilter(bookId: string, levels: number[], includeUnknown: boolean): Promise<StudyList>;
     runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyList>;
+    applyCompletedFilter(bookId: string): Promise<StudyList>;
     runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList>;
     patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): Promise<StudyList>;
     exportPackage(bookId: string): Promise<StudyExportResult>;

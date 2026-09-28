@@ -2315,6 +2315,7 @@ button[aria-disabled='true'] {
 .study-row button { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .study-row button strong { min-width: 5em; font-size: 13px; }
 .study-row button span { color: var(--text-dim); white-space: nowrap; }
+.study-row button .study-filter-preview { color: var(--accent); font-weight: 600; }
 .study-row button .study-level { margin-left: auto; color: var(--accent); }
 .study-pages { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 10px; color: var(--text-dim); }
 .study-detail { overflow: auto; padding: 14px 18px 28px; }

@@ -391,6 +391,7 @@ export function registerIpc(services: Services): void {
   handle(IPC.studyRunFilter, (bookId: string, request: StudyFilterRunRequest): Promise<StudyList> =>
     study.runFilter(bookId, request),
   );
+  handle(IPC.studyApplyCompletedFilter, (bookId: string): StudyList => study.applyCompletedFilter(bookId));
   handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): Promise<StudyList> =>
     study.runCards(bookId, request),
   );

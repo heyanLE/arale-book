@@ -91,6 +91,12 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 - `npm run typecheck`、`npm run build` 通过；`npm test`：454 项中 449 通过、5 跳过。假模型验证 17 项 F2 与 17 卡 R1 各 3 次调用、7 项 F3 两次与 7 卡 R3 四次调用、错 ID/漏项、格式错及上下文超限缩批和失败续跑。
 - `npm run smoke`：192/192，包含 Anki 页面按批次估算 LLM 调用数。未测真实模型的延迟、token 成本与批量答案正确率；Windows 和 Anki 客户端本轮未验证。
 
+### 2026-09-29 LLM 筛选实时反馈（macOS / Node 22）
+
+- 原实现虽按批次落盘，但候选勾选只在全书筛完后改变，长任务看似无效。现每批广播临时保留/排除/待审、累计调用和进度；折叠标题也显示进度。中断原因随检查点保存；中断后可只使用已完成的候选，未处理项暂不制卡，检查点保留以便续跑。
+- `npm run typecheck`、`npm run build` 通过；`npm test`：455 项中 450 通过、5 跳过，覆盖批次事件与部分结果应用/续跑；`npm run smoke`：194/194，本地假 LLM 真实 Electron 请求验证中途可见 12/40 的结果且完成后正式应用。
+- 未验证范围：真实远端模型在大书上的完整筛选耗时与质量、Windows 上本轮 UI/IPC。
+
 ## 下一步：Windows 兼容与修复
 
 优先顺序及具体命令见 [Windows 交接](windows-handoff.md)。

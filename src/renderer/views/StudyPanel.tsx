@@ -1,6 +1,6 @@
 /** 漫画学习候选审核：JLPT 筛选、出处核对、人工短语和 Anki 导出。 */
 import { useEffect, useMemo, useState } from 'react';
-import type { LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterTier, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
+import type { LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
 import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, directCandidates, estimatedLlmCalls } from '@core/study/harness';
 import { api, call, useIpcEvent } from '../lib/api';
 
@@ -51,6 +51,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [workflowBusy, setWorkflowBusy] = useState(false);
   const [workflowExpanded, setWorkflowExpanded] = useState(true);
   const [workflowProgress, setWorkflowProgress] = useState<StudyRunProgress | null>(null);
+  const [liveFilterDecisions, setLiveFilterDecisions] = useState<Record<string, { decision: StudyFilterDecision; reason: string }>>({});
   const [cardEdit, setCardEdit] = useState({ meaning: '', sentenceTranslation: '', usage: '', nuance: '' });
 
   useEffect(() => {
@@ -63,6 +64,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     ]).then(([value, llm, translation]) => {
       if (!live) return;
       setList(value); setLoading(false);
+      setLiveFilterDecisions(value?.workflow?.pendingFilterRun?.decisions ?? {});
       setLevels(value?.workflow?.levels ?? [...DEFAULT_STUDY_LEVELS]);
       setIncludeUnknown(value?.workflow?.includeUnknown ?? false);
       setLlmSettings(llm);
@@ -85,7 +87,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     if (event.bookId === bookId) setProgress({ done: event.done, total: event.total });
   });
   useIpcEvent('study:workflow-progress', (event) => {
-    if (event.bookId === bookId) setWorkflowProgress(event);
+    if (event.bookId !== bookId) return;
+    setWorkflowProgress(event);
+    if (event.stage === 'filter' && event.filter?.updates.length) {
+      setLiveFilterDecisions((previous) => {
+        const next = { ...previous };
+        for (const row of event.filter!.updates) next[row.id] = { decision: row.decision, reason: row.reason };
+        return next;
+      });
+    }
   });
 
   const filtered = useMemo(() => {
@@ -114,6 +124,17 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const reviewCount = cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
   const filterCalls = estimatedLlmCalls(directPreview.length, FILTER_TIERS[filterTier]);
   const cardCalls = estimatedLlmCalls(selectedCount, CARD_TIERS[cardTier]);
+  const pendingFilterCount = Object.keys(liveFilterDecisions).length;
+  const filterProgress = workflowProgress?.stage === 'filter' ? workflowProgress : null;
+  const filterCounts = filterProgress?.filter ?? Object.values(liveFilterDecisions).reduce(
+    (counts, row) => ({ ...counts, [row.decision]: counts[row.decision] + 1 }),
+    { keep: 0, reject: 0, review: 0, llmCalls: 0, elapsedMs: 0, updates: [] as NonNullable<StudyRunProgress['filter']>['updates'] },
+  );
+  const filterDone = filterProgress?.done ?? pendingFilterCount;
+  const filterTotal = filterProgress?.total ?? directPreview.length;
+  const filterElapsed = filterProgress?.filter?.elapsedMs ?? list?.workflow?.pendingFilterRun?.stats?.elapsedMs ?? 0;
+  const remainingMinutes = filterDone >= 8 && filterDone < filterTotal
+    ? Math.ceil((filterElapsed / filterDone) * (filterTotal - filterDone) / 60_000) : null;
 
   useEffect(() => {
     setDraft({ expression: active?.expression ?? '', reading: active?.reading ?? '', meaning: active?.meaning ?? '' });
@@ -192,18 +213,38 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
 
   async function runLlmFilter(): Promise<void> {
     if (!filterProfileId || !await saveDraft()) return;
-    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'filter', done: 0, total: directPreview.length });
+    const prior = list?.workflow?.pendingFilterRun;
+    const resume = prior?.tier === filterTier && prior.profileId === filterProfileId;
+    const saved = resume ? prior.decisions : {};
+    setLiveFilterDecisions(saved);
+    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'filter', done: Object.keys(saved).length, total: directPreview.length });
+    setNotice('正在逐批筛选；下方会显示临时判断，全部完成后才正式更新选择。');
     const next = await call('运行 LLM 筛选 Harness', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId }));
     if (next) {
       setList(next);
+      setLiveFilterDecisions({});
       setLevel('all'); setOnlySelected(true); setPage(0);
       const decisions = Object.values(next.workflow?.filterRun?.decisions ?? {});
       setNotice(`筛选完成：保留 ${decisions.filter((one) => one.decision === 'keep').length}，待审 ${decisions.filter((one) => one.decision === 'review').length}，排除 ${decisions.filter((one) => one.decision === 'reject').length}`);
     } else {
       const checkpoint = await call('读取筛选检查点', () => api.study.read(bookId));
-      if (checkpoint) { setList(checkpoint); setNotice(`已保存 ${Object.keys(checkpoint.workflow?.pendingFilterRun?.decisions ?? {}).length} 个筛选结果，重试可续跑。`); }
+      if (checkpoint) {
+        setList(checkpoint);
+        const pending = checkpoint.workflow?.pendingFilterRun?.decisions ?? {};
+        setLiveFilterDecisions(pending);
+        const reason = checkpoint.workflow?.pendingFilterRun?.lastError;
+        setNotice(`本次筛选已中断：${reason ?? '未知原因'}。已保存 ${Object.keys(pending).length} 个临时判断；保持档位和配置可续跑。`);
+      }
     }
     setWorkflowBusy(false); setWorkflowProgress(null);
+  }
+
+  async function useCompletedFilter(): Promise<void> {
+    const next = await call('使用已完成的 LLM 筛选', () => api.study.applyCompletedFilter(bookId));
+    if (!next) return;
+    setList(next);
+    setLevel('all'); setOnlySelected(true); setPage(0);
+    setNotice(`已选用 ${next.candidates.filter((item) => item.selected && !item.excluded).length} 个已处理候选；其余暂不制卡，之后仍可续跑筛选。`);
   }
 
   async function makeCards(): Promise<void> {
@@ -262,7 +303,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     {!loading && !list && <div className="segment-empty">先生成分词，再点“生成候选”。候选来自漫画文字块；可按 JLPT 难度筛选并逐词核对。</div>}
     {list && <>
       <details className="study-workflow" open={workflowExpanded} onToggle={(event) => setWorkflowExpanded(event.currentTarget.open)}>
-        <summary>筛选 → 制卡 · 已选 {selectedCount} · 草稿 {cardRun?.drafts.length ?? pendingCardCount}</summary>
+        <summary>筛选 → 制卡 · 已选 {selectedCount} · 草稿 {cardRun?.drafts.length ?? pendingCardCount}
+          {workflowBusy && filterProgress && ` · LLM 正在筛选 ${filterDone}/${filterTotal}`}
+          {!workflowBusy && pendingFilterCount > 0 && ` · 待续跑 ${pendingFilterCount}/${filterTotal}`}
+        </summary>
         <div className="study-workflow-steps">
           <section className="study-workflow-step">
             <h3>1. 直接筛选</h3>
@@ -286,7 +330,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               <button type="button" className="btn btn-sm" disabled={!filterProfileId || directPreview.length === 0 || levelsDirty || workflowBusy || stale} onClick={() => void runLlmFilter()}>运行 LLM 筛选</button>
             </div>
             {levelsDirty && <small>勾选项已变更，请先应用直接筛选。</small>}
-            {list.workflow?.pendingFilterRun && <small>上次已完成 {Object.keys(list.workflow.pendingFilterRun.decisions).length} 个；保持档位与配置可续跑。</small>}
+            {pendingFilterCount > 0 && <small>已有 {pendingFilterCount} 个临时判断；全部完成前不会改动正式选择。保持档位与配置可续跑。</small>}
+            {!workflowBusy && list.workflow?.pendingFilterRun?.lastError && <small>上次中断：{list.workflow.pendingFilterRun.lastError}</small>}
+            {pendingFilterCount > 0 && !workflowBusy && <button type="button" className="btn btn-sm" onClick={() => void useCompletedFilter()}>只使用已完成的 {pendingFilterCount} 项</button>}
             {list.workflow?.filterRun && <small>上次：{list.workflow.filterRun.tier} · {list.workflow.filterRun.stats?.llmCalls ?? '—'} 次 LLM 调用 · {Math.round((list.workflow.filterRun.stats?.elapsedMs ?? 0) / 1000)} 秒。结果可在下方逐词修改。</small>}
           </section>
           <section className="study-workflow-step">
@@ -318,6 +364,8 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
         </div>
         {workflowBusy && <div className="study-workflow-progress" role="status">
           {workflowProgress?.stage === 'filter' ? 'LLM 筛选' : workflowProgress?.stage === 'cards' ? '制作卡片' : '打包漫画裁图'}：{workflowProgress?.done ?? 0} / {workflowProgress?.total ?? '…'}
+          {filterProgress && <span>临时判断：保留 {filterCounts.keep} · 排除 {filterCounts.reject} · 待审 {filterCounts.review} · {filterCounts.llmCalls || list.workflow?.pendingFilterRun?.stats?.llmCalls || 0} 次请求
+            {remainingMinutes !== null && ` · 按当前速度约剩余 ${remainingMinutes} 分钟`}</span>}
           <button type="button" className="btn btn-sm" onClick={() => void api.study.cancel(bookId)}>取消</button>
         </div>}
       </details>
@@ -336,17 +384,21 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       </div>
       <div className="study-content">
         <div className="study-list" role="listbox" aria-label="学习候选词">
-          {visible.map((item) => <div className={`study-row${active?.id === item.id ? ' active' : ''}`} key={item.id} role="option" aria-selected={active?.id === item.id}>
+          {visible.map((item) => {
+            const pending = liveFilterDecisions[item.id] ?? list.workflow?.pendingFilterRun?.decisions[item.id];
+            const decision = pending ?? list.workflow?.filterRun?.decisions[item.id];
+            return <div className={`study-row${active?.id === item.id ? ' active' : ''}`} key={item.id} role="option" aria-selected={active?.id === item.id}>
             <input type="checkbox" aria-label={`选择 ${item.expression}`} checked={item.selected} disabled={item.excluded} onChange={(event) => void patchOne(item.id, { selected: event.target.checked })} />
             <button type="button" onClick={() => void switchCandidate(item.id)}>
               <strong>{item.expression}</strong><span>{item.reading || '读音待确认'}</span>
               <span className="study-level">{item.jlpt ? `N${item.jlpt}${item.jlptConflict ? '?' : ''}` : '未知'}</span>
               <span>×{item.count}</span>
-              {list.workflow?.filterRun?.decisions[item.id]?.decision === 'review' && <span title={list.workflow.filterRun.decisions[item.id]?.reason}>LLM 待审</span>}
-              {list.workflow?.filterRun?.decisions[item.id]?.decision === 'reject' && <span title={list.workflow.filterRun.decisions[item.id]?.reason}>{item.selected ? '人工保留' : 'LLM 排除'}</span>}
+              {pending?.decision === 'keep' && <span className="study-filter-preview" title={pending.reason}>暂保留</span>}
+              {decision?.decision === 'review' && <span className={pending ? 'study-filter-preview' : ''} title={decision.reason}>{pending ? '暂待审' : 'LLM 待审'}</span>}
+              {decision?.decision === 'reject' && <span className={pending ? 'study-filter-preview' : ''} title={decision.reason}>{pending ? '暂排除' : item.selected ? '人工保留' : 'LLM 排除'}</span>}
               {item.exportedAt && <span>已导出</span>}
             </button>
-          </div>)}
+          </div>; })}
           {filtered.length === 0 && <div className="segment-empty">当前筛选没有候选词；试试“全部等级”或“等级未知”。</div>}
           <div className="study-pages">
             <button type="button" className="btn btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button>
