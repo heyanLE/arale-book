@@ -103,6 +103,8 @@ npm start
 4. **功能验收**：包内 Python `--probe`、30 页 OCR、应用扩展服务、队列/取消、CBZ/EPUB/伪装 CBR 原生路径、系统 OCR 和 GUI smoke 已通过；真实 RAR/7Z 私有夹具、干净系统和实际安装仍待补测。
 5. **仓库资产**：Windows ZIP 是交叉构建，JSONL 的 Windows sha256 故意为空，应用拒绝安装。只有完成 Windows 真机验收后，才能写入真实 SHA 并上传 Release。主仓库和引擎库的源码先后推送，不代表 Release 已上传。
 
+2026-09-30 补记：macOS arm64 ZIP 已上传到引擎仓库 `v0.2.0` **草稿** Release（仅一个资产），尚未公开或创建正式 tag；Windows ZIP 未上传。接手时可在同一草稿补 Windows 资产，但先完成干净 Windows 运行依赖、应用下载/安装和 NSIS 安装/卸载验收，再更新 JSONL 的 Windows SHA。草稿链接见[当前状态](current-state.md)。
+
 ## 6. 可选搬迁材料
 
 | 材料 | 用途 | 是否必需 |

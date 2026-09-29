@@ -1,6 +1,6 @@
 # 当前状态与接续任务
 
-核对日期：2026-09-29。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
+核对日期：2026-09-30。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
 功能基线：应用提交 `91fc064`、文档整理前提交 `1b57c64`；引擎功能提交 `59eed53`。这些是定位历史的基线，当前 HEAD 用 `git log` 查看。
 
 ## 现在是什么
@@ -20,7 +20,7 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | OCR 仓库 | 一个 HTTPS JSONL 文件代表一个仓库；设置中可增删，默认当前引擎库 |
 | 正式应用包 | 只携带从 submodule 取得的小型仓库索引，不携带可下载引擎 |
 | 开发/调试包 | 存在 `build/dev-<platform>-<arch>/` 时直接加载；调试应用包会复制该目录 |
-| 发布 | OCR ZIP 已在本机生成，尚未上传 Release；主项目和引擎库 `main` 已推送到 GitHub，当前设置与词卡 UX 本地分支尚未推送 |
+| 发布 | macOS OCR ZIP 已上传到引擎仓库 `v0.2.0` 草稿 Release，尚未公开；Windows ZIP 未上传，JSONL 的 Windows SHA 仍为空。主项目 `main` 的 Anki/设置改动已推送到 GitHub；引擎源码 `main` 已同步 |
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
@@ -137,6 +137,11 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 
 - R1 生成的一本现有书有 183 张草稿，其中 20 张因 OCR 疑点、断句或歧义被模型标为待审；草稿数量和词单哈希一致，导出按钮禁用是既有审核门槛。第 5 步现默认显示“词卡待审”列表，列出逐卡原因和明确的导出禁用说明，最后一张通过审核后返回完整词单并恢复按钮。未改动这本书的持久数据。
 - `npm run typecheck`、`npm run build` 通过；`npm test` 476 项中 471 通过、5 跳过；`npm run smoke` 214/214，使用隔离 Electron 数据目录验证待审卡拦截、原因显示、人工通过与按钮恢复。Windows 目标系统和 Anki 客户端导入本轮未验收。
+
+### 2026-09-30 macOS OCR 草稿分发（macOS arm64）
+
+- 引擎仓库 [v0.2.0 草稿 Release](https://github.com/heyanLE/arale-book-ocr-manga/releases/tag/untagged-f9d76c87bef99f6d63e5) 已上传且仅包含 `arale_onnx_v1-macos-arm64.zip`（GitHub 页面显示 Assets 1、688.85 MB、Draft）。本地 ZIP 为 722309909 字节，SHA-256 `9d83ceca86f6c5e29f635eba2b0b9ab03d06d5c9ff7bc9d09b7f0eb9de244539`，与 JSONL 一致；`unzip -tqq` 通过。草稿未公开，`v0.2.0` 标签会在正式发布时创建，当前应用内的计划下载 URL 仍不可用。
+- Windows ZIP 未上传，JSONL 的 Windows SHA 保持空值；待 Windows 设备完成干净环境与下载/安装验收后再加入此 Release。没有把交叉构建产物直接开放安装。
 
 ## 下一步：Windows 兼容与修复
 
