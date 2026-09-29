@@ -37,6 +37,7 @@ export function defaultStudyWorkflow(): StudyWorkflow {
 /** 新层默认不排除任何候选；旧书与已有 LLM 检查点仍按原规则运行。 */
 export function defaultDirectOptions(): DirectFilterOptions {
   return {
+    includeConflict: null,
     partOfSpeech: 'all', excludeProperNames: false, excludeNumbers: false,
     excludeTokenizerUnknown: false, excludedWords: [],
     minOccurrences: null, minZipf: null, missingZipf: 'keep',
@@ -46,6 +47,7 @@ export function defaultDirectOptions(): DirectFilterOptions {
 export function normalizeDirectOptions(raw?: Partial<DirectFilterOptions> | null): DirectFilterOptions {
   const defaults = defaultDirectOptions();
   return {
+    includeConflict: typeof raw?.includeConflict === 'boolean' ? raw.includeConflict : null,
     partOfSpeech: raw?.partOfSpeech === 'core' ? 'core' : defaults.partOfSpeech,
     excludeProperNames: raw?.excludeProperNames === true,
     excludeNumbers: raw?.excludeNumbers === true,
@@ -77,6 +79,7 @@ export function directCandidates(
 }
 
 export interface DirectFilterStage { name: string; remaining: number; removed: number; }
+export interface DirectFilterResult { selected: StudyCandidate[]; stages: DirectFilterStage[]; reasons: Record<string, string[]>; }
 
 /** 阶段计数与正式筛选共用同一实现，UI 不自己猜排除原因。 */
 export function directFilterStages(
@@ -84,33 +87,52 @@ export function directFilterStages(
   levels: readonly number[],
   includeUnknown: boolean,
   options?: Partial<DirectFilterOptions> | null,
-): { selected: StudyCandidate[]; stages: DirectFilterStage[] } {
+): DirectFilterResult {
   const chosen = new Set(normalizeLevels(levels));
   const rules = normalizeDirectOptions(options);
   const stages: DirectFilterStage[] = [];
+  const reasons: Record<string, string[]> = {};
+  const note = (item: StudyCandidate, reason: string): void => {
+    (reasons[item.id] ??= []).push(reason);
+  };
   let current = candidates.filter((item) => !item.excluded);
+  for (const item of candidates) if (item.excluded) note(item, '手动排除');
   stages.push({ name: '人工排除', remaining: current.length, removed: candidates.length - current.length });
-  const apply = (name: string, keep: (item: StudyCandidate) => boolean): void => {
+  const apply = (name: string, rejectReason: (item: StudyCandidate) => string | string[] | null): void => {
+    const rejected = new Set<string>();
+    for (const item of candidates) {
+      const found = rejectReason(item);
+      const messages = Array.isArray(found) ? found : found ? [found] : [];
+      if (messages.length > 0) {
+        rejected.add(item.id);
+        for (const reason of messages) note(item, reason);
+      }
+    }
     const before = current.length;
-    current = current.filter((item) => item.forceInclude === true || keep(item));
+    current = current.filter((item) => item.forceInclude === true || !rejected.has(item.id));
     stages.push({ name, remaining: current.length, removed: before - current.length });
   };
-  apply('JLPT 参考等级', (item) => item.jlpt === null || item.jlptConflict ? includeUnknown : chosen.has(item.jlpt));
+  apply('JLPT 参考等级', (item) => item.jlptConflict
+    ? (rules.includeConflict ?? includeUnknown) ? null : 'JLPT 等级冲突'
+    : item.jlpt === null ? includeUnknown ? null : 'JLPT 未收录等级'
+      : chosen.has(item.jlpt) ? null : `N${item.jlpt} 不在所选等级`);
   const blockedWords = new Set(rules.excludedWords);
   const corePos = new Set(['名詞', '動詞', '形容詞', '副詞']);
   apply('词条类型与噪声', (item) => {
-    if (blockedWords.has(item.expression.trim().normalize('NFKC'))) return false;
-    if (rules.partOfSpeech === 'core' && !corePos.has(item.partOfSpeech)) return false;
-    if (rules.excludeProperNames && item.properName === true) return false;
-    if (rules.excludeNumbers && (item.posDetail === '数' || /^[0-9０-９一二三四五六七八九十百千]+$/u.test(item.expression))) return false;
-    if (rules.excludeTokenizerUnknown && item.tokenizerKnown === false) return false;
-    return true;
+    const why: string[] = [];
+    if (blockedWords.has(item.expression.trim().normalize('NFKC'))) why.push('在本书排除词清单中');
+    if (rules.partOfSpeech === 'core' && !corePos.has(item.partOfSpeech)) why.push(`词性为${item.partOfSpeech}`);
+    if (rules.excludeProperNames && item.properName === true) why.push('分词器识别为专名');
+    if (rules.excludeNumbers && (item.posDetail === '数' || /^[0-9０-９一二三四五六七八九十百千]+$/u.test(item.expression))) why.push('数词');
+    if (rules.excludeTokenizerUnknown && item.tokenizerKnown === false) why.push('分词器未知词');
+    return why;
   });
-  apply('作品内重复', (item) => rules.minOccurrences === null || item.count >= rules.minOccurrences);
-  apply('通用词频 Zipf', (item) => rules.minZipf === null ||
-    (typeof item.zipf === 'number' ? item.zipf >= rules.minZipf
-      : rules.missingZipf === 'keep'));
-  return { selected: current, stages };
+  apply('作品内重复', (item) => rules.minOccurrences !== null && item.count < rules.minOccurrences
+    ? `只出现 ${item.count} 次，低于 ${rules.minOccurrences} 次` : null);
+  apply('通用词频 Zipf', (item) => rules.minZipf === null ? null
+    : typeof item.zipf === 'number' ? item.zipf < rules.minZipf ? `通用词频 ${item.zipf} 低于 ${rules.minZipf}` : null
+      : rules.missingZipf === 'exclude' ? '通用词频未收录' : null);
+  return { selected: current, stages, reasons };
 }
 
 /** 报告中的排序公式，仅决定展示顺序，不自动截断前 N 张。 */

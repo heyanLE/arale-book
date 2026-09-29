@@ -2263,15 +2263,45 @@ try {
     openedStudyTab === 'opened' && studyTab === 'opened' &&
     (await client.evaluate("!!document.querySelector('.study-panel .study-filters')")) === true,
     `${openedStudyTab}/${studyTab}`);
-  check('Anki 页面有直接筛选、LLM 筛选、R0–R3 制卡入口',
-    (await client.evaluate("[...document.querySelectorAll('.study-workflow-step h3')].map((node) => node.textContent)"))?.length === 4 &&
-    (await client.evaluate("!!document.querySelector('select[aria-label=\"制卡档位\"] option[value=\"R3\"]')")) === true);
-  check('直接筛选分层展示 JLPT、词条清理、作品重复和 Zipf 预览',
-    (await client.evaluate("[...document.querySelectorAll('.study-direct-result span')].map((node) => node.textContent)"))?.length === 5 &&
-    (await client.evaluate("document.querySelector('.study-workflow-direct')?.textContent.includes('通用词频 Zipf')")) === true);
+  check('Anki 选词改为四个依次展示的导航步骤',
+    (await client.evaluate("document.querySelectorAll('.study-flow-nav button').length")) === 4 &&
+    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('规则筛词')")) === true);
+  check('规则页显示预计保留数、词条规则和每层新排除数',
+    (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('预计保留 40')")) === true &&
+    (await client.evaluate("document.querySelectorAll('.study-rule-impact span').length")) === 5 &&
+    (await client.evaluate("document.querySelector('.study-rule-editor')?.textContent.includes('参考通用词频')")) === true);
+  const rulePreviewOnly = await client.evaluate(`(async () => {
+    const n5 = [...document.querySelectorAll('.study-rule-group input[type=checkbox]')].find((node) => node.parentElement?.textContent.trim() === 'N5');
+    n5?.click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const preview = document.querySelector('.study-preview-total')?.textContent ?? '';
+    const formal = (await window.arale.study.read(${JSON.stringify(comicId)})).candidates.filter((item) => item.selected).length;
+    [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('撤销改动'))?.click();
+    return { preview, formal };
+  })()`);
+  check('修改规则只改变预计结果，撤销前不改正式词单',
+    !rulePreviewOnly.preview.includes('预计保留 40') && rulePreviewOnly.formal === 40,
+    JSON.stringify(rulePreviewOnly));
+  if (process.env['ARALE_SMOKE_STUDY_RULES_SCREENSHOT']) {
+    const width = Number(process.env['ARALE_SMOKE_STUDY_RULES_WIDTH'] ?? 1366);
+    const height = Number(process.env['ARALE_SMOKE_STUDY_RULES_HEIGHT'] ?? 768);
+    await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    await delay(80);
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_RULES_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 语境筛选'))?.click();
+  })()`);
+  await delay(80);
   check('LLM 筛选并发默认 2 且最多可选 3',
     (await client.evaluate("document.querySelector('select[aria-label=\"筛选并发数\"]')?.value")) === '2' &&
     (await client.evaluate("!!document.querySelector('select[aria-label=\"筛选并发数\"] option[value=\"3\"]')")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('制卡与导出'))?.click();
+  })()`);
+  await delay(80);
   await client.evaluate(`(() => {
     const select = document.querySelector('select[aria-label="制卡档位"]');
     const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
@@ -2280,19 +2310,23 @@ try {
   })()`);
   await delay(80);
   check('制卡调用数按批次计算，不再按一张一次',
-    (await client.evaluate("document.querySelectorAll('.study-workflow-step')[2]?.textContent.includes('正常约 7 次 LLM 调用')")) === true);
+    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('正常约 7 次 LLM 调用')")) === true);
   await client.evaluate(`(() => {
-    const button = [...document.querySelectorAll('.study-workflow-step button')].find((node) => node.textContent.trim() === '运行 LLM 筛选');
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 语境筛选'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('开始筛选'));
     button?.click();
   })()`);
   await delay(780);
   const liveFilter = await client.evaluate(`({
-    summary: document.querySelector('.study-workflow summary')?.textContent ?? '',
+    summary: document.querySelector('.study-flow-nav')?.textContent ?? '',
     progress: document.querySelector('.study-workflow-progress')?.textContent ?? '',
     badges: document.querySelectorAll('.study-filter-preview').length,
   })`);
   check('LLM 筛选处理中可见批次进度和临时判断',
-    liveFilter.summary.includes('LLM 正在筛选') && liveFilter.progress.includes('临时判断') && liveFilter.badges > 0,
+    liveFilter.progress.includes('临时判断') && liveFilter.badges > 0,
     JSON.stringify(liveFilter));
   let finishedFilter = false;
   for (let i = 0; i < 30; i += 1) {
@@ -2302,10 +2336,25 @@ try {
   }
   check('LLM 筛选完成后正式应用结果', finishedFilter);
   check('筛选 Harness 通过结构化提交工具返回结果', mockToolRequests > 0, `toolRequests=${mockToolRequests}`);
+  check('AI 完成后进入确认词单并优先显示待审项',
+    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('确认词单')")) === true &&
+    (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true);
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
   }
+  const reviewedCandidateId = await client.evaluate(`(async () => {
+    document.querySelector('.study-row button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    const chosen = document.querySelector('.study-row button strong')?.textContent.trim();
+    [...document.querySelectorAll('.study-decision-controls button')].find((node) => node.textContent.includes('手动保留'))?.click();
+    return chosen;
+  })()`);
+  await delay(100);
+  check('待审词可在同一处手动保留并从待审列表移出',
+    !!reviewedCandidateId &&
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.find((item) => item.expression === ${JSON.stringify(reviewedCandidateId)})?.forceInclude)`)) === true &&
+    (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('AI 待审 12')")) === true);
   await client.evaluate(`(() => {
     const back = [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'));
     back?.click();

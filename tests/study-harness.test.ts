@@ -473,10 +473,12 @@ test('筛选中断后可只使用已完成结果，未处理项暂不制卡且�
     assert.equal(partial.candidates[0]?.selected, false, '已判拒绝');
     assert.equal(partial.candidates[1]?.selected, true, '已判保留');
     assert.equal(partial.candidates[8]?.selected, false, '尚未处理，暂不制卡');
+    assert.ok((partial.workflow?.partialFilterAppliedAt ?? 0) > 0);
     assert.equal(Object.keys(partial.workflow?.pendingFilterRun?.decisions ?? {}).length, 8);
     const complete = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1', concurrency: 1 });
     assert.equal(calls, 3);
     assert.equal(complete.workflow?.pendingFilterRun, undefined);
+    assert.equal(complete.workflow?.partialFilterAppliedAt, undefined);
     assert.equal(complete.workflow?.filterRun?.stats?.llmCalls, 3);
   } finally {
     setUserDataRootForTesting(null);

@@ -57,6 +57,10 @@ export class StudyService {
 
   async generate(bookId: string): Promise<StudyList> {
     if (this.running.has(bookId)) throw new Error('这本书正在生成候选词');
+    const previousList = this.read(bookId);
+    if (Object.keys(previousList?.workflow?.pendingFilterRun?.decisions ?? {}).length > 0) {
+      throw new Error('已有 LLM 筛选检查点；请先续跑或明确放弃，再重新生成候选');
+    }
     const book = this.options.getBook(bookId);
     if (!book) throw new Error('书不存在');
     if ((book.readerMode ?? book.format) !== 'comic') throw new Error('当前仅支持漫画文字层');
@@ -81,7 +85,6 @@ export class StudyService {
       const candidates = buildStudyCandidates(segments.units, parsed, index);
       const frequencySource = wordfreqSource();
       if (frequencySource) for (const item of candidates) item.zipf = zipfForCandidate(item);
-      const previousList = this.read(bookId);
       const previous = new Map(previousList?.candidates.map((item) => [item.id, item]) ?? []);
       for (let index = 0; index < candidates.length; index += 1) {
         if (job.cancelled) throw new Error('已取消生成');
@@ -105,7 +108,7 @@ export class StudyService {
       const list: StudyList = {
         bookId, generatedAt: Date.now(), segmentGeneratedAt: segments.generatedAt,
         jlptSource: source, wordfreqSource: frequencySource, candidates,
-        workflow: { ...(previousList?.workflow ?? defaultStudyWorkflow()), filterRun: undefined, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined },
+        workflow: { ...(previousList?.workflow ?? defaultStudyWorkflow()), directAppliedAt: 0, partialFilterAppliedAt: undefined, filterRun: undefined, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined },
       };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
@@ -118,6 +121,11 @@ export class StudyService {
     if (this.running.has(bookId)) throw new Error('正在重新生成候选，请稍后修改');
     const list = this.read(bookId);
     if (!list) throw new Error('尚未生成学习候选');
+    if (Object.keys(list.workflow?.pendingFilterRun?.decisions ?? {}).length > 0 &&
+      (patch.excluded !== undefined || patch.forceInclude !== undefined || patch.expression !== undefined ||
+        patch.reading !== undefined || patch.contextRef !== undefined)) {
+      throw new Error('已有 LLM 筛选检查点；请先续跑或明确放弃，再修改词形、出处或人工决定');
+    }
     const item = list.candidates.find((candidate) => candidate.id === candidateId);
     if (!item) throw new Error('候选词不存在；可能已重新生成');
     if (typeof patch.selected === 'boolean') item.selected = patch.selected;
@@ -147,12 +155,19 @@ export class StudyService {
     if (this.running.has(bookId)) throw new Error('正在重新生成候选，请稍后修改');
     const list = this.read(bookId);
     if (!list) throw new Error('尚未生成学习候选');
+    if (Object.keys(list.workflow?.pendingFilterRun?.decisions ?? {}).length > 0 &&
+      (patch.excluded !== undefined || patch.forceInclude !== undefined)) {
+      throw new Error('已有 LLM 筛选检查点；请先续跑或明确放弃，再批量修改人工决定');
+    }
     if (candidateIds.length > 10000) throw new Error('一次最多选择 10000 个词');
     const ids = new Set(candidateIds);
     for (const item of list.candidates) {
       if (!ids.has(item.id)) continue;
       if (typeof patch.selected === 'boolean') item.selected = patch.selected;
       if (typeof patch.excluded === 'boolean') item.excluded = patch.excluded;
+      if (typeof patch.forceInclude === 'boolean') item.forceInclude = patch.forceInclude;
+      if (item.excluded) item.selected = false;
+      else if (item.forceInclude) item.selected = true;
     }
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
@@ -162,6 +177,9 @@ export class StudyService {
     if (this.running.has(bookId)) throw new Error('正在重新生成候选，请稍后修改');
     const list = this.read(bookId);
     if (!list) throw new Error('尚未生成学习候选');
+    if (Object.keys(list.workflow?.pendingFilterRun?.decisions ?? {}).length > 0) {
+      throw new Error('已有 LLM 筛选检查点；请先续跑或明确放弃，再补录短语');
+    }
     const phrase = expression.trim();
     if (phrase.length < 2 || phrase.length > 100) throw new Error('短语长度需为 2–100 个字符');
     const source = list.candidates.flatMap((item) => item.occurrences).find((one) => one.id === occurrenceId && one.text.includes(phrase));
@@ -209,7 +227,7 @@ export class StudyService {
     const ids = new Set(directCandidates(list.candidates, normalized, includeUnknown, direct).map((item) => item.id));
     for (const item of list.candidates) item.selected = ids.has(item.id);
     list.workflow = {
-      levels: normalized, includeUnknown, direct,
+      levels: normalized, includeUnknown, direct, directAppliedAt: Date.now(), partialFilterAppliedAt: undefined,
       ...(sameRules && previous?.pendingFilterRun ? { pendingFilterRun: previous.pendingFilterRun } : {}),
     };
     writeJsonAtomic(this.fileFor(bookId), list);
@@ -306,7 +324,7 @@ export class StudyService {
       for (const item of list.candidates) {
         if (decisions[item.id]) item.selected = decisions[item.id]?.decision !== 'reject';
       }
-      list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, concurrency, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+      list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, concurrency, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, partialFilterAppliedAt: undefined, cardRun: undefined, pendingCardRun: undefined };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
     } catch (error) {
@@ -331,7 +349,7 @@ export class StudyService {
     for (const item of directCandidates(list.candidates, workflow.levels, workflow.includeUnknown, workflow.direct)) {
       item.selected = item.forceInclude === true || (!!decisions[item.id] && decisions[item.id]?.decision !== 'reject');
     }
-    list.workflow = { ...workflow, filterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+    list.workflow = { ...workflow, filterRun: undefined, partialFilterAppliedAt: Date.now(), cardRun: undefined, pendingCardRun: undefined };
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
   }
@@ -340,7 +358,7 @@ export class StudyService {
     if (this.running.has(bookId)) throw new Error('LLM 筛选仍在运行，请先取消');
     const list = this.read(bookId);
     if (!list) throw new Error('请先生成学习候选');
-    if (list.workflow) list.workflow.pendingFilterRun = undefined;
+    if (list.workflow) { list.workflow.pendingFilterRun = undefined; list.workflow.partialFilterAppliedAt = undefined; }
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
   }

@@ -720,6 +720,8 @@ export type StudyCardTier = 'R0' | 'R1' | 'R2' | 'R3';
 export type StudyFilterDecision = 'keep' | 'reject' | 'review';
 
 export interface DirectFilterOptions {
+  /** null/缺失沿用旧版“未分级与冲突共用开关”的行为。 */
+  includeConflict?: boolean | null;
   /** 当前候选已是内容词；core 进一步只留名/动/形/副。 */
   partOfSpeech: 'all' | 'core';
   excludeProperNames: boolean;
@@ -744,6 +746,10 @@ export interface StudyWorkflow {
   /** JLPT 为社区参考等级；null 单独由 includeUnknown 控制。 */
   levels: Array<1 | 2 | 3 | 4 | 5>;
   includeUnknown: boolean;
+  /** 0 = 候选重建后尚未应用；缺失是旧版文件，按已有选择兼容读取。 */
+  directAppliedAt?: number;
+  /** 用户明确选择“只使用已完成判断”的时间；检查点仍保留供续跑。 */
+  partialFilterAppliedAt?: number;
   /** 旧工作流缺失时使用宽松默认，不会重置已有 LLM 检查点。 */
   direct?: DirectFilterOptions;
   filterRun?: {

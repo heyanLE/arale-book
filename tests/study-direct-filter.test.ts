@@ -45,6 +45,20 @@ test('新增层默认宽松，人工保留可绕过自动层，明确排除始�
     ['作品内重复', 4], ['通用词频 Zipf', 3],
   ]);
   assert.deepEqual(directFilterStages(values, [3], false, { ...rules, missingZipf: 'exclude' }).selected.map((one) => one.id), ['猫', '手动短语']);
+  assert.deepEqual(result.reasons['单次'], ['只出现 1 次，低于 2 次']);
+  assert.deepEqual(result.reasons['太郎'], ['分词器识别为专名']);
+  assert.deepEqual(result.reasons['显式排除']?.[0], '手动排除');
+  assert.equal(directFilterStages([{ ...values[6]!, forceInclude: false }], [3], false, rules).selected.length, 0,
+    '撤销手动保留时必须重新按规则判断，不能沿用原来绕过规则的入选状态');
+});
+
+test('未收录等级与等级冲突可独立选择，旧配置仍沿用合并开关', () => {
+  const values = [item('未分级', { jlpt: null }), item('冲突', { jlpt: 2, jlptConflict: true })];
+  assert.deepEqual(directFilterStages(values, [3], true).selected.map((one) => one.id), ['未分级', '冲突']);
+  const split = directFilterStages(values, [3], false, { includeConflict: true });
+  assert.deepEqual(split.selected.map((one) => one.id), ['冲突']);
+  assert.deepEqual(split.reasons['未分级'], ['JLPT 未收录等级']);
+  assert.deepEqual(directFilterStages(values, [3], true, { includeConflict: false }).selected.map((one) => one.id), ['未分级']);
 });
 
 test('wordfreq 包内 Zipf 可用，未收录与低频分开，排序只改变优先级', () => {
@@ -57,7 +71,7 @@ test('wordfreq 包内 Zipf 可用，未收录与低频分开，排序只改变�
   assert.equal(normalizeDirectOptions({ minOccurrences: -1, minZipf: 99 }).minZipf, null);
 });
 
-test('旧学习文件读盘补 Zipf，新增筛选设置持久化且可覆盖频次/词频', () => {
+test('旧学习文件读盘补 Zipf，新增筛选设置持久化且可覆盖频次/词频', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arale-direct-layers-'));
   const bookId = 'bk_direct_layers';
   const dir = path.join(root, 'library', bookId);
@@ -79,9 +93,14 @@ test('旧学习文件读盘补 Zipf，新增筛选设置持久化且可覆盖频
     });
     assert.deepEqual(filtered.candidates.filter((one) => one.selected).map((one) => one.id), ['猫']);
     assert.equal(service.read(bookId)?.workflow?.direct?.minZipf, 2.5);
+    assert.ok((service.read(bookId)?.workflow?.directAppliedAt ?? 0) > 0);
     const changed = service.patch(bookId, '寿司', { forceInclude: true });
     assert.equal(changed.selected, true);
     assert.deepEqual(service.directFilter(bookId, [3], false).candidates.filter((one) => one.selected).map((one) => one.id), ['猫', '寿司']);
+    const excluded = service.patchMany(bookId, ['寿司'], { forceInclude: false, excluded: true, selected: false });
+    assert.equal(excluded.candidates.find((one) => one.id === '寿司')?.selected, false);
+    const restored = service.patchMany(bookId, ['寿司'], { forceInclude: true, excluded: false, selected: true });
+    assert.equal(restored.candidates.find((one) => one.id === '寿司')?.forceInclude, true);
     const withCheckpoint = service.read(bookId)!;
     withCheckpoint.workflow!.pendingFilterRun = {
       tier: 'F2', profileId: 'p1', sourceHash: 'old',
@@ -89,6 +108,10 @@ test('旧学习文件读盘补 Zipf，新增筛选设置持久化且可覆盖频
     };
     fs.writeFileSync(path.join(dir, 'study-list.json'), JSON.stringify(withCheckpoint));
     assert.throws(() => service.directFilter(bookId, [2, 3], false), /检查点/);
+    assert.throws(() => service.patch(bookId, '猫', { forceInclude: true }), /检查点/);
+    assert.throws(() => service.patchMany(bookId, ['猫'], { excluded: true }), /检查点/);
+    assert.throws(() => service.addPhrase(bookId, 'page:a#0@0', '猫猫', 'ねこねこ'), /检查点/);
+    await assert.rejects(() => service.generate(bookId), /检查点/);
     assert.equal(Object.keys(service.read(bookId)?.workflow?.pendingFilterRun?.decisions ?? {}).length, 1);
     service.clearFilterProgress(bookId);
     assert.equal(service.read(bookId)?.workflow?.pendingFilterRun, undefined);
