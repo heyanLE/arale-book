@@ -2521,6 +2521,35 @@ try {
   check('已有词卡切换为不带图不重跑翻译或 LLM',
     (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode === 'none' && value.workflow?.cardRun?.drafts.length === 1)`)) === true &&
     mockToolRequests === callsBeforeImageChange.llm && studyTranslationRequests === callsBeforeImageChange.translation);
+  const reviewStudyFile = join(userDataDir, 'library', comicId, 'study-list.json');
+  const reviewStudyList = JSON.parse(readFileSync(reviewStudyFile, 'utf8'));
+  reviewStudyList.workflow.cardRun.drafts[0].needsReview = true;
+  reviewStudyList.workflow.cardRun.drafts[0].reviewReason = '冒烟测试：请人工核对句译';
+  writeFileSync(reviewStudyFile, JSON.stringify(reviewStudyList));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('原始词表'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('Anki 制卡'))?.click();
+  })()`);
+  await delay(180);
+  check('待审词卡阻止导出并直接显示待审列表和原因',
+    (await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('制卡并导出'));
+      return !!button?.disabled && document.querySelector('.study-checkpoint-warning')?.textContent.includes('1 张待审词卡') &&
+        document.querySelector('.study-view-tabs button.active')?.textContent.includes('词卡待审') &&
+        document.querySelector('.study-card-draft')?.textContent.includes('请人工核对句译');
+    })()`)) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-card-draft button')].find((node) => node.textContent.includes('确认并通过审核'))?.click();
+  })()`);
+  await delay(150);
+  check('待审词卡通过审核后制卡导出按钮可点击',
+    (await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('制卡并导出'));
+      return button?.disabled === false && document.querySelector('.study-preview-total')?.textContent.includes('待审 0 张');
+    })()`)) === true);
   const toCancel = await client.evaluate(`window.arale.study.runFilter(${JSON.stringify(comicId)}, {tier:'F1',profileId:'llm_study_mock',concurrency:1})`);
   await delay(60);
   await client.evaluate(`(() => {

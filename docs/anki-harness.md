@@ -83,6 +83,8 @@ Zipf 参考表在构建期从 `wordfreq 3.1.1` 的日语 large 列表生成，�
 
 2026-09-29，macOS / Node 22 手动筛词批量操作：`npm run typecheck`、`npm run build` 通过；`npm test` 476 项中 471 通过、5 跳过；`npm run smoke` 212/212。右侧 AI 待审视图的 13 项已分别完成全保留、全去除与撤销的 Electron IPC 验证；操作范围受当前视图、搜索和等级条件限制，但覆盖所有分页。Windows 目标系统未验收。
 
+2026-09-29，macOS / Node 22 词卡待审导出：R1–R3 标记 `needsReview` 的草稿必须逐张核对后人工通过；第 5 步默认进入“词卡待审”视图，导出按钮旁列出禁用原因。`npm run typecheck`、`npm run build`、`npm test` 通过（476 项，471 通过、5 跳过）；`npm run smoke` 214/214，在隔离 Electron 数据目录验证待审卡的阻断和通过审核后的恢复。Windows 及 Anki 客户端导入本轮未验证。
+
 ## 外部依据
 
 - [Anki 官方：打包牌组与再次导入](https://docs.ankiweb.net/importing/packaged-decks.html)：`.apkg` 能携带牌组、笔记与卡片；重复导入的更新行为受 Anki 版本与导入设置影响。

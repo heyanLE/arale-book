@@ -7,7 +7,7 @@ import { DirectFilterPanel } from './DirectFilterPanel';
 
 type LevelFilter = 'all' | 'n3plus' | 'n2plus' | 'n1' | 'n2' | 'n3' | 'n4' | 'n5' | 'unknown';
 type StudyStep = 'rules' | 'ai' | 'review' | 'meaning' | 'export';
-type CandidateView = 'included' | 'excluded' | 'review' | 'manual' | 'all';
+type CandidateView = 'included' | 'excluded' | 'review' | 'card_review' | 'manual' | 'all';
 type BulkSnapshot = Array<{ id: string; selected: boolean; excluded: boolean; forceInclude: boolean }>;
 const PAGE_SIZE = 100;
 
@@ -93,7 +93,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       if (!live) return;
       setList(value); setLoading(false);
       setStep(value?.workflow?.cardRun ? 'export' : value?.workflow?.filterRun ? 'review' : 'rules');
-      setCandidateView(Object.values(value?.workflow?.filterRun?.decisions ?? {}).some((one) => one.decision === 'review') ? 'review' : 'included');
+      setCandidateView(value?.workflow?.cardRun
+        ? value.workflow.cardRun.drafts.some((draft) => draft.needsReview) ? 'card_review' : 'included'
+        : Object.values(value?.workflow?.filterRun?.decisions ?? {}).some((one) => one.decision === 'review') ? 'review' : 'included');
       setLiveFilterDecisions(value?.workflow?.pendingFilterRun?.decisions ?? {});
       setLevels(value?.workflow?.levels ?? [...DEFAULT_STUDY_LEVELS]);
       setIncludeUnknown(value?.workflow?.includeUnknown ?? false);
@@ -151,7 +153,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           setStep('review'); setCandidateView(decisions.some((one) => one.decision === 'review') ? 'review' : 'included');
           setNotice(`AI 筛选完成：保留 ${decisions.filter((one) => one.decision === 'keep').length}，待审 ${decisions.filter((one) => one.decision === 'review').length}，排除 ${decisions.filter((one) => one.decision === 'reject').length}`);
         } else {
-          setStep('export'); setCandidateView('included');
+          setStep('export');
+          if (next?.workflow?.cardRun?.drafts.some((draft) => draft.needsReview)) {
+            setCandidateView('card_review'); setQuery(''); setLevel('all'); setPage(0);
+          } else setCandidateView('included');
           setNotice(`释义生成完成：${next?.workflow?.cardRun?.drafts.length ?? 0} 张草稿，可逐卡修改后制卡。`);
         }
       } else {
@@ -175,10 +180,12 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     JSON.stringify(currentDirectOptions) !== JSON.stringify(normalizeDirectOptions(list?.workflow?.direct));
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
+    const cardReviewIds = new Set(list?.workflow?.cardRun?.drafts.filter((draft) => draft.needsReview).map((draft) => draft.candidateId) ?? []);
     const matches = (list?.candidates ?? []).filter((item) => {
       const included = step === 'rules' ? previewIds.has(item.id) : item.selected && !item.excluded;
       const inView = candidateView === 'all' || (candidateView === 'included' && included) ||
-        (candidateView === 'excluded' && !included) || (candidateView === 'manual' && (item.forceInclude === true || item.excluded));
+        (candidateView === 'excluded' && !included) || (candidateView === 'manual' && (item.forceInclude === true || item.excluded)) ||
+        (candidateView === 'card_review' && cardReviewIds.has(item.id));
       const review = !item.forceInclude && !item.excluded &&
         (list?.workflow?.filterRun?.decisions[item.id]?.decision === 'review' ||
           liveFilterDecisions[item.id]?.decision === 'review');
@@ -216,6 +223,12 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     : studyQueue?.pending.find((item) => item.bookId === bookId) ?? null;
   const workflowBusy = localWorkflowBusy || bookTask !== null;
   const partialFilterApplied = pendingFilterCount > 0 && !!list?.workflow?.partialFilterAppliedAt;
+  const exportBlockReason = workflowBusy ? '当前任务尚未结束，请稍候。'
+    : !cardRun ? '请先在第 4 步生成释义草稿。'
+      : imageSaving ? '正在保存配图方式，请稍候。'
+        : stale ? '原文分词已更新，请重新生成候选和释义草稿。'
+          : reviewCount > 0 ? `还有 ${reviewCount} 张待审词卡。请在右侧“词卡待审”逐张核对并点击“确认并通过审核”。`
+            : !partialFilterApplied && wordReviewCount > 0 ? `还有 ${wordReviewCount} 个 AI 筛词待审，请先在第 3 步处理。` : '';
   const pendingFilterMismatch = pendingFilterCount > 0 &&
     (pendingFilter?.tier !== filterTier || pendingFilter.profileId !== filterProfileId);
   const filterProgress = workflowProgress?.stage === 'filter' ? workflowProgress : null;
@@ -281,7 +294,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     if (step === 'rules' && !await saveDraft()) return;
     if (step === 'export' && !await saveCardDraft()) return;
     if (next !== 'review') setBulkUndo(null);
-    setStep(next); setCandidateView('included'); setPage(0);
+    setStep(next);
+    setCandidateView(next === 'export' && reviewCount > 0 ? 'card_review' : 'included');
+    if (next === 'export' && reviewCount > 0) { setQuery(''); setLevel('all'); }
+    setPage(0);
   }
 
   async function decideFiltered(decision: 'keep' | 'exclude'): Promise<void> {
@@ -430,7 +446,16 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       ...(approve ? { needsReview: false as const } : {}),
     };
     const next = await call('保存 Anki 卡片草稿', () => api.study.patchCard(bookId, active.id, patch));
-    if (next) setList(next);
+    if (next) {
+      setList(next);
+      if (approve) {
+        const remaining = next.workflow?.cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
+        if (!remaining) { setCandidateView('included'); setPage(0); }
+        setNotice(next.workflow?.cardRun?.drafts.find((item) => item.candidateId === active.id)?.needsReview
+          ? '词义和句译需要补全，才能通过审核。'
+          : remaining > 0 ? `已通过审核，剩余 ${remaining} 张待审词卡。` : '待审词卡已全部审核，现在可以导出。');
+      }
+    }
     return next !== null;
   }
 
@@ -605,6 +630,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             <h3>制卡</h3>
             <p>逐张修改卡面、句子、译文与出处。导出只组装已有草稿，不再调用翻译或 LLM。</p>
             <div className="study-preview-total"><strong>释义草稿 {cardRun?.drafts.length ?? pendingCardCount} 张</strong><span>待审 {reviewCount} 张</span></div>
+            {reviewCount > 0 && <button type="button" className="btn btn-sm" onClick={() => { setCandidateView('card_review'); setQuery(''); setLevel('all'); setPage(0); }}>查看 {reviewCount} 张待审词卡</button>}
             <h4>漫画配图</h4>
             <div className="study-tier-choices study-image-choices" role="group" aria-label="漫画配图方式">
               {([['none', '不带图', '只导出词语、原句和释义；包体积最小。'], ['crop', '文字框截图', '裁取目标原文所在的 OCR 文字框；当前默认。'], ['page', '整页漫画', '保留整页画面；同页只存一份，包体积可能增加。']] as const).map(([mode, title, detail]) =>
@@ -615,8 +641,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             </div>
             <small>配图方式按本书保存；随时切换，不会重新运行第 4 步。</small>
             {!cardRun && <p>要导出 .apkg，请先在第 4 步生成释义草稿；旧版 TSV 可直接导出当前词单。</p>}
+            {exportBlockReason && <p className="study-checkpoint-warning" role="status">暂不能导出：{exportBlockReason}</p>}
             <div className="study-flow-actions">
-              <button type="button" className="btn btn-sm btn-primary" disabled={!cardRun || reviewCount > 0 || (!partialFilterApplied && wordReviewCount > 0) || workflowBusy || imageSaving || stale} onClick={() => void exportPackage()}>制卡并导出 · {list.workflow?.imageMode === 'none' ? '不带图' : list.workflow?.imageMode === 'page' ? '整页漫画' : '文字框截图'}</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={!!exportBlockReason} title={exportBlockReason || undefined} onClick={() => void exportPackage()}>制卡并导出 · {list.workflow?.imageMode === 'none' ? '不带图' : list.workflow?.imageMode === 'page' ? '整页漫画' : '文字框截图'}</button>
               <button type="button" className="btn btn-sm" disabled={selectedCount === 0 || (!partialFilterApplied && wordReviewCount > 0) || workflowBusy} onClick={() => void exportAnki()}>导出旧版 TSV</button>
             </div>
           </section>}
@@ -638,7 +665,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       <div className="study-filters">
         <strong>查看词表</strong><small>搜索和排序只改变显示，不修改准备制卡的词单。</small>
         <div className="study-view-tabs" role="group" aria-label="词表视图">
-          {([['included', '预计保留'], ['excluded', '预计排除'], ['review', 'AI 待审'], ['manual', '人工决定'], ['all', '全部']] as const).map(([value, label]) =>
+          {([['included', '预计保留'], ['excluded', '预计排除'], step === 'export' ? ['card_review', '词卡待审'] as const : ['review', 'AI 待审'] as const, ['manual', '人工决定'], ['all', '全部']] as const).map(([value, label]) =>
             <button type="button" key={value} className={candidateView === value ? 'active' : ''} aria-pressed={candidateView === value} onClick={() => { setCandidateView(value); setPage(0); }}>{step === 'rules' && value === 'included' ? '预计保留' : step === 'rules' && value === 'excluded' ? '预计排除' : value === 'included' ? '准备制卡' : value === 'excluded' ? '未纳入' : label}</button>)}
         </div>
         <input className="segment-search" type="search" placeholder="搜索词语或读音" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} />
@@ -659,7 +686,8 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             const decision = pending ?? list.workflow?.filterRun?.decisions[item.id];
             const included = step === 'rules' ? previewIds.has(item.id) : item.selected && !item.excluded;
             const reason = step === 'rules' ? directResult.reasons[item.id]?.join('；') : decision?.reason;
-            const status = item.excluded ? '手动排除' : item.forceInclude ? '手动保留'
+            const status = step === 'export' && cardRun?.drafts.some((draft) => draft.candidateId === item.id && draft.needsReview) ? '词卡待审'
+              : item.excluded ? '手动排除' : item.forceInclude ? '手动保留'
               : step === 'rules' ? included ? '预计保留' : '预计排除'
                 : !pending && decision?.decision === 'review' ? 'AI 待审'
                   : !pending && decision?.decision === 'reject' ? 'AI 排除'
