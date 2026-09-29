@@ -9,7 +9,7 @@
 5. 修改 OCR 时读 [引擎当前文档](../engines/docs/current.md)，其中集中维护模型、包体积和性能数据。
 
 漫画分词与 Anki 制卡第一版的实现和后续事项见[方案与状态](manga-vocabulary-anki-plan.md)。
-新版“直接筛选 → 可选 LLM 筛选 → R0–R3 制卡 → 带图卡组”的档位、评估和边界见[Anki Harness](anki-harness.md)。
+新版“规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 释义生成 → 制卡导出”的档位、评估和边界见[Anki Harness](anki-harness.md)。
 筛选页交互、实现状态及新旧界面截图见[漫画词汇筛选 UX](anki-filter-ux.md)。
 设置页与词卡来源跳转的交互见[设置与词卡 UX](settings-wordcard-ux.md)。
 

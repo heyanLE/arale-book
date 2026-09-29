@@ -173,6 +173,7 @@ function connect(wsUrl) {
 
 let client = null;
 let studyLlmServer = null;
+let studyTranslationServer = null;
 try {
   const target = await waitForTarget();
   client = await connect(target.webSocketDebuggerUrl);
@@ -2243,7 +2244,21 @@ try {
   });
   await new Promise((resolve) => studyLlmServer.listen(0, '127.0.0.1', resolve));
   const mockLlmPort = studyLlmServer.address().port;
+  let studyTranslationRequests = 0;
+  studyTranslationServer = createServer(async (request, response) => {
+    try {
+      let raw = '';
+      for await (const chunk of request) raw += chunk.toString();
+      const body = JSON.parse(raw);
+      studyTranslationRequests += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ translatedText: `译：${body.q}` }));
+    } catch (error) { response.writeHead(500); response.end(String(error)); }
+  });
+  await new Promise((resolve) => studyTranslationServer.listen(0, '127.0.0.1', resolve));
+  const mockTranslationPort = studyTranslationServer.address().port;
   await client.evaluate(`window.arale.llm.update({profiles:[{id:'llm_study_mock',name:'冒烟筛选模型',baseUrl:'http://127.0.0.1:${mockLlmPort}/v1',model:'mock',temperature:0.1,hasApiKey:false}],activeProfileId:'llm_study_mock'})`);
+  await client.evaluate(`window.arale.translation.update({profiles:[{id:'tr_study_mock',name:'冒烟本地翻译',provider:'libretranslate',baseUrl:'http://127.0.0.1:${mockTranslationPort}',region:'',appId:'',hasSecret:false}],activeProfileId:'tr_study_mock'})`);
   await client.evaluate(`window.arale.study.directFilter(${JSON.stringify(comicId)}, [1,2,3,4,5], true)`);
   const openedStudyTab = await client.evaluate(`(() => {
     const open = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '分词');
@@ -2263,8 +2278,9 @@ try {
     openedStudyTab === 'opened' && studyTab === 'opened' &&
     (await client.evaluate("!!document.querySelector('.study-panel .study-filters')")) === true,
     `${openedStudyTab}/${studyTab}`);
-  check('Anki 选词改为四个依次展示的导航步骤',
-    (await client.evaluate("document.querySelectorAll('.study-flow-nav button').length")) === 4 &&
+  check('Anki 选词、释义和导出分成五个导航步骤',
+    (await client.evaluate("document.querySelectorAll('.study-flow-nav button').length")) === 5 &&
+    (await client.evaluate("document.querySelector('.study-flow-nav')?.textContent.includes('4 AI 释义生成')")) === true &&
     (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('规则筛词')")) === true);
   check('规则页显示预计保留数、词条规则和每层新排除数',
     (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('预计保留 40')")) === true &&
@@ -2299,18 +2315,39 @@ try {
     (await client.evaluate("document.querySelector('select[aria-label=\"筛选并发数\"]')?.value")) === '2' &&
     (await client.evaluate("!!document.querySelector('select[aria-label=\"筛选并发数\"] option[value=\"3\"]')")) === true);
   await client.evaluate(`(() => {
-    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('制卡与导出'))?.click();
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 释义生成'))?.click();
   })()`);
   await delay(80);
   await client.evaluate(`(() => {
-    const select = document.querySelector('select[aria-label="制卡档位"]');
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
-    setter.call(select, 'R1');
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    [...document.querySelectorAll('.study-tier-choices label')].find((node) => node.textContent.includes('R1 ·'))?.querySelector('input')?.click();
   })()`);
   await delay(80);
-  check('制卡调用数按批次计算，不再按一张一次',
-    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('正常约 7 次 LLM 调用')")) === true);
+  check('R0–R3 像 F 档位一样独立选择，模型配置在下方',
+    (await client.evaluate("document.querySelectorAll('input[name=study-card-tier]').length")) === 4 &&
+    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('预计 7 次 LLM 调用')")) === true &&
+    (await client.evaluate("!!document.querySelector('.study-engine-fields select[aria-label=\"制卡翻译配置\"]')")) === true);
+  if (process.env['ARALE_SMOKE_STUDY_MEANING_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_MEANING_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('5 制卡'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-image-choices label')].find((node) => node.textContent.includes('整页漫画'))?.querySelector('input')?.click();
+  })()`);
+  await delay(100);
+  check('整页漫画独立于 R 档位保存，不运行 LLM',
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode)`)) === 'page' && mockToolRequests === 0);
+  if (process.env['ARALE_SMOKE_STUDY_EXPORT_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_EXPORT_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
   await client.evaluate(`(() => {
     [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 语境筛选'))?.click();
   })()`);
@@ -2336,9 +2373,11 @@ try {
   }
   check('LLM 筛选完成后正式应用结果', finishedFilter);
   check('筛选 Harness 通过结构化提交工具返回结果', mockToolRequests > 0, `toolRequests=${mockToolRequests}`);
-  check('AI 完成后进入确认词单并优先显示待审项',
-    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('确认词单')")) === true &&
-    (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true);
+  check('AI 完成后进入手动筛词，只有保留／排除操作并优先显示待审项',
+    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('手动筛词')")) === true &&
+    (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true &&
+    (await client.evaluate("document.querySelectorAll('.study-decision-controls button').length")) === 2 &&
+    (await client.evaluate("document.querySelector('.study-card-draft') === null")) === true);
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
@@ -2355,6 +2394,65 @@ try {
     !!reviewedCandidateId &&
     (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.find((item) => item.expression === ${JSON.stringify(reviewedCandidateId)})?.forceInclude)`)) === true &&
     (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('AI 待审 12')")) === true);
+  await client.evaluate(`(async () => {
+    const value = await window.arale.study.read(${JSON.stringify(comicId)});
+    await window.arale.study.patchMany(${JSON.stringify(comicId)}, value.candidates.map((item) => item.id), { selected: false });
+  })()`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('原始词表'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('Anki 制卡'))?.click();
+  })()`);
+  await delay(180);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 释义生成'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-tier-choices label')].find((node) => node.textContent.includes('R0 ·'))?.querySelector('input')?.click();
+  })()`);
+  await delay(80);
+  check('R0 释义生成只使用翻译引擎，LLM 配置不出现',
+    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('准备处理 1 词')")) === true &&
+    (await client.evaluate("document.querySelector('.study-engine-fields select[aria-label=\"制卡 LLM 配置\"]') === null")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('生成 1 张释义草稿'))?.click();
+  })()`);
+  let generatedDraft = false;
+  for (let i = 0; i < 30; i += 1) {
+    generatedDraft = await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.trim() === '制卡' && !!document.querySelector('.study-card-draft')");
+    if (generatedDraft) break;
+    await delay(150);
+  }
+  check('R0 生成后进入第 5 步逐卡编辑', generatedDraft && studyTranslationRequests === 2,
+    `translationRequests=${studyTranslationRequests}`);
+  await client.evaluate(`(() => {
+    const input = [...document.querySelectorAll('.study-card-draft label')].find((node) => node.textContent.includes('词语／正面'))?.querySelector('input');
+    if (input) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '学习测试词'); input.dispatchEvent(new Event('input', { bubbles: true })); }
+  })()`);
+  await delay(50);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-card-draft button')].find((node) => node.textContent.includes('保存卡片草稿'))?.click();
+  })()`);
+  await delay(100);
+  const editedCard = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.cardRun?.drafts[0]?.expression)`);
+  check('第 5 步可修改并持久保存词卡正面', editedCard === '学习测试词', String(editedCard));
+  const callsBeforeImageChange = { llm: mockToolRequests, translation: studyTranslationRequests };
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-image-choices label')].find((node) => node.textContent.includes('不带图'))?.querySelector('input')?.click();
+  })()`);
+  await delay(100);
+  check('已有词卡切换为不带图不重跑翻译或 LLM',
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode === 'none' && value.workflow?.cardRun?.drafts.length === 1)`)) === true &&
+    mockToolRequests === callsBeforeImageChange.llm && studyTranslationRequests === callsBeforeImageChange.translation);
+  if (process.env['ARALE_SMOKE_STUDY_CARDS_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_CARDS_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
   await client.evaluate(`(() => {
     const back = [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'));
     back?.click();
@@ -2469,6 +2567,10 @@ try {
   if (studyLlmServer) {
     studyLlmServer.closeAllConnections();
     await new Promise((resolve) => studyLlmServer.close(resolve));
+  }
+  if (studyTranslationServer) {
+    studyTranslationServer.closeAllConnections();
+    await new Promise((resolve) => studyTranslationServer.close(resolve));
   }
   child.kill('SIGTERM');
   await delay(600);

@@ -2330,6 +2330,10 @@ button[aria-disabled='true'] {
 .study-tier-choices label.active { border-color: var(--accent); background: var(--bg-active); }
 .study-tier-choices label input { grid-row: span 2; }
 .study-tier-choices label small { color: var(--text-dim); line-height: 1.4; }
+.study-engine-fields { display: grid; gap: 10px; margin: 16px 0; }
+.study-engine-fields label { display: grid; gap: 5px; font-weight: 600; }
+.study-engine-fields select { width: 100%; min-width: 0; height: 30px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); font-weight: 400; }
+.study-image-choices { margin: 10px 0; }
 .study-run-settings { padding: 8px 0; }
 .study-run-settings summary { cursor: pointer; }
 .study-run-settings select { margin: 8px 0; }
@@ -2344,6 +2348,9 @@ button[aria-disabled='true'] {
 .study-card-draft label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
 .study-card-draft input, .study-card-draft textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
 .study-card-draft textarea { min-height: 54px; resize: vertical; }
+.study-card-evidence { margin: 14px 0; }
+.study-card-evidence summary { cursor: pointer; font-weight: 600; }
+.study-card-evidence .study-context { margin-top: 10px; }
 .study-filters { flex: none; flex-wrap: wrap; }
 .study-filters > strong { flex: none; font-size: 13px; }
 .study-filters > small { flex: 1 1 65%; color: var(--text-dim); }

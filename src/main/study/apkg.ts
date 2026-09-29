@@ -7,8 +7,8 @@ import { chosenOccurrence } from '../../core/study/harness';
 interface CardInput {
   candidate: StudyCandidate;
   draft: StudyCardDraft;
-  imageName: string;
-  image: Buffer;
+  imageName?: string;
+  image?: Buffer;
 }
 
 const FIELDS = ['Key', 'Expression', 'Reading', 'Meaning', 'Sentence', 'SentenceTranslation',
@@ -69,17 +69,21 @@ const DEFAULT_DCONF = {
 
 function noteFields(input: CardInput, bookTitle: string, tier: StudyCardTier): string[] {
   const { candidate, draft, imageName } = input;
-  const occurrence = chosenOccurrence(candidate);
+  const occurrence = candidate.occurrences.find((one) => one.id === draft.contextRef) ?? chosenOccurrence(candidate);
   if (!occurrence) throw new Error(`「${candidate.expression}」缺少漫画出处`);
   if (occurrence.text.slice(occurrence.start, occurrence.end).length === 0) throw new Error('词语出处偏移为空');
-  const sentence = escapeHtml(occurrence.text.slice(0, occurrence.start)) +
-    '<mark>' + escapeHtml(occurrence.text.slice(occurrence.start, occurrence.end)) + '</mark>' +
-    escapeHtml(occurrence.text.slice(occurrence.end));
+  const target = draft.expression ?? candidate.expression;
+  const rawSentence = draft.sentence ?? occurrence.text;
+  const originalSentence = draft.sentence === undefined || draft.sentence === occurrence.text;
+  const start = originalSentence ? occurrence.start : rawSentence.indexOf(target);
+  const end = originalSentence ? occurrence.end : start + target.length;
+  const sentence = start < 0 ? escapeHtml(rawSentence)
+    : escapeHtml(rawSentence.slice(0, start)) + '<mark>' + escapeHtml(rawSentence.slice(start, end)) + '</mark>' + escapeHtml(rawSentence.slice(end));
   return [
-    `aralebook:${candidate.id}`, escapeHtml(candidate.expression), escapeHtml(candidate.reading),
+    `aralebook:${candidate.id}`, escapeHtml(target), escapeHtml(draft.reading ?? candidate.reading),
     escapeHtml(draft.meaning), sentence, escapeHtml(draft.sentenceTranslation),
-    escapeHtml(draft.usage), escapeHtml(draft.nuance), `<img src="${imageName}">`,
-    escapeHtml(`${bookTitle} · ${occurrence.label}`),
+    escapeHtml(draft.usage), escapeHtml(draft.nuance), imageName ? `<img src="${imageName}">` : '',
+    escapeHtml(draft.sourceLabel ?? `${bookTitle} · ${occurrence.label}`),
     escapeHtml(`${tier} 自动生成；JLPT 为非官方参考等级；译文和 OCR 未经人工校对。`),
   ];
 }
@@ -121,7 +125,7 @@ export async function buildAnkiPackage(bookId: string, bookTitle: string, tier: 
       db.run('INSERT INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
         noteId + 1, noteId, deckId, 0, nowSec, -1, 0, 0, index + 1, 0, 0, 0, 0, 0, 0, 0, 0, '',
       ]);
-      if (!seenImages.has(input.imageName)) {
+      if (input.imageName && input.image && !seenImages.has(input.imageName)) {
         const id = Object.keys(media).length.toString();
         media[id] = input.imageName;
         archive[id] = input.image;

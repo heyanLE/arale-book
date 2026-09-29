@@ -717,6 +717,7 @@ export interface StudyList {
 
 export type StudyFilterTier = 'F1' | 'F2' | 'F3';
 export type StudyCardTier = 'R0' | 'R1' | 'R2' | 'R3';
+export type StudyImageMode = 'none' | 'crop' | 'page';
 export type StudyFilterDecision = 'keep' | 'reject' | 'review';
 
 export interface DirectFilterOptions {
@@ -752,6 +753,8 @@ export interface StudyWorkflow {
   partialFilterAppliedAt?: number;
   /** 旧工作流缺失时使用宽松默认，不会重置已有 LLM 检查点。 */
   direct?: DirectFilterOptions;
+  /** 配图是导出设置，独立于 R0–R3 和 LLM 草稿；旧书默认文字框截图。 */
+  imageMode?: StudyImageMode;
   filterRun?: {
     tier: StudyFilterTier;
     profileId: string;
@@ -794,6 +797,12 @@ export interface StudyWorkflow {
 
 export interface StudyCardDraft {
   candidateId: string;
+  /** 可编辑的卡面字段；未设置时使用候选词与原文出处。 */
+  expression?: string;
+  reading?: string;
+  sentence?: string;
+  sourceLabel?: string;
+  contextRef?: string;
   meaning: string;
   sentenceTranslation: string;
   usage: string;
@@ -802,6 +811,10 @@ export interface StudyCardDraft {
   needsReview: boolean;
   reviewReason: string;
 }
+
+export type StudyCardPatch = Partial<Pick<StudyCardDraft,
+  'expression' | 'reading' | 'sentence' | 'sourceLabel' | 'contextRef' |
+  'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>;
 
 export interface StudyRunProgress {
   bookId: string;

@@ -20,7 +20,7 @@ export const FILTER_TIERS: Record<StudyFilterTier, { name: string; description: 
 };
 
 export const CARD_TIERS: Record<StudyCardTier, { name: string; description: string; batchSize: number; passes: number }> = {
-  R0: { name: '翻译卡', description: '翻译词语和原句，附漫画文字框裁图；不调用 LLM。', batchSize: 1, passes: 0 },
+  R0: { name: '翻译释义', description: '翻译词语和原句；不调用 LLM，配图在导出时单独选择。', batchSize: 1, passes: 0 },
   R1: { name: '语境词义', description: '每批 6 卡，基于原句、词典义和译文生成本句词义。', batchSize: 6, passes: 1 },
   R2: { name: '学习提示', description: '每批 6 卡增加有用的变形、搭配与语气提示。', batchSize: 6, passes: 1 },
   R3: { name: '生成＋复核', description: '每批 6 卡生成并复核；有争议的卡进入待审。', batchSize: 6, passes: 2 },

@@ -37,8 +37,9 @@ import type {
   StudyCandidate,
   StudyCandidatePatch,
   DirectFilterOptions,
-  StudyCardDraft,
+  StudyCardPatch,
   StudyCardRunRequest,
+  StudyImageMode,
   StudyExportResult,
   StudyFilterRunRequest,
   StudyList,
@@ -397,14 +398,15 @@ export function registerIpc(services: Services): void {
   handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): Promise<StudyList> =>
     study.runCards(bookId, request),
   );
-  handle(IPC.studyPatchCard, (bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): StudyList =>
+  handle(IPC.studySetImageMode, (bookId: string, mode: StudyImageMode): StudyList => study.setImageMode(bookId, mode));
+  handle(IPC.studyPatchCard, (bookId: string, candidateId: string, patch: StudyCardPatch): StudyList =>
     study.patchCard(bookId, candidateId, patch),
   );
   handle(IPC.studyExportPackage, async (bookId: string): Promise<StudyExportResult> => {
     requireBook(bookId);
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     const options = {
-      title: '导出带漫画裁图的 Anki 卡组',
+      title: '导出 Anki 卡组',
       defaultPath: `aralebook-${bookId}.apkg`,
       filters: [{ name: 'Anki 卡组', extensions: ['apkg'] }],
     };

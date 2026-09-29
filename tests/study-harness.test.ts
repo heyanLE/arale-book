@@ -115,11 +115,15 @@ test('R0 翻译＋裁图生成可校验的 .apkg，候选变化后禁止导出�
     fs.writeFileSync(path.join(dir, 'study-list.json'), JSON.stringify(list));
     const book = { id: bookId, title: '测试漫画', format: 'comic' } as BookRecord;
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/S28AAAAASUVORK5CYII=', 'base64');
+    const pageJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    let translationCalls = 0;
+    let pageCalls = 0;
     const service = new StudyService({
       getBook: () => book, getSegments: () => null, ensureDictionary: async () => undefined,
       lookupMeaning: () => '',
-      translation: { translate: async (request) => ({ ok: true, text: request.text === '猫' ? '猫' : '喜欢猫', sourceReading: '', profileName: '假翻译', provider: 'bing', sourceLanguage: 'ja', targetLanguage: 'zh-Hans' }) },
+      translation: { translate: async (request) => { translationCalls += 1; return { ok: true, text: request.text === '猫' ? '猫' : '喜欢猫', sourceReading: '', profileName: '假翻译', provider: 'bing', sourceLanguage: 'ja', targetLanguage: 'zh-Hans' }; } },
       crop: () => ({ name: 'manga_test.png', data: png }),
+      pageImage: () => { pageCalls += 1; return { name: 'manga_page.jpg', data: pageJpeg }; },
     });
     const filtered = service.directFilter(bookId, [3], false);
     assert.equal(filtered.candidates[0]?.selected, true);
@@ -142,8 +146,64 @@ test('R0 翻译＋裁图生成可校验的 .apkg，候选变化后禁止导出�
       assert.match(fields[4] ?? '', /<mark>猫<\/mark>/);
       assert.match(fields[8] ?? '', /manga_test.png/);
     } finally { db.close(); }
+    const draftHash = service.read(bookId)?.workflow?.cardRun?.sourceHash;
+    const noImage = service.setImageMode(bookId, 'none');
+    assert.equal(noImage.workflow?.cardRun?.sourceHash, draftHash, '切换配图不使已有释义草稿失效');
+    service.patchCard(bookId, '猫', { expression: '猫咪', reading: 'ねこ', sentence: '猫咪が好き',
+      sourceLabel: '自定义来源', meaning: '猫咪', sentenceTranslation: '喜欢猫咪' });
+    const noImageTarget = path.join(root, 'deck-no-image.apkg');
+    assert.equal(await service.exportPackage(bookId, noImageTarget), 1);
+    const plain = unzipSync(fs.readFileSync(noImageTarget));
+    assert.deepEqual(JSON.parse(Buffer.from(plain['media']!).toString()), {});
+    const plainDb = new SQL.Database(plain['collection.anki2']);
+    try {
+      const fields = String(plainDb.exec('SELECT flds FROM notes')[0]?.values[0]?.[0]).split('\x1f');
+      assert.equal(fields[1], '猫咪'); assert.equal(fields[2], 'ねこ');
+      assert.match(fields[4] ?? '', /<mark>猫咪<\/mark>/);
+      assert.equal(fields[8], ''); assert.equal(fields[9], '自定义来源');
+    } finally { plainDb.close(); }
+    service.setImageMode(bookId, 'page');
+    const pageTarget = path.join(root, 'deck-page.apkg');
+    assert.equal(await service.exportPackage(bookId, pageTarget), 1);
+    const pageArchive = unzipSync(fs.readFileSync(pageTarget));
+    assert.deepEqual(JSON.parse(Buffer.from(pageArchive['media']!).toString()), { 0: 'manga_page.jpg' });
+    assert.deepEqual(Buffer.from(pageArchive['0']!), pageJpeg);
+    assert.equal(pageCalls, 1);
+    assert.equal(translationCalls, 2, '切换配图和导出不应重新请求翻译');
     service.patch(bookId, '猫', { reading: 'ねこ' });
     await assert.rejects(service.exportPackage(bookId, target), /候选已变化/);
+  } finally {
+    setUserDataRootForTesting(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('整页漫画为同一页的多张卡复用一份媒体', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arale-page-media-'));
+  const bookId = 'bk_page_media';
+  const dir = path.join(root, 'library', bookId);
+  fs.mkdirSync(dir, { recursive: true });
+  setUserDataRootForTesting(root);
+  try {
+    fs.writeFileSync(path.join(dir, 'study-list.json'), JSON.stringify({
+      bookId, generatedAt: 1, segmentGeneratedAt: 1, jlptSource: 'test',
+      candidates: [candidate('猫', 3), candidate('犬', 3)], workflow: defaultStudyWorkflow(),
+    } satisfies StudyList));
+    let encodedPages = 0;
+    const service = new StudyService({
+      getBook: () => ({ id: bookId, title: '同页测试', format: 'comic' } as BookRecord),
+      getSegments: () => null, ensureDictionary: async () => undefined, lookupMeaning: () => '',
+      translation: { translate: async () => ({ ok: true, text: '译文', sourceReading: '', profileName: 'test', provider: 'bing', sourceLanguage: 'ja', targetLanguage: 'zh-Hans' }) },
+      pageImage: () => { encodedPages += 1; return { name: 'shared_page.jpg', data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]) }; },
+    });
+    service.directFilter(bookId, [3], false);
+    await service.runCards(bookId, { tier: 'R0', translationProfileId: 'bing' });
+    service.setImageMode(bookId, 'page');
+    const target = path.join(root, 'same-page.apkg');
+    assert.equal(await service.exportPackage(bookId, target), 2);
+    const archive = unzipSync(fs.readFileSync(target));
+    assert.equal(encodedPages, 1);
+    assert.deepEqual(JSON.parse(Buffer.from(archive['media']!).toString()), { 0: 'shared_page.jpg' });
   } finally {
     setUserDataRootForTesting(null);
     fs.rmSync(root, { recursive: true, force: true });

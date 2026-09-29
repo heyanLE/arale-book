@@ -33,8 +33,9 @@ import type {
   StudyCandidate,
   StudyCandidatePatch,
   DirectFilterOptions,
-  StudyCardDraft,
+  StudyCardPatch,
   StudyCardRunRequest,
+  StudyImageMode,
   StudyExportResult,
   StudyFilterRunRequest,
   StudyList,
@@ -131,6 +132,7 @@ export const IPC = {
   studyApplyCompletedFilter: 'study:applyCompletedFilter',
   studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
+  studySetImageMode: 'study:setImageMode',
   studyPatchCard: 'study:patchCard',
   studyExportPackage: 'study:exportPackage',
 } as const;
@@ -329,7 +331,8 @@ export interface AraleApi {
     applyCompletedFilter(bookId: string): Promise<StudyList>;
     clearFilterProgress(bookId: string): Promise<StudyList>;
     runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList>;
-    patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): Promise<StudyList>;
+    setImageMode(bookId: string, mode: StudyImageMode): Promise<StudyList>;
+    patchCard(bookId: string, candidateId: string, patch: StudyCardPatch): Promise<StudyList>;
     exportPackage(bookId: string): Promise<StudyExportResult>;
   };
 }

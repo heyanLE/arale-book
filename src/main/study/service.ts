@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import type { BookRecord, BookSegments, DirectFilterOptions, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardRunRequest, StudyFilterRunRequest, StudyList, StudyRunProgress } from '../../shared/types';
+import type { BookRecord, BookSegments, DirectFilterOptions, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardPatch, StudyCardRunRequest, StudyFilterRunRequest, StudyImageMode, StudyList, StudyRunProgress } from '../../shared/types';
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
 import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeDirectOptions, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
@@ -11,7 +11,7 @@ import { harnessSubmissionTool } from '../../core/study/harness-tool';
 import { createJlptIndex, lookupJlpt, normalizeReading, studyKey, type JlptRow } from '../../core/study/jlpt';
 import { bookDir } from '../paths';
 import { buildAnkiPackage } from './apkg';
-import { cropStudyOccurrence, type StudyCrop } from './crop';
+import { cropStudyOccurrence, pageStudyOccurrence, sourcePage, type StudyCrop } from './crop';
 import { normalizeHarnessConcurrency, runConcurrentBatches } from './concurrency';
 import { wordfreqSource, zipfForCandidate } from './wordfreq';
 import type { LlmService } from '../llm/service';
@@ -32,6 +32,7 @@ export interface StudyServiceOptions {
   translation?: Pick<TranslationService, 'translate'>;
   /** 测试注入纯图片；正式运行从漫画原始页图裁取。 */
   crop?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
+  pageImage?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
 }
 
 export class StudyService {
@@ -496,14 +497,34 @@ export class StudyService {
     } finally { this.running.delete(bookId); }
   }
 
-  /** 人工修正或认可 R3 存疑草稿；不修改候选身份。 */
-  patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): StudyList {
+  /** 配图独立于 AI 生成与制卡档位；更改它不丢弃已有草稿。 */
+  setImageMode(bookId: string, mode: StudyImageMode): StudyList {
+    if (this.running.has(bookId)) throw new Error('学习任务正在运行，请稍后修改配图');
+    if (mode !== 'none' && mode !== 'crop' && mode !== 'page') throw new Error('未知漫画配图方式');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成学习候选');
+    list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), imageMode: mode };
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return list;
+  }
+
+  /** 人工修正卡面与原文出处；不修改候选身份和既有 LLM 草稿进度。 */
+  patchCard(bookId: string, candidateId: string, patch: StudyCardPatch): StudyList {
     if (this.running.has(bookId)) throw new Error('正在制卡，请稍后审核');
     const list = this.read(bookId);
     const draft = list?.workflow?.cardRun?.drafts.find((item) => item.candidateId === candidateId);
     if (!list || !draft) throw new Error('找不到制卡草稿');
-    for (const key of ['meaning', 'sentenceTranslation', 'usage', 'nuance'] as const) {
-      if (typeof patch[key] === 'string') draft[key] = patch[key]!.trim().slice(0, 1000);
+    const candidate = list.candidates.find((item) => item.id === candidateId);
+    if (!candidate) throw new Error('词卡候选已失效');
+    if (patch.contextRef !== undefined) {
+      if (!candidate.occurrences.some((one) => one.id === patch.contextRef)) throw new Error('词卡出处不属于该词');
+      draft.contextRef = patch.contextRef;
+    }
+    for (const key of ['expression', 'reading', 'sentence', 'sourceLabel', 'meaning', 'sentenceTranslation', 'usage', 'nuance'] as const) {
+      if (typeof patch[key] !== 'string') continue;
+      const value = patch[key]!.trim().slice(0, key === 'sentence' ? 5000 : key === 'sourceLabel' ? 300 : 1000);
+      if ((key === 'expression' || key === 'sentence') && !value) throw new Error('词语和原句不能为空');
+      draft[key] = value;
     }
     if (patch.needsReview === false && draft.meaning && draft.sentenceTranslation) {
       draft.needsReview = false;
@@ -513,7 +534,7 @@ export class StudyService {
     return list;
   }
 
-  /** 第四步：逐张裁 OCR 原文矩形，写入含媒体的 .apkg。 */
+  /** 第五步：依配图选项组装媒体；不调用翻译或 LLM。 */
   async exportPackage(bookId: string, targetPath: string): Promise<number> {
     if (this.running.has(bookId)) throw new Error('学习任务仍在运行');
     const list = this.read(bookId);
@@ -524,15 +545,30 @@ export class StudyService {
     if (run.drafts.some((item) => item.needsReview)) throw new Error('还有存疑词卡，请先审核');
     const byId = new Map(selectedCandidates(list).map((item) => [item.id, item]));
     if (run.drafts.length !== byId.size) throw new Error('制卡草稿与候选数量不一致');
+    const imageMode = list.workflow?.imageMode ?? 'crop';
     const crop = this.options.crop ?? cropStudyOccurrence;
+    const pageImage = this.options.pageImage ?? pageStudyOccurrence;
+    const pageCache = new Map<string, StudyCrop>();
     const inputs = [];
     for (let index = 0; index < run.drafts.length; index += 1) {
       const draft = run.drafts[index]!;
       const candidate = byId.get(draft.candidateId);
-      const occurrence = candidate && chosenOccurrence(candidate);
+      const occurrence = candidate && (candidate.occurrences.find((one) => one.id === draft.contextRef) ?? chosenOccurrence(candidate));
       if (!candidate || !occurrence) throw new Error('制卡草稿的原文出处已失效');
-      const image = crop(bookId, occurrence);
-      inputs.push({ candidate, draft, imageName: image.name, image: image.data });
+      if (imageMode === 'none') {
+        inputs.push({ candidate, draft });
+      } else {
+        let image: StudyCrop;
+        if (imageMode === 'crop') image = crop(bookId, occurrence);
+        else {
+          const pageKey = occurrence.ref.slice(0, occurrence.ref.lastIndexOf('#'));
+          const cached = pageCache.get(pageKey);
+          if (cached && !this.options.pageImage) sourcePage(bookId, occurrence);
+          image = cached ?? pageImage(bookId, occurrence);
+          pageCache.set(pageKey, image);
+        }
+        inputs.push({ candidate, draft, imageName: image.name, image: image.data });
+      }
       this.options.workflowProgress?.({ bookId, stage: 'export', done: index + 1, total: run.drafts.length });
     }
     const content = await buildAnkiPackage(bookId, book.title, run.tier, inputs);
