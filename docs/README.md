@@ -11,6 +11,7 @@
 漫画分词与 Anki 制卡第一版的实现和后续事项见[方案与状态](manga-vocabulary-anki-plan.md)。
 新版“规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 释义生成 → 制卡导出”的档位、评估和边界见[Anki Harness](anki-harness.md)。
 AI 筛选与释义生成在主进程任务队列后台运行，与 OCR 共用右下角入口；关闭页面不停止任务，具体状态与恢复边界见[Anki Harness](anki-harness.md)。
+[LLM 结构化返回协议](llm-output-protocol.md)说明 DeepSeek/OpenAI/兼容端点的 JSON 或工具选择、降级和缓存用量统计。
 筛选页交互、实现状态及新旧界面截图见[漫画词汇筛选 UX](anki-filter-ux.md)。
 设置页与词卡来源跳转的交互见[设置与词卡 UX](settings-wordcard-ux.md)。
 

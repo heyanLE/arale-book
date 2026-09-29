@@ -24,7 +24,7 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
-| Anki Harness | 当前为五步：规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 AI 释义生成 → 制卡。F1–F3 和 R0–R3 提交后进入主进程串行后台队列，可离开页面；右下角与 OCR 共用任务弹层，显示进度、排队、完成/失败并可取消或回到原书。单任务内 LLM 批次默认并发 2、最多 3。第 5 步逐卡编辑并独立选择无图、OCR 文字框或整页，然后导出 `.apkg`；旧 TSV 保留。交互见[筛选 UX](anki-filter-ux.md)，档位与限制见[Anki Harness](anki-harness.md)。 |
+| Anki Harness | 当前为五步：规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 AI 释义生成 → 制卡。F1–F3 和 R0–R3 在主进程串行后台队列执行，可离开页面；右下角与 OCR 共用任务弹层。DeepSeek 标准地址用 JSON Output，OpenAI 官方地址优先 JSON Schema，其余兼容端点尝试工具调用并按不兼容错误降级；每书记录实际 HTTP 和缓存 token。单任务内 LLM 批次默认并发 2、最多 3。第 5 步逐卡编辑、选择无图/文字框/整页并导出 `.apkg`。详见[筛选 UX](anki-filter-ux.md)、[Anki Harness](anki-harness.md)及[LLM 协议](llm-output-protocol.md)。 |
 | 整书原始词表 | 漫画文字块和 EPUB 章节统一由 Kuromoji 按日语词形切分；Yomitan 词典只标记是否收录。助词、助动词、标点和未收录的单个假名不进入学习词表，但词位置信息仍保存在 `segments.json`。打开旧版逐字产物会自动重建；阅读时点词查询仍走词典扫描。 |
 | 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片分翻译栏与 LLM 分析栏管理各自默认项及提示词。弹窗引擎下拉只列实际配置，顶部词语与编辑图标共用按钮。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
 
@@ -121,6 +121,12 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 - F1–F3 与 R0–R3 任务由主进程 FIFO 串行执行，IPC 入队立即返回；每本书同时只允许一个任务，同一请求去重。任务内部沿用原有并发、逐批持久化与取消。右下角与 OCR 共用任务弹层：运行/排队进度、停止/取消、最近结果和返回原书制卡页。页面卸载、重新打开或渲染进程重载后可重新读取主进程队列快照。
 - `npm run typecheck`、`npm run build` 通过；`npm test` 470 项中 465 通过、5 跳过；`npm run smoke` 209/209。真实 Electron GUI 验证离开 Anki 页去阅读漫画时任务继续、弹层显示 24/40 进度并能返回原书；停止任务后检查点仍在。截图见[筛选 UX](anki-filter-ux.md)。
 - 队列本身只在当前应用进程中保留；退出应用后不自动重建任务，已落盘的批次可手动续跑。未验证真实远端 LLM/翻译限流、Windows 目标系统与长时间后台运行。
+
+### 2026-09-29 LLM 返回协议与缓存用量（macOS / Node 22）
+
+- Harness 结果仍统一校验；DeepSeek 标准地址改为 JSON Output，不再先发送与其默认 thinking 不兼容的指定工具请求。OpenAI 官方地址优先严格 JSON Schema，未知兼容端点沿用工具调用并在格式参数被拒时逐级降级。能力按配置/模型/schema 指纹保存 7 天；后台任务的 LLM 配置变化会阻止混用。
+- 保存逻辑 Harness 次数、实际 HTTP 尝试、回退次数，以及供应商返回的缓存命中/未命中 token；界面只对已报告数据计算命中率。`npm run typecheck`、`npm run build` 通过；`npm test` 476 项中 471 通过、5 跳过；`npm run smoke` 210/210，假端点统计经 Electron IPC 落盘。详见[协议说明](llm-output-protocol.md)。
+- 未用真实 DeepSeek/OpenAI Key 试跑新版请求；服务端缓存命中率、质量和费用仍需用户环境观察，Windows 目标系统未验收。
 
 ## 下一步：Windows 兼容与修复
 

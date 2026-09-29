@@ -8,11 +8,12 @@ import { defaultStudyWorkflow, directCandidates } from '../../core/study/harness
 import type { StudyService } from './service';
 
 type Request = { kind: 'filter'; value: StudyFilterRunRequest } | { kind: 'cards'; value: StudyCardRunRequest };
-interface QueuedTask { entry: StudyTaskEntry; request: Request; sourceHash: string; cancelled: boolean; }
+interface QueuedTask { entry: StudyTaskEntry; request: Request; sourceHash: string; profileSignature?: string; cancelled: boolean; }
 
 export interface StudyTaskQueueOptions {
   study: Pick<StudyService, 'read' | 'runFilter' | 'runCards' | 'cancel'>;
   getBook(bookId: string): BookRecord | null;
+  profileSignature?(profileId: string): string | null;
   onChange?(state: StudyTaskQueueState): void;
   onDone?(task: StudyTaskEntry): void;
 }
@@ -63,7 +64,10 @@ export class StudyTaskQueue {
       id: `study_${randomUUID()}`, bookId, title: book.title, kind: request.kind,
       tier: request.value.tier, status: 'queued', enqueuedAt: Date.now(), done: 0, total,
     };
-    this.pending.push({ entry, request, sourceHash: sourceFingerprint(list), cancelled: false });
+    const profileId = request.value.profileId;
+    const profileSignature = profileId ? this.options.profileSignature?.(profileId) ?? undefined : undefined;
+    if (profileId && this.options.profileSignature && !profileSignature) throw new Error('LLM 配置不存在，请重新选择');
+    this.pending.push({ entry, request, sourceHash: sourceFingerprint(list), profileSignature, cancelled: false });
     this.publish();
     this.pump();
     return { ...entry };
@@ -125,6 +129,9 @@ export class StudyTaskQueue {
       try {
         const list = this.options.study.read(item.entry.bookId);
         if (!list || sourceFingerprint(list) !== item.sourceHash) throw new Error('排队期间词单已变化，请重新提交任务');
+        if (item.profileSignature && this.options.profileSignature?.(item.request.value.profileId ?? '') !== item.profileSignature) {
+          throw new Error('排队期间 LLM 配置已变化，请重新提交任务');
+        }
         if (item.request.kind === 'filter') await this.options.study.runFilter(item.entry.bookId, item.request.value);
         else await this.options.study.runCards(item.entry.bookId, item.request.value);
         if (item.cancelled) { status = 'cancelled'; message = '已取消'; }

@@ -741,6 +741,15 @@ export interface StudyRunStats {
   llmCalls: number;
   translationCalls: number;
   elapsedMs: number;
+  /** 真实 HTTP 请求数；协议回退/空 JSON 重试也计入。旧文件缺失。 */
+  llmHttpAttempts?: number;
+  llmFallbacks?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  cacheReportedCalls?: number;
+  responseModes?: Partial<Record<'tool' | 'json_schema' | 'json_object' | 'plain', number>>;
 }
 
 export interface StudyWorkflow {
@@ -828,6 +837,10 @@ export interface StudyRunProgress {
     reject: number;
     review: number;
     llmCalls: number;
+    httpAttempts?: number;
+    fallbackCount?: number;
+    cacheHitTokens?: number;
+    cacheMissTokens?: number;
     elapsedMs: number;
     updates: Array<{ id: string; decision: StudyFilterDecision; reason: string }>;
   };
@@ -1087,6 +1100,16 @@ export interface LlmAnalyzeResult {
   model: string;
   /** 失败原因（含 HTTP 状态与响应片段）。 */
   error?: string;
+  /** Harness 请求的实际返回协议；单词弹窗普通分析不一定有值。 */
+  responseMode?: 'tool' | 'json_schema' | 'json_object' | 'plain';
+  httpAttempts?: number;
+  fallbackCount?: number;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    cacheHitTokens?: number;
+    cacheMissTokens?: number;
+  };
 }
 
 /**

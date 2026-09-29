@@ -49,8 +49,8 @@ test('AI 任务立即入队、跨书串行、进度可读取且完成记录可�
   assert.equal(queue.queueState().recent.length, 1);
 });
 
-test('排队任务可取消；队列等待期间词单变化会失败而不会处理新输入', async () => {
-  const lists = new Map([['a', studyList('a')], ['b', studyList('b')], ['c', studyList('c')]]);
+test('排队可取消；等待期词单或模型配置变化会失败，不会处理新输入', async () => {
+  const lists = new Map([['a', studyList('a')], ['b', studyList('b')], ['c', studyList('c')], ['d', studyList('d')]]);
   let finishA!: (value: StudyList) => void;
   const starts: string[] = [];
   const study = {
@@ -59,19 +59,24 @@ test('排队任务可取消；队列等待期间词单变化会失败而不会�
     runCards: async () => { throw new Error('不应调用制卡'); },
     cancel: () => undefined,
   } as unknown as Pick<StudyService, 'read' | 'runFilter' | 'runCards' | 'cancel'>;
-  const queue = new StudyTaskQueue({ study, getBook: (id) => ({ id, title: id } as BookRecord) });
+  let signature = 'original';
+  const queue = new StudyTaskQueue({ study, getBook: (id) => ({ id, title: id } as BookRecord), profileSignature: () => signature });
   queue.enqueueFilter('a', { tier: 'F1', profileId: 'p' });
   const b = queue.enqueueFilter('b', { tier: 'F1', profileId: 'p' });
   const c = queue.enqueueFilter('c', { tier: 'F1', profileId: 'p' });
+  const d = queue.enqueueFilter('d', { tier: 'F1', profileId: 'p' });
   queue.cancel(b.id);
   assert.equal(queue.queueState().recent[0]?.status, 'cancelled');
   lists.get('c')!.candidates[0]!.expression = '犬';
+  signature = 'changed';
   await tick();
   finishA(lists.get('a')!);
   await tick(); await tick();
   assert.deepEqual(starts, ['a'], '变化后的 c 不应送入模型');
   assert.equal(queue.queueState().recent.find((item) => item.id === c.id)?.status, 'failed');
   assert.match(queue.queueState().recent.find((item) => item.id === c.id)?.error ?? '', /词单已变化/);
+  assert.equal(queue.queueState().recent.find((item) => item.id === d.id)?.status, 'failed');
+  assert.match(queue.queueState().recent.find((item) => item.id === d.id)?.error ?? '', /LLM 配置已变化/);
 });
 
 test('停止运行中的任务会通知 StudyService 并继续下一本', async () => {

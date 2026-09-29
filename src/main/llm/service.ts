@@ -13,6 +13,8 @@
  * 增量渲染不划算（超时给了 120 秒兜底）。
  */
 
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_LLM_PROMPT,
   LEGACY_LLM_PROMPTS,
@@ -39,6 +41,8 @@ export interface LlmCompletionRequest {
   /** 筛选/制卡用低温度，覆盖词卡交互分析的用户温度。 */
   temperature?: number;
   signal?: AbortSignal;
+  /** 主进程任务启动时锁定配置身份；设置被修改后停止，避免一本书混用模型。 */
+  expectedProfileSignature?: string;
   /** 单一提交工具：模型通过 function.arguments 返回结构化结果。 */
   tool?: { name: string; description: string; parameters: Record<string, unknown> };
 }
@@ -65,9 +69,11 @@ const DEFAULT_TEMPERATURE = 0.3;
 /** 一次分析的硬上限。本地大模型冷启动 + 长上下文也可能跑掉一分多钟。 */
 const REQUEST_TIMEOUT_MS = 120_000;
 const MAX_GLOBAL_LLM_REQUESTS = 4;
+const CAPABILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+type HarnessMode = NonNullable<LlmAnalyzeResult['responseMode']>;
+type CapabilityRecord = Record<string, { mode: HarnessMode; checkedAt: number }>;
 
 export class LlmService {
-  private readonly toolUnsupported = new Set<string>();
   private activeRequests = 0;
   private readonly waiting: Array<() => void> = [];
 
@@ -76,6 +82,11 @@ export class LlmService {
   /** 读设置。key 永远不返回，只返回 `hasApiKey`。 */
   settings(): LlmSettings {
     return toPublic(this.readStored());
+  }
+
+  profileSignature(profileId: string): string | null {
+    const profile = this.readStored().profiles.find((item) => item.id === profileId);
+    return profile ? createHash('sha256').update(JSON.stringify(profile)).digest('hex') : null;
   }
 
   /** 覆盖式写入 profiles / activeProfileId / prompt 中的任意部分。 */
@@ -116,7 +127,8 @@ export class LlmService {
     }
 
     writeJsonAtomic(this.options.settingsFile, next);
-    this.toolUnsupported.clear();
+    // 端点/模型可能已变化；能力结果不含密钥，单独落盘并在配置更新后重探。
+    writeJsonAtomic(this.capabilityFile(), {});
     return toPublic(next);
   }
 
@@ -146,25 +158,43 @@ export class LlmService {
 
   /** 版本化 Harness 的底层调用。失败返回结构化错误，不把密钥交给渲染进程。 */
   async complete(request: LlmCompletionRequest): Promise<LlmAnalyzeResult> {
+    let httpAttempts = 0;
+    let fallbackCount = 0;
+    let mode: HarnessMode = 'plain';
+    let usageTotals: LlmAnalyzeResult['usage'] | undefined;
     try {
       const stored = this.readStored();
       const wanted = request.profileId ?? stored.activeProfileId;
       const profile = wanted === null ? undefined : stored.profiles.find((item) => item.id === wanted);
       if (profile === undefined) {
-        return fail('还没有配置 LLM。到「设置 → LLM」里加一套。');
+        return { ...fail('还没有配置 LLM。到「设置 → LLM」里加一套。'), httpAttempts, fallbackCount };
+      }
+      if (request.expectedProfileSignature && this.profileSignature(profile.id) !== request.expectedProfileSignature) {
+        return { ...fail('任务运行期间 LLM 配置已变化，请用当前配置重新提交任务'), httpAttempts, fallbackCount };
       }
 
       const key = profile.apiKey.trim();
       // 本地端点不校验 Authorization，所以「没 key」只有在远端才算错误。
       if (key.length === 0 && !isLocalBaseUrl(profile.baseUrl)) {
-        return fail(`「${profile.name}」还没有填 API key。到「设置 → LLM」里补上。`);
+        return { ...fail(`「${profile.name}」还没有填 API key。到「设置 → LLM」里补上。`), httpAttempts, fallbackCount };
       }
 
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       // 只在真有 key 时带 Authorization：多余的 `Bearer ` 会让某些本地服务直接 400。
       if (key.length > 0) headers['Authorization'] = `Bearer ${key}`;
 
-      const send = async (withTool: boolean): Promise<{ response: Response; raw: string }> => this.withRequestSlot(request.signal, async () => {
+      mode = request.tool ? this.savedMode(profile, request.tool) ?? initialHarnessMode(profile.baseUrl) : 'plain';
+      const result = (text: string, actualMode: HarnessMode): LlmAnalyzeResult => ({
+        ok: true, text, profileName: profile.name, model: profile.model,
+        ...(request.tool ? { responseMode: actualMode } : {}), httpAttempts, fallbackCount,
+        ...(usageTotals ? { usage: usageTotals } : {}),
+      });
+      const failed = (error: string): LlmAnalyzeResult => ({
+        ...fail(error), httpAttempts, fallbackCount,
+        ...(request.tool ? { responseMode: mode } : {}),
+        ...(usageTotals ? { usage: usageTotals } : {}),
+      });
+      const send = async (selectedMode: HarnessMode): Promise<{ response: Response; raw: string }> => this.withRequestSlot(request.signal, async () => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
@@ -177,11 +207,18 @@ export class LlmService {
             ],
             temperature: request.temperature ?? profile.temperature,
           };
-          if (withTool && request.tool) {
+          if (selectedMode === 'tool' && request.tool) {
             body['tools'] = [{ type: 'function', function: { ...request.tool, strict: true } }];
             body['tool_choice'] = { type: 'function', function: { name: request.tool.name } };
             body['parallel_tool_calls'] = false;
+          } else if (selectedMode === 'json_schema' && request.tool) {
+            body['response_format'] = { type: 'json_schema', json_schema: {
+              name: request.tool.name, strict: true, schema: request.tool.parameters,
+            } };
+          } else if (selectedMode === 'json_object') {
+            body['response_format'] = { type: 'json_object' };
           }
+          httpAttempts += 1;
           const response = await (this.options.fetchImpl ?? fetch)(`${profile.baseUrl}/chat/completions`, {
             method: 'POST', headers, body: JSON.stringify(body), signal,
           });
@@ -189,39 +226,60 @@ export class LlmService {
         } finally { clearTimeout(timer); }
       });
 
-      let withTool = request.tool !== undefined && !this.toolUnsupported.has(profile.id);
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { response, raw } = await send(withTool);
+      let emptyRetry = false;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const { response, raw } = await send(mode);
         if (!response.ok) {
-          if (withTool && request.tool && toolNotSupported(response.status, raw)) {
-            this.toolUnsupported.add(profile.id);
-            withTool = false;
+          const next = request.tool && formatNotSupported(mode, response.status, raw) ? nextHarnessMode(mode) : null;
+          if (next) {
+            mode = next; fallbackCount += 1; emptyRetry = false;
+            this.rememberMode(profile, request.tool!, mode);
             continue;
           }
-          return fail(`模型服务返回 HTTP ${response.status}：${truncate(raw, 300)}`);
+          return failed(`模型服务返回 HTTP ${response.status}：${truncate(raw, 300)}`);
         }
 
         let data: unknown;
         try { data = JSON.parse(raw) as unknown; }
-        catch { return fail(`模型返回的不是 JSON：${truncate(raw, 200)}`); }
-        if (request.tool) {
+        catch { return failed(`模型返回的不是 JSON：${truncate(raw, 200)}`); }
+        usageTotals = mergeUsage(usageTotals, extractUsage(data));
+        if (finishReason(data) === 'length') return failed('输出 token limit：模型答案被截断');
+        if (request.tool && mode === 'tool') {
           const toolResult = extractToolArguments(data, request.tool.name);
-          if (toolResult.status === 'invalid') return fail(toolResult.error);
+          if (toolResult.status === 'invalid') return failed(toolResult.error);
           if (toolResult.status === 'called') {
-            return { ok: true, text: toolResult.arguments, profileName: profile.name, model: profile.model };
+            this.rememberMode(profile, request.tool, mode);
+            return result(toolResult.arguments, mode);
           }
-          if (withTool) this.toolUnsupported.add(profile.id);
+          const content = extractContent(data);
+          if (content?.trim()) {
+            // 端点忽略了强制工具，但返回了可用正文；本次接受，后续尝试 JSON Output。
+            this.rememberMode(profile, request.tool, 'json_object');
+            fallbackCount += 1;
+            return result(content, 'plain');
+          }
+          mode = 'json_object'; fallbackCount += 1; emptyRetry = false;
+          this.rememberMode(profile, request.tool, mode);
+          continue;
         }
         const content = extractContent(data);
-        if (content === null || content.trim().length === 0) {
-          return fail(`模型没有返回内容，检查模型名或工具调用兼容性。响应片段：${truncate(safeStringify(data), 200)}`);
+        if (request.tool && mode !== 'plain' && (!content?.trim() || !isJsonText(content))) {
+          if (!emptyRetry) { emptyRetry = true; continue; }
+          // 交给 Harness 的 ID/字段校验与缩批机制处理；不能把空答案当成成功批次。
+          return result(content ?? '', mode);
         }
-        return { ok: true, text: content, profileName: profile.name, model: profile.model };
+        if (content === null || !content.trim()) {
+          return request.tool ? result('', mode)
+            : failed(`模型没有返回内容，检查模型名。响应片段：${truncate(safeStringify(data), 200)}`);
+        }
+        if (request.tool) this.rememberMode(profile, request.tool, mode);
+        return result(content, mode);
       }
-      return fail('模型服务不支持提交工具，纯 JSON 回退也失败');
+      return failed('模型响应格式协商失败，请检查端点的结构化输出支持');
     } catch (error) {
-      if (request.signal?.aborted) return fail('已取消 LLM 请求');
-      return fail(describeError(error));
+      const reason = request.signal?.aborted ? '已取消 LLM 请求' : describeError(error);
+      return { ...fail(reason), httpAttempts, fallbackCount, ...(request.tool ? { responseMode: mode } : {}),
+        ...(usageTotals ? { usage: usageTotals } : {}) };
     }
   }
 
@@ -233,6 +291,33 @@ export class LlmService {
    */
   private readStored(): StoredShape {
     return normalizeStored(readJson<unknown>(this.options.settingsFile, null));
+  }
+
+  private capabilityFile(): string {
+    return path.join(path.dirname(this.options.settingsFile), 'llm-output-capabilities.json');
+  }
+
+  private capabilityKey(profile: StoredProfile, tool: NonNullable<LlmCompletionRequest['tool']>): string {
+    return createHash('sha256').update(JSON.stringify([profile.id, profile.baseUrl, profile.model, tool.parameters])).digest('hex');
+  }
+
+  private savedMode(profile: StoredProfile, tool: NonNullable<LlmCompletionRequest['tool']>): HarnessMode | null {
+    const raw = readJson<unknown>(this.capabilityFile(), {});
+    const entry = isRecord(raw) ? raw[this.capabilityKey(profile, tool)] : null;
+    return isRecord(entry) && typeof entry['checkedAt'] === 'number' &&
+      Date.now() - entry['checkedAt'] < CAPABILITY_TTL_MS && isHarnessMode(entry['mode']) ? entry['mode'] : null;
+  }
+
+  private rememberMode(profile: StoredProfile, tool: NonNullable<LlmCompletionRequest['tool']>, mode: HarnessMode): void {
+    const file = this.capabilityFile();
+    const raw = readJson<unknown>(file, {});
+    const record = (isRecord(raw) ? raw : {}) as CapabilityRecord;
+    const key = this.capabilityKey(profile, tool);
+    if (record[key]?.mode === mode && Date.now() - record[key]!.checkedAt < CAPABILITY_TTL_MS / 2) return;
+    const now = Date.now();
+    const kept = Object.fromEntries(Object.entries(record).filter(([, entry]) =>
+      entry && typeof entry.checkedAt === 'number' && now - entry.checkedAt < CAPABILITY_TTL_MS).slice(-99));
+    writeJsonAtomic(file, { ...kept, [key]: { mode, checkedAt: now } });
   }
 
   /** 全局最多四个在途请求，避免多本书并跑绕开每个 Harness 的并发上限。 */
@@ -392,8 +477,69 @@ function extractContent(data: unknown): string | null {
   return typeof content === 'string' ? content : null;
 }
 
-function toolNotSupported(status: number, body: string): boolean {
-  return [400, 422, 501].includes(status) && /tools?|tool_choice|function.call|parallel_tool_calls|strict/i.test(body);
+function isHarnessMode(value: unknown): value is HarnessMode {
+  return value === 'tool' || value === 'json_schema' || value === 'json_object' || value === 'plain';
+}
+
+function initialHarnessMode(baseUrl: string): HarnessMode {
+  let host = '';
+  try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { /* 配置校验另行处理。 */ }
+  if (host === 'api.deepseek.com') return 'json_object';
+  if (host === 'api.openai.com') return 'json_schema';
+  return 'tool';
+}
+
+function nextHarnessMode(mode: HarnessMode): HarnessMode | null {
+  if (mode === 'json_schema') return 'tool';
+  if (mode === 'tool') return 'json_object';
+  if (mode === 'json_object') return 'plain';
+  return null;
+}
+
+/** 只对格式参数本身被拒的 400/422/501 降级；鉴权、限流、网络错误不能降级。 */
+function formatNotSupported(mode: HarnessMode, status: number, body: string): boolean {
+  if (![400, 422, 501].includes(status)) return false;
+  if (mode === 'tool') return /tools?|tool_choice|function.call|parallel_tool_calls|strict/i.test(body);
+  if (mode === 'json_schema') return /response_format|json_schema|schema|strict/i.test(body);
+  if (mode === 'json_object') return /response_format|json_object|json mode/i.test(body);
+  return false;
+}
+
+function isJsonText(value: string): boolean {
+  try { return isRecord(JSON.parse(value)); } catch { return false; }
+}
+
+function finishReason(data: unknown): string | null {
+  if (!isRecord(data) || !Array.isArray(data['choices'])) return null;
+  const first = data['choices'][0];
+  return isRecord(first) && typeof first['finish_reason'] === 'string' ? first['finish_reason'] : null;
+}
+
+function extractUsage(data: unknown): LlmAnalyzeResult['usage'] | undefined {
+  if (!isRecord(data) || !isRecord(data['usage'])) return undefined;
+  const usage = data['usage'];
+  const number = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const promptTokens = number(usage['prompt_tokens']);
+  const completionTokens = number(usage['completion_tokens']);
+  const detail = isRecord(usage['prompt_tokens_details']) ? usage['prompt_tokens_details'] : {};
+  const cacheHitTokens = number(usage['prompt_cache_hit_tokens']) ?? number(detail['cached_tokens']);
+  const cacheMissTokens = number(usage['prompt_cache_miss_tokens']) ??
+    (promptTokens !== undefined && cacheHitTokens !== undefined ? Math.max(0, promptTokens - cacheHitTokens) : undefined);
+  if (promptTokens === undefined && completionTokens === undefined && cacheHitTokens === undefined) return undefined;
+  return { promptTokens, completionTokens, cacheHitTokens, cacheMissTokens };
+}
+
+function mergeUsage(
+  total: LlmAnalyzeResult['usage'] | undefined,
+  current: LlmAnalyzeResult['usage'] | undefined,
+): LlmAnalyzeResult['usage'] | undefined {
+  if (!current) return total;
+  const sum = (key: keyof NonNullable<LlmAnalyzeResult['usage']>): number | undefined =>
+    current[key] === undefined ? total?.[key] : (total?.[key] ?? 0) + current[key]!;
+  return {
+    promptTokens: sum('promptTokens'), completionTokens: sum('completionTokens'),
+    cacheHitTokens: sum('cacheHitTokens'), cacheMissTokens: sum('cacheMissTokens'),
+  };
 }
 
 type ToolExtraction =

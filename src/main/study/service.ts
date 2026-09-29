@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import type { BookRecord, BookSegments, DirectFilterOptions, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardPatch, StudyCardRunRequest, StudyFilterRunRequest, StudyImageMode, StudyList, StudyRunProgress } from '../../shared/types';
+import type { BookRecord, BookSegments, DirectFilterOptions, LlmAnalyzeResult, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardPatch, StudyCardRunRequest, StudyFilterRunRequest, StudyImageMode, StudyList, StudyRunProgress, StudyRunStats } from '../../shared/types';
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
 import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeDirectOptions, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
@@ -28,7 +28,7 @@ export interface StudyServiceOptions {
   lookupMeaning(expression: string, reading: string): string;
   progress?(bookId: string, done: number, total: number): void;
   workflowProgress?(progress: StudyRunProgress): void;
-  llm?: Pick<LlmService, 'complete'>;
+  llm?: Pick<LlmService, 'complete'> & Partial<Pick<LlmService, 'profileSignature'>>;
   translation?: Pick<TranslationService, 'translate'>;
   /** 测试注入纯图片；正式运行从漫画原始页图裁取。 */
   crop?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
@@ -241,6 +241,7 @@ export class StudyService {
     if (!['F1', 'F2', 'F3'].includes(request.tier)) throw new Error('未知 LLM 筛选档位');
     const llm = this.options.llm;
     if (!llm) throw new Error('LLM 筛选服务未就绪');
+    const profileSignature = llm.profileSignature?.(request.profileId) ?? undefined;
     const list = this.read(bookId);
     if (!list) throw new Error('请先生成学习候选');
     const workflow = list.workflow ?? defaultStudyWorkflow();
@@ -258,7 +259,7 @@ export class StudyService {
     }
     const decisions: NonNullable<NonNullable<StudyList['workflow']>['filterRun']>['decisions'] =
       resumed ? { ...prior.decisions } : {};
-    const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+    const stats: StudyRunStats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
     const startedAt = Date.now();
     const job = { cancelled: false, controller: new AbortController() };
     this.running.set(bookId, job);
@@ -268,7 +269,9 @@ export class StudyService {
       for (const value of Object.values(decisions)) counts[value.decision] += 1;
       this.options.workflowProgress?.({
         bookId, stage: 'filter', done: Object.keys(decisions).length, total: source.length, message,
-        filter: { ...counts, llmCalls: stats.llmCalls, elapsedMs: stats.elapsedMs + Date.now() - startedAt, updates },
+        filter: { ...counts, llmCalls: stats.llmCalls, httpAttempts: stats.llmHttpAttempts,
+          fallbackCount: stats.llmFallbacks, cacheHitTokens: stats.cacheHitTokens, cacheMissTokens: stats.cacheMissTokens,
+          elapsedMs: stats.elapsedMs + Date.now() - startedAt, updates },
       });
     };
     try {
@@ -276,14 +279,14 @@ export class StudyService {
       const filterTool = harnessSubmissionTool('filter');
       emitFilterProgress([], resumed ? '从已保存的批次续跑' : '正在筛选');
       const evaluateBatch = async (batch: StudyCandidate[]): Promise<FilterRow[]> => {
-        const first = await llm.complete({ profileId: request.profileId, ...filterHarnessPrompt(request.tier, batch), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
-        stats.llmCalls += 1;
+        const first = await llm.complete({ profileId: request.profileId, expectedProfileSignature: profileSignature, ...filterHarnessPrompt(request.tier, batch), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
+        recordLlmResult(stats, first);
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         if (!first.ok) throw batchFailure('LLM 筛选失败', first.error, batch.length);
         const firstRows = parseFilterResponse(first.text, batch.map((item) => item.id));
         if (request.tier !== 'F3') return firstRows;
-        const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
-        stats.llmCalls += 1;
+        const second = await llm.complete({ profileId: request.profileId, expectedProfileSignature: profileSignature, ...verifyFilterPrompt(batch, firstRows), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
+        recordLlmResult(stats, second);
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         if (!second.ok) throw batchFailure('LLM 复核失败', second.error, batch.length);
         const checked = parseFilterResponse(second.text, batch.map((item) => item.id));
@@ -372,6 +375,7 @@ export class StudyService {
     if (!translation) throw new Error('翻译服务未就绪');
     const llm = this.options.llm;
     if (request.tier !== 'R0' && (!llm || !request.profileId)) throw new Error('R1–R3 需要选择 LLM 配置');
+    const profileSignature = request.profileId ? llm?.profileSignature?.(request.profileId) ?? undefined : undefined;
     const list = this.read(bookId);
     if (!list) throw new Error('请先生成学习候选');
     const selected = selectedCandidates(list);
@@ -384,7 +388,7 @@ export class StudyService {
       prior.profileId === (request.tier === 'R0' ? null : request.profileId ?? null) &&
       prior.sourceHash === sourceHash;
     const drafts: StudyCardDraft[] = resumed ? [...prior.drafts] : [];
-    const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
+    const stats: StudyRunStats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
     const startedAt = Date.now();
     const job = { cancelled: false, controller: new AbortController() };
     this.running.set(bookId, job);
@@ -414,8 +418,8 @@ export class StudyService {
           usage: '', nuance: '', needsReview: false, reviewReason: '',
         }));
         if (!llm) throw new Error('LLM 制卡服务未就绪');
-        const result = await llm.complete({ profileId: request.profileId, ...cardHarnessPrompt(request.tier, entries), tool: cardTool, temperature: 0.1, signal: job.controller.signal });
-        stats.llmCalls += 1;
+        const result = await llm.complete({ profileId: request.profileId, expectedProfileSignature: profileSignature, ...cardHarnessPrompt(request.tier, entries), tool: cardTool, temperature: 0.1, signal: job.controller.signal });
+        recordLlmResult(stats, result);
         if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         if (!result.ok) throw batchFailure('LLM 制卡失败', result.error, entries.length);
         const ids = entries.map(({ candidate }) => candidate.id);
@@ -429,8 +433,8 @@ export class StudyService {
           return [draft.candidateId, { ...draft, needsReview: true, reviewReason: reason }] as const;
         }));
         if (request.tier !== 'R3') return ids.map((id) => byId.get(id)!);
-        const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(entries.map(({ candidate }) => ({ candidate, draft: byId.get(candidate.id)! }))), tool: verifyTool, temperature: 0.1, signal: job.controller.signal });
-        stats.llmCalls += 1;
+        const checked = await llm.complete({ profileId: request.profileId, expectedProfileSignature: profileSignature, ...verifyCardPrompt(entries.map(({ candidate }) => ({ candidate, draft: byId.get(candidate.id)! }))), tool: verifyTool, temperature: 0.1, signal: job.controller.signal });
+        recordLlmResult(stats, checked);
         if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         if (!checked.ok) throw batchFailure('LLM 复核失败', checked.error, entries.length);
         const verdicts = new Map(parseVerifyBatchResponse(checked.text, ids).map((verdict) => [verdict.id, verdict]));
@@ -596,6 +600,25 @@ export class StudyService {
 
 function selectedCandidates(list: StudyList): StudyCandidate[] {
   return list.candidates.filter((item) => item.selected && !item.excluded);
+}
+
+/** 逻辑 Harness 调用与真实 HTTP 尝试分开计数；不保存原始提示词或响应。 */
+function recordLlmResult(stats: StudyRunStats, result: LlmAnalyzeResult): void {
+  stats.llmCalls += 1;
+  if (result.responseMode) {
+    const modes = stats.responseModes ?? {};
+    modes[result.responseMode] = (modes[result.responseMode] ?? 0) + 1;
+    stats.responseModes = modes;
+  }
+  if (result.httpAttempts !== undefined) stats.llmHttpAttempts = (stats.llmHttpAttempts ?? 0) + result.httpAttempts;
+  if (result.fallbackCount !== undefined) stats.llmFallbacks = (stats.llmFallbacks ?? 0) + result.fallbackCount;
+  if (result.usage?.promptTokens !== undefined) stats.promptTokens = (stats.promptTokens ?? 0) + result.usage.promptTokens;
+  if (result.usage?.completionTokens !== undefined) stats.completionTokens = (stats.completionTokens ?? 0) + result.usage.completionTokens;
+  if (result.usage?.cacheHitTokens !== undefined && result.usage.cacheMissTokens !== undefined) {
+    stats.cacheHitTokens = (stats.cacheHitTokens ?? 0) + result.usage.cacheHitTokens;
+    stats.cacheMissTokens = (stats.cacheMissTokens ?? 0) + result.usage.cacheMissTokens;
+    stats.cacheReportedCalls = (stats.cacheReportedCalls ?? 0) + 1;
+  }
 }
 
 /** 小模型上下文不够时缩批；鉴权、网络故障等原样报错，避免无意义重试。 */

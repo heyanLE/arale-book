@@ -321,7 +321,8 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
           cardCalls += 1;
           text = JSON.stringify({ items: input.map((item) => ({ id: item.id, meaning: `义${item.word}`, sentenceTranslation: `译${item.word}`, usage: '', nuance: '', needsReview: false, reviewReason: '' })).reverse() });
         }
-        return { ok: true, text, profileName: 'test', model: 'test' };
+        return { ok: true, text, profileName: 'test', model: 'test', responseMode: 'json_object', httpAttempts: 2, fallbackCount: 1,
+          usage: { promptTokens: 100, completionTokens: 20, cacheHitTokens: 25, cacheMissTokens: 75 } };
       } },
       translation: { translate: async () => ({ ok: true, text: '翻译', sourceReading: '', profileName: 'test', provider: 'bing', sourceLanguage: 'ja', targetLanguage: 'zh-Hans' }) },
       workflowProgress: (progress) => liveProgress.push(progress),
@@ -330,12 +331,18 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
     const filtered = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1' });
     assert.equal(filterCalls, 3);
     assert.equal(filtered.workflow?.filterRun?.stats?.llmCalls, 3);
+    assert.equal(filtered.workflow?.filterRun?.stats?.llmHttpAttempts, 6);
+    assert.equal(filtered.workflow?.filterRun?.stats?.llmFallbacks, 3);
+    assert.equal(filtered.workflow?.filterRun?.stats?.cacheHitTokens, 75);
+    assert.equal(filtered.workflow?.filterRun?.stats?.cacheMissTokens, 225);
+    assert.deepEqual(filtered.workflow?.filterRun?.stats?.responseModes, { json_object: 3 });
     const filterEvents = liveProgress.filter((event) => event.stage === 'filter' && (event.filter?.updates.length ?? 0) > 0);
     assert.deepEqual(filterEvents.map((event) => event.done), [8, 16, 17]);
     assert.deepEqual(filterEvents.map((event) => event.filter?.keep), [8, 16, 17]);
     const made = await service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing' });
     assert.equal(cardCalls, 3);
     assert.equal(made.workflow?.cardRun?.stats?.llmCalls, 3);
+    assert.equal(made.workflow?.cardRun?.stats?.llmHttpAttempts, 6);
     assert.equal(made.workflow?.cardRun?.stats?.translationCalls, 34);
     assert.deepEqual(made.workflow?.cardRun?.drafts.map((item) => item.candidateId), candidates.map((item) => item.id));
     assert.equal(made.workflow?.cardRun?.drafts[0]?.meaning, '义詞0');

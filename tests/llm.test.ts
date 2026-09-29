@@ -292,22 +292,127 @@ test('complete: 强制调用提交工具，读取 tool_calls 的参数作为 Har
   assert.deepEqual(body.tool_choice, { type: 'function', function: { name: HARNESS_TOOL_NAME } });
 });
 
-test('complete: 兼容端点拒绝工具时仅首次回退纯 JSON，后续沿用回退模式', async () => {
+test('complete: DeepSeek 标准地址直接使用 JSON Output，保留默认 thinking 并记录缓存 token', async () => {
+  const captured = captureFetch(async () => jsonResponse({
+    choices: [{ finish_reason: 'stop', message: { content: '{"items":[]}' } }],
+    usage: { prompt_tokens: 120, completion_tokens: 18, prompt_cache_hit_tokens: 64, prompt_cache_miss_tokens: 56 },
+  }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' });
+  service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ user: '[]', system: '只输出 JSON', tool: harnessSubmissionTool('filter') });
+  const body = JSON.parse(String(captured.calls[0]?.init?.body)) as Record<string, unknown>;
+  assert.deepEqual(body['response_format'], { type: 'json_object' });
+  assert.equal(body['tools'], undefined);
+  assert.equal(body['thinking'], undefined, '不应为迁就工具而关闭 DeepSeek 默认 thinking');
+  assert.equal(result.responseMode, 'json_object');
+  assert.equal(result.httpAttempts, 1);
+  assert.deepEqual(result.usage, { promptTokens: 120, completionTokens: 18, cacheHitTokens: 64, cacheMissTokens: 56 });
+});
+
+test('complete: OpenAI 官方地址优先使用严格 JSON Schema', async () => {
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }] }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' });
+  service.setApiKey('p1', 'sk-test');
+  const tool = harnessSubmissionTool('filter');
+  const result = await service.complete({ user: '[]', system: 'JSON', tool });
+  const body = JSON.parse(String(captured.calls[0]?.init?.body)) as Record<string, any>;
+  assert.equal(body.response_format.type, 'json_schema');
+  assert.equal(body.response_format.json_schema.strict, true);
+  assert.deepEqual(body.response_format.json_schema.schema, tool.parameters);
+  assert.equal(result.responseMode, 'json_schema');
+});
+
+test('complete: JSON Schema 被拒后可降到工具协议', async () => {
+  const args = '{"items":[]}';
+  const captured = captureFetch(async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    if (body['response_format']) return new Response('{"error":"response_format json_schema unsupported"}', { status: 400 });
+    return jsonResponse({ choices: [{ message: { tool_calls: [{ type: 'function', function: { name: HARNESS_TOOL_NAME, arguments: args } }] } }] });
+  });
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'https://api.openai.com/v1', model: 'legacy-model' });
+  service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ user: '[]', tool: harnessSubmissionTool('filter') });
+  assert.equal(result.text, args);
+  assert.equal(result.responseMode, 'tool');
+  assert.equal(result.httpAttempts, 2);
+  assert.equal(result.fallbackCount, 1);
+});
+
+test('complete: 兼容端点拒绝工具后改用 JSON Output，后续沿用并持久记住能力', async () => {
   const captured = captureFetch(async (_url, init) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     return body['tools']
       ? new Response('{"error":"tool_choice unsupported"}', { status: 400 })
       : jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }] });
   });
-  const { service } = makeService(captured.fetchImpl);
+  const { service, file } = makeService(captured.fetchImpl);
   seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  service.setApiKey('p1', 'sk-capability-secret');
   const tool = harnessSubmissionTool('filter');
   assert.equal((await service.complete({ user: 'a', tool })).text, '{"items":[]}');
-  assert.equal((await service.complete({ user: 'b', tool })).text, '{"items":[]}');
+  const restarted = new LlmService({ settingsFile: file, fetchImpl: captured.fetchImpl });
+  assert.equal((await restarted.complete({ user: 'b', tool })).text, '{"items":[]}');
   assert.equal(captured.calls.length, 3);
   assert.ok(JSON.parse(String(captured.calls[0]?.init?.body)).tools);
-  assert.equal(JSON.parse(String(captured.calls[1]?.init?.body)).tools, undefined);
-  assert.equal(JSON.parse(String(captured.calls[2]?.init?.body)).tools, undefined);
+  assert.deepEqual(JSON.parse(String(captured.calls[1]?.init?.body)).response_format, { type: 'json_object' });
+  assert.deepEqual(JSON.parse(String(captured.calls[2]?.init?.body)).response_format, { type: 'json_object' });
+  const capabilities = fs.readFileSync(path.join(path.dirname(file), 'llm-output-capabilities.json'), 'utf8');
+  assert.ok(!capabilities.includes('sk-capability-secret') && !capabilities.includes('127.0.0.1'), '能力缓存只存指纹与模式');
+});
+
+test('complete: 端点连 JSON Output 也不支持时才退到提示词 JSON；401 不回退', async () => {
+  const captured = captureFetch(async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    if (body['tools']) return new Response('{"error":"tool_choice unsupported"}', { status: 400 });
+    if (body['response_format']) return new Response('{"error":"response_format unsupported"}', { status: 400 });
+    return jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }] });
+  });
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const result = await service.complete({ user: '[]', tool: harnessSubmissionTool('filter') });
+  assert.equal(result.ok, true);
+  assert.equal(result.responseMode, 'plain');
+  assert.equal(result.httpAttempts, 3);
+  assert.equal(result.fallbackCount, 2);
+  const unauthorized = captureFetch(async () => new Response('{"error":"invalid key"}', { status: 401 }));
+  const other = makeService(unauthorized.fetchImpl).service;
+  seed(other, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const denied = await other.complete({ user: '[]', tool: harnessSubmissionTool('filter') });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.httpAttempts, 1);
+  assert.equal(unauthorized.calls.length, 1);
+});
+
+test('complete: JSON Output 偶发空内容只重试一次，不把空批次当成成功', async () => {
+  let count = 0;
+  const captured = captureFetch(async () => {
+    count += 1;
+    return jsonResponse({ choices: [{ message: { content: count === 1 ? '' : '{"items":[]}' } }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, prompt_cache_hit_tokens: count === 1 ? 0 : 5, prompt_cache_miss_tokens: count === 1 ? 10 : 5 } });
+  });
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' });
+  service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ user: '[]', tool: harnessSubmissionTool('filter') });
+  assert.equal(result.text, '{"items":[]}');
+  assert.equal(result.httpAttempts, 2);
+  assert.equal(result.fallbackCount, 0);
+  assert.deepEqual(result.usage, { promptTokens: 20, completionTokens: 4, cacheHitTokens: 5, cacheMissTokens: 15 });
+});
+
+test('complete: 后台任务锁定的模型配置变化后停止，不混用新模型', async () => {
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }] }));
+  const { service } = makeService(captured.fetchImpl);
+  const profile = seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const signature = service.profileSignature(profile.id);
+  service.update({ profiles: [{ ...profile, model: 'another-model' }] });
+  const result = await service.complete({ user: '[]', tool: harnessSubmissionTool('filter'), expectedProfileSignature: signature ?? undefined });
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /配置已变化/);
+  assert.equal(captured.calls.length, 0);
 });
 
 test('complete: 其它工具名不会被当作制卡结果', async () => {

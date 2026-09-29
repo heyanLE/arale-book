@@ -1,6 +1,6 @@
 /** 漫画学习候选审核：JLPT 筛选、出处核对、人工短语和 Anki 导出。 */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyImageMode, StudyList, StudyOccurrence, StudyRunProgress, StudyTaskEntry, StudyTaskQueueState, TranslationSettings } from '@shared/types';
+import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyImageMode, StudyList, StudyOccurrence, StudyRunProgress, StudyRunStats, StudyTaskEntry, StudyTaskQueueState, TranslationSettings } from '@shared/types';
 import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, defaultDirectOptions, directFilterStages, estimatedLlmCalls, normalizeDirectOptions, studyPriorityScore } from '@core/study/harness';
 import { api, call, useIpcEvent } from '../lib/api';
 import { DirectFilterPanel } from './DirectFilterPanel';
@@ -24,6 +24,20 @@ function highlightedContext(occurrence: StudyOccurrence): JSX.Element {
     <mark>{occurrence.text.slice(occurrence.start, occurrence.end)}</mark>
     {occurrence.text.slice(occurrence.end)}
   </>;
+}
+
+function llmStatsText(stats?: StudyRunStats): string {
+  if (!stats) return '';
+  const requests = stats.llmHttpAttempts !== undefined ? ` · 实际 HTTP ${stats.llmHttpAttempts} 次` : '';
+  const fallbacks = stats.llmFallbacks ? ` · 格式回退 ${stats.llmFallbacks} 次` : '';
+  const modeNames = { tool: '工具', json_schema: 'JSON Schema', json_object: 'JSON 对象', plain: '提示词 JSON' };
+  const modes = Object.entries(stats.responseModes ?? {}).filter(([, count]) => !!count)
+    .map(([mode, count]) => `${modeNames[mode as keyof typeof modeNames]}×${count}`).join('、');
+  const measured = (stats.cacheHitTokens ?? 0) + (stats.cacheMissTokens ?? 0);
+  const cache = stats.cacheReportedCalls && measured > 0
+    ? ` · 输入缓存命中 ${Math.round(100 * (stats.cacheHitTokens ?? 0) / measured)}%（${stats.cacheHitTokens ?? 0}/${measured} tokens）`
+    : ' · 缓存用量未返回';
+  return `${modes ? ` · 协议 ${modes}` : ''}${requests}${fallbacks}${cache}`;
 }
 
 export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGeneratedAt: number }): JSX.Element {
@@ -501,7 +515,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             {pendingFilterMismatch && <small>旧检查点使用 {pendingFilter?.tier} / {pendingFilter?.profileId}，改档或换模型前需先放弃检查点。</small>}
             {!workflowBusy && list.workflow?.pendingFilterRun?.lastError && <small>上次中断：{list.workflow.pendingFilterRun.lastError}</small>}
             {pendingFilterCount > 0 && !workflowBusy && <div className="study-workflow-controls"><button type="button" className="btn btn-sm" onClick={() => void useCompletedFilter()}>只使用已判断的 {pendingFilterCount} 词（未处理词暂不制卡）</button><button type="button" className="btn btn-sm" onClick={() => void discardFilterProgress()}>放弃旧检查点</button></div>}
-            {list.workflow?.filterRun && <small>上次：{list.workflow.filterRun.tier} · {list.workflow.filterRun.stats?.llmCalls ?? '—'} 次 LLM 调用 · {Math.round((list.workflow.filterRun.stats?.elapsedMs ?? 0) / 1000)} 秒。结果可在下方逐词修改。</small>}
+            {list.workflow?.filterRun && <small>上次：{list.workflow.filterRun.tier} · {list.workflow.filterRun.stats?.llmCalls ?? '—'} 次 Harness 调用{llmStatsText(list.workflow.filterRun.stats)} · {Math.round((list.workflow.filterRun.stats?.elapsedMs ?? 0) / 1000)} 秒。结果可在下方逐词修改。</small>}
           </section>}
           {step === 'review' && <section className="study-flow-section">
             <h3>手动筛词</h3>
@@ -543,7 +557,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
                 <option value={1}>并发 1 · 低负载</option><option value={2}>并发 2 · 推荐</option><option value={3}>并发 3 · 较快</option>
               </select>
             </details>}
-            {cardRun && <small>上次：{cardRun.tier} · {cardRun.stats?.llmCalls ?? '—'} 次 LLM 调用 · {cardRun.stats?.translationCalls ?? '—'} 次翻译服务调用 · {Math.round((cardRun.stats?.elapsedMs ?? 0) / 1000)} 秒。</small>}
+            {cardRun && <small>上次：{cardRun.tier} · {cardRun.stats?.llmCalls ?? '—'} 次 Harness 调用{cardRun.tier === 'R0' ? '' : llmStatsText(cardRun.stats)} · {cardRun.stats?.translationCalls ?? '—'} 次翻译服务调用 · {Math.round((cardRun.stats?.elapsedMs ?? 0) / 1000)} 秒。</small>}
             {list.workflow?.pendingCardRun && <small>已完成 {pendingCardCount} 张草稿；保持档位与配置可续跑。</small>}
             <div className="study-flow-actions">
               <button type="button" className="btn btn-sm btn-primary" disabled={selectedCount === 0 || (!partialFilterApplied && (wordReviewCount > 0 || pendingFilterCount > 0)) || !translationProfileId || (cardTier !== 'R0' && !cardProfileId) || workflowBusy || stale} onClick={() => void makeCards()}>生成 {selectedCount} 张释义草稿</button>
@@ -574,6 +588,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             ? `排队第 ${(studyQueue?.pending.findIndex((item) => item.id === bookTask.id) ?? 0) + 1} 位`
             : `${bookTask.done} / ${bookTask.total} 词`}
           {bookTask.kind === 'filter' && filterProgress && <span>临时判断：保留 {filterCounts.keep} · 排除 {filterCounts.reject} · 待审 {filterCounts.review} · {filterCounts.llmCalls || list.workflow?.pendingFilterRun?.stats?.llmCalls || 0} 次请求
+            {filterProgress.filter?.httpAttempts !== undefined && ` · 实际 HTTP ${filterProgress.filter.httpAttempts} 次`}
+            {filterProgress.filter?.cacheHitTokens !== undefined && filterProgress.filter.cacheMissTokens !== undefined && filterProgress.filter.cacheHitTokens + filterProgress.filter.cacheMissTokens > 0 &&
+              ` · 输入缓存命中 ${Math.round(100 * filterProgress.filter.cacheHitTokens / (filterProgress.filter.cacheHitTokens + filterProgress.filter.cacheMissTokens))}%`}
             {remainingMinutes !== null && ` · 按当前速度约剩余 ${remainingMinutes} 分钟`}</span>}
           <button type="button" className="btn btn-sm" onClick={() => void api.study.cancelTask(bookTask.id)}>{bookTask.status === 'queued' ? '取消排队' : '停止任务'}</button>
           <small>任务在后台继续运行；可返回书库，右下角查看进度。</small>

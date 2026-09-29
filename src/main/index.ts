@@ -261,6 +261,7 @@ async function bootstrap(): Promise<void> {
   studyTasks = new StudyTaskQueue({
     study,
     getBook: (bookId) => store.get(bookId),
+    profileSignature: (profileId) => llm.profileSignature(profileId),
     onChange: (state) => emitEvent('study:queue', state),
     onDone: (task) => emitEvent('study:done', task),
   });

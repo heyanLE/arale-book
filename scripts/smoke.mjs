@@ -2236,7 +2236,9 @@ try {
         ? { content: null, tool_calls: [{ id: 'call_smoke', type: 'function', function: { name: input.tools[0].function.name, arguments: content } }] }
         : { content };
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ message }] }));
+      response.end(JSON.stringify({ choices: [{ message }], usage: {
+        prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 25, prompt_cache_miss_tokens: 75,
+      } }));
     } catch (error) {
       response.writeHead(500);
       response.end(String(error));
@@ -2416,6 +2418,11 @@ try {
   }
   check('LLM 筛选完成后正式应用结果', finishedFilter);
   check('筛选 Harness 通过结构化提交工具返回结果', mockToolRequests > 0, `toolRequests=${mockToolRequests}`);
+  const filterUsage = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.filterRun?.stats)`);
+  check('筛选后落盘真实 HTTP 次数和服务端缓存 token',
+    filterUsage?.llmHttpAttempts === mockToolRequests && filterUsage?.cacheHitTokens === mockToolRequests * 25 &&
+    filterUsage?.cacheMissTokens === mockToolRequests * 75,
+    JSON.stringify({ calls: filterUsage?.llmHttpAttempts, hit: filterUsage?.cacheHitTokens, miss: filterUsage?.cacheMissTokens }));
   check('AI 完成后进入手动筛词，只有保留／排除操作并优先显示待审项',
     (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('手动筛词')")) === true &&
     (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true &&
