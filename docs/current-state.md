@@ -128,6 +128,11 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 - 保存逻辑 Harness 次数、实际 HTTP 尝试、回退次数，以及供应商返回的缓存命中/未命中 token；界面只对已报告数据计算命中率。`npm run typecheck`、`npm run build` 通过；`npm test` 476 项中 471 通过、5 跳过；`npm run smoke` 210/210，假端点统计经 Electron IPC 落盘。详见[协议说明](llm-output-protocol.md)。
 - 未用真实 DeepSeek/OpenAI Key 试跑新版请求；服务端缓存命中率、质量和费用仍需用户环境观察，Windows 目标系统未验收。
 
+### 2026-09-29 手动筛词批量按钮（macOS / Node 22）
+
+- 第 3 步把原先藏在列表菜单中的批量人工决定移到步骤主区域：当前列表全保留、当前列表全去除，并可撤销上次批量操作。范围是当前视图、搜索和等级条件匹配的全部词（含其他分页），按钮显示匹配数量；切“全部”视图可操作整本书。
+- `npm run typecheck`、`npm run build` 通过；`npm test` 476 项中 471 通过、5 跳过；`npm run smoke` 212/212，在真实 Electron 中验证 AI 待审 13 词的全保留、全去除及撤销。截图见[筛选 UX](anki-filter-ux.md)。Windows 目标系统未验收。
+
 ## 下一步：Windows 兼容与修复
 
 优先顺序及具体命令见 [Windows 交接](windows-handoff.md)。

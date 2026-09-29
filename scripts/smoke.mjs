@@ -2428,6 +2428,30 @@ try {
     (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true &&
     (await client.evaluate("document.querySelectorAll('.study-decision-controls button').length")) === 2 &&
     (await client.evaluate("document.querySelector('.study-card-draft') === null")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('当前列表全保留'))?.click();
+  })()`);
+  await delay(100);
+  const bulkKept = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.forceInclude).length)`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('撤销上次批量'))?.click();
+  })()`);
+  await delay(100);
+  const keptUndone = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.forceInclude).length)`);
+  check('当前 AI 待审列表可一键全保留并撤销，未处理其他词', bulkKept === 13 && keptUndone === 0,
+    JSON.stringify({ bulkKept, keptUndone }));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('当前列表全去除'))?.click();
+  })()`);
+  await delay(100);
+  const bulkExcluded = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.excluded).length)`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('撤销上次批量'))?.click();
+  })()`);
+  await delay(100);
+  const excludedUndone = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.excluded).length)`);
+  check('当前 AI 待审列表可一键全去除并撤销', bulkExcluded === 13 && excludedUndone === 0,
+    JSON.stringify({ bulkExcluded, excludedUndone }));
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));

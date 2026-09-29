@@ -8,6 +8,7 @@ import { DirectFilterPanel } from './DirectFilterPanel';
 type LevelFilter = 'all' | 'n3plus' | 'n2plus' | 'n1' | 'n2' | 'n3' | 'n4' | 'n5' | 'unknown';
 type StudyStep = 'rules' | 'ai' | 'review' | 'meaning' | 'export';
 type CandidateView = 'included' | 'excluded' | 'review' | 'manual' | 'all';
+type BulkSnapshot = Array<{ id: string; selected: boolean; excluded: boolean; forceInclude: boolean }>;
 const PAGE_SIZE = 100;
 
 function passesLevel(item: StudyCandidate, filter: LevelFilter): boolean {
@@ -51,6 +52,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [sortMode, setSortMode] = useState<'count' | 'priority'>('count');
   const [step, setStep] = useState<StudyStep>('rules');
   const [candidateView, setCandidateView] = useState<CandidateView>('included');
+  const [bulkUndo, setBulkUndo] = useState<BulkSnapshot | null>(null);
   const [showRunSettings, setShowRunSettings] = useState(false);
   const [page, setPage] = useState(0);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -82,6 +84,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setBulkUndo(null);
     void Promise.all([
       call('读取制卡清单', () => api.study.read(bookId)),
       call('读取 LLM 配置', () => api.llm.settings()),
@@ -277,16 +280,41 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   async function navigateTo(next: StudyStep): Promise<void> {
     if (step === 'rules' && !await saveDraft()) return;
     if (step === 'export' && !await saveCardDraft()) return;
+    if (next !== 'review') setBulkUndo(null);
     setStep(next); setCandidateView('included'); setPage(0);
   }
 
   async function decideFiltered(decision: 'keep' | 'exclude'): Promise<void> {
-    if (!window.confirm(`将当前列表中的 ${filtered.length} 个词全部标为“手动${decision === 'keep' ? '保留' : '排除'}”？此操作会修改正式词单。`)) return;
+    if (filtered.length === 0) return;
+    const snapshot: BulkSnapshot = filtered.map((item) => ({
+      id: item.id, selected: item.selected, excluded: item.excluded, forceInclude: item.forceInclude === true,
+    }));
     const patch = decision === 'keep'
       ? { forceInclude: true, excluded: false, selected: true }
       : { forceInclude: false, excluded: true, selected: false };
     const next = await call('批量修改人工决定', () => api.study.patchMany(bookId, filtered.map((item) => item.id), patch));
-    if (next) setList(next);
+    if (next) {
+      setList(next); setBulkUndo(snapshot);
+      setNotice(`已将当前列表的 ${snapshot.length} 个词全部手动${decision === 'keep' ? '保留' : '排除'}；可在此撤销。`);
+    }
+  }
+
+  async function undoFiltered(): Promise<void> {
+    if (!bulkUndo) return;
+    const groups = new Map<string, { ids: string[]; patch: StudyCandidatePatch }>();
+    for (const item of bulkUndo) {
+      const patch = { selected: item.selected, excluded: item.excluded, forceInclude: item.forceInclude };
+      const key = JSON.stringify(patch);
+      const group = groups.get(key) ?? { ids: [] as string[], patch };
+      group.ids.push(item.id);
+      groups.set(key, group);
+    }
+    let restored: StudyList | null = null;
+    for (const group of groups.values()) {
+      restored = await call('撤销批量筛词', () => api.study.patchMany(bookId, group.ids, group.patch));
+      if (!restored) return;
+    }
+    if (restored) { setList(restored); setBulkUndo(null); setNotice(`已撤销对 ${bulkUndo.length} 个词的批量决定。`); }
   }
 
   async function decideOne(item: StudyCandidate, decision: 'auto' | 'keep' | 'exclude'): Promise<void> {
@@ -298,7 +326,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     const patch = decision === 'keep' ? { forceInclude: true, excluded: false, selected: true }
       : decision === 'exclude' ? { forceInclude: false, excluded: true, selected: false }
         : { forceInclude: false, excluded: false, selected };
-    await patchOne(item.id, patch);
+    if (await patchOne(item.id, patch)) setBulkUndo(null);
   }
 
   function discardRuleDraft(): void {
@@ -521,6 +549,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             <h3>手动筛词</h3>
             <div className="study-preview-total"><strong>准备制卡 {selectedCount} 词</strong><span>AI 待审 {wordReviewCount} · 人工决定 {list.candidates.filter((item) => item.forceInclude || item.excluded).length}</span></div>
             <p>这里只决定词是否进入词单：查看原句后，手动保留或手动排除。再次点击已选决定可撤销，恢复自动结果。词卡内容在第 5 步编辑。</p>
+            <div className="study-bulk-decision" role="group" aria-label="批量手动筛词">
+              <strong>批量处理当前列表 · {filtered.length} 词</strong>
+              <div>
+                <button type="button" className="btn btn-sm" disabled={filtered.length === 0 || pendingFilterCount > 0 || workflowBusy} onClick={() => void decideFiltered('keep')}>当前列表全保留</button>
+                <button type="button" className="btn btn-sm btn-danger" disabled={filtered.length === 0 || pendingFilterCount > 0 || workflowBusy} onClick={() => void decideFiltered('exclude')}>当前列表全去除</button>
+                {bulkUndo && <button type="button" className="btn btn-sm" disabled={workflowBusy} onClick={() => void undoFiltered()}>撤销上次批量操作（{bulkUndo.length}）</button>}
+              </div>
+              <small>作用于右侧当前视图、搜索和等级条件匹配的全部词，包括未显示的分页；不影响被隐藏的词。</small>
+            </div>
             {pendingFilterCount > 0 && <div className="study-checkpoint-warning">
               还有 {pendingFilterCount}/{filterTotal} 项已保存的临时 AI 判断。{partialFilterApplied ? '当前只将已判断的保留／待审词纳入制卡；未处理词暂不制卡。' : '为保证能续跑，人工改词暂时锁定。'}
               <div className="study-workflow-controls"><button type="button" className="btn btn-sm" onClick={() => setStep('ai')}>返回 AI 续跑</button><button type="button" className="btn btn-sm" onClick={() => void discardFilterProgress()}>放弃检查点后人工调整</button></div>
@@ -528,7 +565,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             {wordReviewCount > 0 && <button type="button" className="btn btn-sm" onClick={() => { setCandidateView('review'); setPage(0); }}>查看 {wordReviewCount} 个待审词</button>}
             <div className="study-flow-actions">
               <button type="button" className="btn btn-sm" onClick={() => setStep('rules')}>返回规则</button>
-              <button type="button" className="btn btn-sm btn-primary" disabled={selectedCount === 0 || ((!partialFilterApplied && wordReviewCount > 0) || (pendingFilterCount > 0 && !partialFilterApplied)) || levelsDirty || stale} onClick={() => { setStep('meaning'); setCandidateView('included'); }}>继续生成 {selectedCount} 词释义</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={selectedCount === 0 || ((!partialFilterApplied && wordReviewCount > 0) || (pendingFilterCount > 0 && !partialFilterApplied)) || levelsDirty || stale} onClick={() => { setBulkUndo(null); setStep('meaning'); setCandidateView('included'); }}>继续生成 {selectedCount} 词释义</button>
             </div>
             {wordReviewCount > 0 && <small>{partialFilterApplied
               ? `当前有 ${wordReviewCount} 个已纳入的 AI 待审词；如需逐词人工决定，先放弃旧检查点。`
@@ -614,10 +651,6 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           <option value="count">按出现次数</option><option value="priority">阅读优先度（重复 / 跨页 / 词频）</option>
         </select>
         <span>当前显示 {filtered.length} / {list.candidates.length} 词</span>
-        {step === 'review' && <details className="study-batch-actions"><summary>批量人工调整</summary>
-          <button type="button" className="btn btn-sm" disabled={filtered.length === 0 || pendingFilterCount > 0 || workflowBusy} onClick={() => void decideFiltered('keep')}>将当前 {filtered.length} 词手动保留</button>
-          <button type="button" className="btn btn-sm" disabled={filtered.length === 0 || pendingFilterCount > 0 || workflowBusy} onClick={() => void decideFiltered('exclude')}>将当前 {filtered.length} 词手动排除</button>
-        </details>}
       </div>
       <div className="study-content">
         <div className="study-list" role="listbox" aria-label="学习候选词">

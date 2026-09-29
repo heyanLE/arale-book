@@ -2358,9 +2358,9 @@ button[aria-disabled='true'] {
 .study-view-tabs { display: flex; flex: 1 1 100%; gap: 4px; overflow-x: auto; }
 .study-view-tabs button { flex: none; padding: 5px 8px; border: 1px solid var(--border-soft); border-radius: 3px; color: var(--text-dim); background: var(--bg-content); cursor: pointer; }
 .study-view-tabs button.active { border-color: var(--accent); color: var(--text); background: var(--bg-active); font-weight: 650; }
-.study-batch-actions { flex: none; }
-.study-batch-actions summary { cursor: pointer; }
-.study-batch-actions button { margin: 5px 3px 0; }
+.study-bulk-decision { margin: 12px 0; padding: 11px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg-content); }
+.study-bulk-decision > div { display: flex; gap: 6px; flex-wrap: wrap; margin: 9px 0; }
+.study-bulk-decision small { display: block; color: var(--text-dim); line-height: 1.5; }
 .study-filters label { white-space: nowrap; color: var(--text-dim); }
 .study-filters select, .study-detail select, .study-phrase input { height: 26px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
 .study-filters span { color: var(--text-faint); margin-left: auto; }
