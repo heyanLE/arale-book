@@ -1,8 +1,9 @@
 /** 漫画学习候选审核：JLPT 筛选、出处核对、人工短语和 Anki 导出。 */
 import { useEffect, useMemo, useState } from 'react';
-import type { LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
-import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, directCandidates, estimatedLlmCalls } from '@core/study/harness';
+import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
+import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, defaultDirectOptions, directFilterStages, estimatedLlmCalls, normalizeDirectOptions, studyPriorityScore } from '@core/study/harness';
 import { api, call, useIpcEvent } from '../lib/api';
+import { DirectFilterPanel } from './DirectFilterPanel';
 
 type LevelFilter = 'all' | 'n3plus' | 'n2plus' | 'n1' | 'n2' | 'n3' | 'n4' | 'n5' | 'unknown';
 const PAGE_SIZE = 100;
@@ -31,6 +32,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [query, setQuery] = useState('');
   const [level, setLevel] = useState<LevelFilter>('all');
+  const [sortMode, setSortMode] = useState<'count' | 'priority'>('count');
   const [onlySelected, setOnlySelected] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
   const [page, setPage] = useState(0);
@@ -43,8 +45,12 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [translationSettings, setTranslationSettings] = useState<TranslationSettings | null>(null);
   const [levels, setLevels] = useState<number[]>([...DEFAULT_STUDY_LEVELS]);
   const [includeUnknown, setIncludeUnknown] = useState(false);
+  const [directOptions, setDirectOptions] = useState<DirectFilterOptions>(defaultDirectOptions);
+  const [excludedWordsText, setExcludedWordsText] = useState('');
   const [filterTier, setFilterTier] = useState<StudyFilterTier>('F1');
   const [cardTier, setCardTier] = useState<StudyCardTier>('R0');
+  const [filterConcurrency, setFilterConcurrency] = useState<1 | 2 | 3>(2);
+  const [cardConcurrency, setCardConcurrency] = useState<1 | 2 | 3>(2);
   const [filterProfileId, setFilterProfileId] = useState('');
   const [cardProfileId, setCardProfileId] = useState('');
   const [translationProfileId, setTranslationProfileId] = useState('');
@@ -67,10 +73,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       setLiveFilterDecisions(value?.workflow?.pendingFilterRun?.decisions ?? {});
       setLevels(value?.workflow?.levels ?? [...DEFAULT_STUDY_LEVELS]);
       setIncludeUnknown(value?.workflow?.includeUnknown ?? false);
+      setDirectOptions(normalizeDirectOptions(value?.workflow?.direct));
+      setExcludedWordsText((value?.workflow?.direct?.excludedWords ?? []).join('\n'));
       setLlmSettings(llm);
       setTranslationSettings(translation);
       setFilterTier(value?.workflow?.pendingFilterRun?.tier ?? value?.workflow?.filterRun?.tier ?? 'F1');
       setCardTier(value?.workflow?.pendingCardRun?.tier ?? value?.workflow?.cardRun?.tier ?? 'R0');
+      setFilterConcurrency(value?.workflow?.pendingFilterRun?.concurrency ?? value?.workflow?.filterRun?.concurrency ?? 2);
+      setCardConcurrency(value?.workflow?.pendingCardRun?.concurrency ?? value?.workflow?.cardRun?.concurrency ?? 2);
       const defaultLlm = llm?.activeProfileId ?? llm?.profiles[0]?.id ?? '';
       const filterSaved = value?.workflow?.pendingFilterRun?.profileId ?? value?.workflow?.filterRun?.profileId;
       const cardSaved = value?.workflow?.pendingCardRun?.profileId ?? value?.workflow?.cardRun?.profileId;
@@ -100,13 +110,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (list?.candidates ?? []).filter((item) =>
+    const matches = (list?.candidates ?? []).filter((item) =>
       (showExcluded || !item.excluded) &&
       (!onlySelected || item.selected) &&
       passesLevel(item, level) &&
       (!needle || item.expression.toLowerCase().includes(needle) || item.reading.includes(needle)),
     );
-  }, [list, query, level, onlySelected, showExcluded]);
+    if (sortMode === 'priority') matches.sort((a, b) => studyPriorityScore(b) - studyPriorityScore(a) || b.count - a.count || (a.expression < b.expression ? -1 : a.expression > b.expression ? 1 : 0));
+    return matches;
+  }, [list, query, level, onlySelected, showExcluded, sortMode]);
   const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const active = list?.candidates.find((item) => item.id === activeId) ?? filtered[0] ?? null;
   const selectedCount = list?.candidates.filter((item) => item.selected && !item.excluded).length ?? 0;
@@ -115,23 +127,30 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     : list?.candidates.filter((item) => item.selected && !item.excluded && (!item.reading || !item.meaning)).length ?? 0;
   const chosenOccurrence = active?.occurrences.find((one) => one.id === active.contextRef) ?? active?.occurrences[0];
   const stale = list !== null && list.segmentGeneratedAt !== segmentGeneratedAt;
-  const directPreview = directCandidates(list?.candidates ?? [], levels, includeUnknown);
+  const currentDirectOptions = normalizeDirectOptions({ ...directOptions, excludedWords: excludedWordsText.split(/[\n,，、]+/u) });
+  const directResult = directFilterStages(list?.candidates ?? [], levels, includeUnknown, currentDirectOptions);
+  const directPreview = directResult.selected;
+  const llmPreviewCount = directPreview.filter((item) => item.forceInclude !== true).length;
   const levelsDirty = JSON.stringify([...levels].sort()) !== JSON.stringify([...(list?.workflow?.levels ?? DEFAULT_STUDY_LEVELS)].sort()) ||
-    includeUnknown !== (list?.workflow?.includeUnknown ?? false);
+    includeUnknown !== (list?.workflow?.includeUnknown ?? false) ||
+    JSON.stringify(currentDirectOptions) !== JSON.stringify(normalizeDirectOptions(list?.workflow?.direct));
   const cardRun = list?.workflow?.cardRun;
   const pendingCardCount = list?.workflow?.pendingCardRun?.drafts.length ?? 0;
   const currentCard = cardRun?.drafts.find((item) => item.candidateId === active?.id);
   const reviewCount = cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
-  const filterCalls = estimatedLlmCalls(directPreview.length, FILTER_TIERS[filterTier]);
+  const filterCalls = estimatedLlmCalls(llmPreviewCount, FILTER_TIERS[filterTier]);
   const cardCalls = estimatedLlmCalls(selectedCount, CARD_TIERS[cardTier]);
   const pendingFilterCount = Object.keys(liveFilterDecisions).length;
+  const pendingFilter = list?.workflow?.pendingFilterRun;
+  const pendingFilterMismatch = pendingFilterCount > 0 &&
+    (pendingFilter?.tier !== filterTier || pendingFilter.profileId !== filterProfileId);
   const filterProgress = workflowProgress?.stage === 'filter' ? workflowProgress : null;
   const filterCounts = filterProgress?.filter ?? Object.values(liveFilterDecisions).reduce(
     (counts, row) => ({ ...counts, [row.decision]: counts[row.decision] + 1 }),
     { keep: 0, reject: 0, review: 0, llmCalls: 0, elapsedMs: 0, updates: [] as NonNullable<StudyRunProgress['filter']>['updates'] },
   );
   const filterDone = filterProgress?.done ?? pendingFilterCount;
-  const filterTotal = filterProgress?.total ?? directPreview.length;
+  const filterTotal = filterProgress?.total ?? llmPreviewCount;
   const filterElapsed = filterProgress?.filter?.elapsedMs ?? list?.workflow?.pendingFilterRun?.stats?.elapsedMs ?? 0;
   const remainingMinutes = filterDone >= 8 && filterDone < filterTotal
     ? Math.ceil((filterElapsed / filterDone) * (filterTotal - filterDone) / 60_000) : null;
@@ -207,8 +226,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
 
   async function applyDirectFilter(): Promise<void> {
     if (!await saveDraft()) return;
-    const next = await call('按 JLPT 直接筛选', () => api.study.directFilter(bookId, levels, includeUnknown));
-    if (next) { setList(next); setLevel('all'); setOnlySelected(true); setPage(0); setNotice(`已直接选出 ${next.candidates.filter((item) => item.selected).length} 个候选`); }
+    const next = await call('应用多层直接筛选', () => api.study.directFilter(bookId, levels, includeUnknown, currentDirectOptions));
+    if (next) {
+      setList(next); setDirectOptions(normalizeDirectOptions(next.workflow?.direct));
+      setExcludedWordsText((next.workflow?.direct?.excludedWords ?? []).join('\n'));
+      setLiveFilterDecisions({}); setWorkflowProgress(null);
+      setLevel('all'); setOnlySelected(true); setPage(0);
+      setNotice(`已直接选出 ${next.candidates.filter((item) => item.selected).length} 个候选；各层排除数可在上方查看。`);
+    }
   }
 
   async function runLlmFilter(): Promise<void> {
@@ -217,9 +242,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     const resume = prior?.tier === filterTier && prior.profileId === filterProfileId;
     const saved = resume ? prior.decisions : {};
     setLiveFilterDecisions(saved);
-    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'filter', done: Object.keys(saved).length, total: directPreview.length });
+    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'filter', done: Object.keys(saved).length, total: llmPreviewCount });
     setNotice('正在逐批筛选；下方会显示临时判断，全部完成后才正式更新选择。');
-    const next = await call('运行 LLM 筛选 Harness', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId }));
+    const next = await call('运行 LLM 筛选 Harness', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId, concurrency: filterConcurrency }));
     if (next) {
       setList(next);
       setLiveFilterDecisions({});
@@ -247,11 +272,22 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     setNotice(`已选用 ${next.candidates.filter((item) => item.selected && !item.excluded).length} 个已处理候选；其余暂不制卡，之后仍可续跑筛选。`);
   }
 
+  async function discardFilterProgress(): Promise<void> {
+    if (!window.confirm(`将放弃 ${pendingFilterCount} 个已完成的 LLM 判断，无法恢复。确认继续？`)) return;
+    const next = await call('放弃旧 LLM 检查点', () => api.study.clearFilterProgress(bookId));
+    if (!next) return;
+    setList(next);
+    setLiveFilterDecisions({});
+    setWorkflowProgress(null);
+    setNotice('旧检查点已清除，现在可应用新规则或选择其他模型。');
+  }
+
   async function makeCards(): Promise<void> {
     if (!translationProfileId || (cardTier !== 'R0' && !cardProfileId) || !await saveDraft()) return;
     setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'cards', done: 0, total: selectedCount });
     const next = await call('运行制卡 Harness', () => api.study.runCards(bookId, {
-      tier: cardTier, translationProfileId, ...(cardTier === 'R0' ? {} : { profileId: cardProfileId }),
+      tier: cardTier, translationProfileId, concurrency: cardConcurrency,
+      ...(cardTier === 'R0' ? {} : { profileId: cardProfileId }),
     }));
     if (next) { setList(next); setNotice(`已制作 ${next.workflow?.cardRun?.drafts.length ?? 0} 张草稿，存疑项请先审核`); }
     else {
@@ -308,15 +344,16 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           {!workflowBusy && pendingFilterCount > 0 && ` · 待续跑 ${pendingFilterCount}/${filterTotal}`}
         </summary>
         <div className="study-workflow-steps">
-          <section className="study-workflow-step">
-            <h3>1. 直接筛选</h3>
-            <p>分别选 JLPT 参考等级；等级冲突归入“未分级”。当前预计 {directPreview.length} 个。</p>
-            <div className="study-level-checks">
-              {([5, 4, 3, 2, 1] as const).map((value) => <label key={value}><input type="checkbox" checked={levels.includes(value)} onChange={(event) => setLevels((old) => event.target.checked ? [...old, value] : old.filter((one) => one !== value))} /> N{value}</label>)}
-              <label><input type="checkbox" checked={includeUnknown} onChange={(event) => setIncludeUnknown(event.target.checked)} /> 未分级 / 冲突</label>
-            </div>
-            <button type="button" className="btn btn-sm" disabled={workflowBusy || generating || stale} onClick={() => void applyDirectFilter()}>应用直接筛选</button>
-          </section>
+          <DirectFilterPanel
+            levels={levels} includeUnknown={includeUnknown} options={currentDirectOptions}
+            excludedWordsText={excludedWordsText} wordfreqSource={list.wordfreqSource ?? null}
+            stages={directResult.stages} selectedCount={directPreview.length}
+            dirty={levelsDirty} checkpointCount={pendingFilterCount}
+            disabled={workflowBusy || generating || stale || (levelsDirty && pendingFilterCount > 0)}
+            onLevels={setLevels} onIncludeUnknown={setIncludeUnknown}
+            onOptions={setDirectOptions} onExcludedWordsText={setExcludedWordsText}
+            onApply={() => void applyDirectFilter()}
+          />
           <section className="study-workflow-step">
             <h3>2. LLM 筛选（可选）</h3>
             <p>{FILTER_TIERS[filterTier].description} 正常约 {filterCalls} 次 LLM 调用；输出格式错误时自动缩小批次，次数会增加。</p>
@@ -327,12 +364,18 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               <select aria-label="筛选 LLM 配置" value={filterProfileId} onChange={(event) => setFilterProfileId(event.target.value)}>
                 <option value="">选择 LLM 配置</option>{llmSettings?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}
               </select>
-              <button type="button" className="btn btn-sm" disabled={!filterProfileId || directPreview.length === 0 || levelsDirty || workflowBusy || stale} onClick={() => void runLlmFilter()}>运行 LLM 筛选</button>
+              <select aria-label="筛选并发数" value={filterConcurrency} onChange={(event) => setFilterConcurrency(Number(event.target.value) as 1 | 2 | 3)}>
+                <option value={1}>并发 1 · 低负载</option><option value={2}>并发 2 · 推荐</option><option value={3}>并发 3 · 较快</option>
+              </select>
+              <button type="button" className="btn btn-sm" disabled={!filterProfileId || llmPreviewCount === 0 || levelsDirty || pendingFilterMismatch || workflowBusy || stale} onClick={() => void runLlmFilter()}>运行 LLM 筛选</button>
             </div>
             {levelsDirty && <small>勾选项已变更，请先应用直接筛选。</small>}
+            <small>默认并发 2；服务限流时改为 1。每批结果独立落盘。</small>
             {pendingFilterCount > 0 && <small>已有 {pendingFilterCount} 个临时判断；全部完成前不会改动正式选择。保持档位与配置可续跑。</small>}
+            {pendingFilterMismatch && <small>旧检查点使用 {pendingFilter?.tier} / {pendingFilter?.profileId}，改档或换模型前需先放弃检查点。</small>}
             {!workflowBusy && list.workflow?.pendingFilterRun?.lastError && <small>上次中断：{list.workflow.pendingFilterRun.lastError}</small>}
             {pendingFilterCount > 0 && !workflowBusy && <button type="button" className="btn btn-sm" onClick={() => void useCompletedFilter()}>只使用已完成的 {pendingFilterCount} 项</button>}
+            {pendingFilterCount > 0 && !workflowBusy && <button type="button" className="btn btn-sm" onClick={() => void discardFilterProgress()}>放弃旧检查点</button>}
             {list.workflow?.filterRun && <small>上次：{list.workflow.filterRun.tier} · {list.workflow.filterRun.stats?.llmCalls ?? '—'} 次 LLM 调用 · {Math.round((list.workflow.filterRun.stats?.elapsedMs ?? 0) / 1000)} 秒。结果可在下方逐词修改。</small>}
           </section>
           <section className="study-workflow-step">
@@ -348,9 +391,13 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               {cardTier !== 'R0' && <select aria-label="制卡 LLM 配置" value={cardProfileId} onChange={(event) => setCardProfileId(event.target.value)}>
                 <option value="">选择 LLM 配置</option>{llmSettings?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}
               </select>}
+              {cardTier !== 'R0' && <select aria-label="制卡并发数" value={cardConcurrency} onChange={(event) => setCardConcurrency(Number(event.target.value) as 1 | 2 | 3)}>
+                <option value={1}>并发 1 · 低负载</option><option value={2}>并发 2 · 推荐</option><option value={3}>并发 3 · 较快</option>
+              </select>}
               <button type="button" className="btn btn-sm" disabled={selectedCount === 0 || !translationProfileId || (cardTier !== 'R0' && !cardProfileId) || workflowBusy || stale} onClick={() => void makeCards()}>制作卡片草稿</button>
             </div>
             {cardRun && <small>上次：{cardRun.tier} · {cardRun.stats?.llmCalls ?? '—'} 次 LLM 调用 · {cardRun.stats?.translationCalls ?? '—'} 次翻译服务调用 · {Math.round((cardRun.stats?.elapsedMs ?? 0) / 1000)} 秒。</small>}
+            {cardTier !== 'R0' && <small>默认并发 2；R3 的第二轮仍按各批第一轮结果顺序执行。</small>}
             {list.workflow?.pendingCardRun && <small>上次已完成 {pendingCardCount} 张草稿；保持档位与配置可续跑。</small>}
           </section>
           <section className="study-workflow-step">
@@ -375,6 +422,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           <option value="n3plus">N3–N1</option><option value="n2plus">N2–N1</option><option value="all">全部等级</option>
           <option value="n1">仅 N1</option><option value="n2">仅 N2</option><option value="n3">仅 N3</option>
           <option value="n4">仅 N4</option><option value="n5">仅 N5</option><option value="unknown">等级未知</option>
+        </select>
+        <select aria-label="候选排序" value={sortMode} onChange={(event) => { setSortMode(event.target.value as 'count' | 'priority'); setPage(0); }}>
+          <option value="count">按出现次数</option><option value="priority">阅读优先度（重复 / 跨页 / 词频）</option>
         </select>
         <label><input type="checkbox" checked={onlySelected} onChange={(event) => { setOnlySelected(event.target.checked); setPage(0); }} /> 只看已选</label>
         <label><input type="checkbox" checked={showExcluded} onChange={(event) => { setShowExcluded(event.target.checked); setPage(0); }} /> 显示排除项</label>
@@ -409,7 +459,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
         <div className="study-detail">
           {active ? <>
             <h3>{active.expression} <small>{active.reading || '读音未知'}</small></h3>
-            <div className="study-detail-meta">{active.partOfSpeech} · {active.jlpt ? `参考 N${active.jlpt}` : 'JLPT 未知'} · 出现 {active.count} 次</div>
+            <div className="study-detail-meta">{active.partOfSpeech}{active.posDetail && ` / ${active.posDetail}`} · {active.jlpt ? `参考 N${active.jlpt}` : 'JLPT 未知'} · 出现 {active.count} 次
+              {active.pageCount !== undefined && ` / ${active.pageCount} 页`}
+              {typeof active.zipf === 'number' ? ` · 通用 Zipf ${active.zipf}` : list.wordfreqSource ? ' · 通用词频未收录' : ''}
+            </div>
             {active.jlptConflict && <p>词表中有多个等级记录，请人工核对。</p>}
             <label>词语 / 辞书形
               <input value={draft.expression} onChange={(event) => setDraft((previous) => ({ ...previous, expression: event.target.value }))} />
@@ -444,6 +497,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               <small>导出的配图会按这一出处的 OCR 文字矩形从原页裁取。</small>
             </div>}
             <label className="study-exclude"><input type="checkbox" checked={active.excluded} onChange={(event) => void patchOne(active.id, { excluded: event.target.checked, selected: false })} /> 排除误识别或无用词</label>
+            <label className="study-exclude"><input type="checkbox" checked={active.forceInclude === true} onChange={(event) => void patchOne(active.id, { forceInclude: event.target.checked })} /> 手动保留：跳过自动筛选（含 LLM）</label>
             {chosenOccurrence && <div className="study-phrase">
               <strong>从这一文字块添加短语</strong>
               <input value={phrase} onChange={(event) => setPhrase(event.target.value)} placeholder="输入原文中的连续短语" />

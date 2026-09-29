@@ -6,6 +6,7 @@ export interface MorphToken {
   lemma: string;
   reading: string;
   pos: string;
+  posDetail?: string;
   known: boolean;
 }
 
@@ -19,6 +20,7 @@ export function buildStudyCandidates(
   jlpt: JlptIndex,
 ): StudyCandidate[] {
   const byId = new Map<string, StudyCandidate>();
+  const pagesById = new Map<string, Set<string>>();
   units.forEach((unit, unitIndex) => {
     let cursor = 0;
     for (const token of parsed[unitIndex] ?? []) {
@@ -35,17 +37,28 @@ export function buildStudyCandidates(
       const reading = match.reading || (expression === token.surface ? surfaceReading : '');
       const id = studyKey(expression, reading);
       const occurrence: StudyOccurrence = { id: `${unit.ref}@${start}`, ref: unit.ref, label: unit.label, text: unit.text, start, end };
+      const blockMarker = unit.ref.lastIndexOf('#');
+      const pageRef = blockMarker >= 0 ? unit.ref.slice(0, blockMarker) : unit.ref;
+      let pages = pagesById.get(id);
+      if (!pages) { pages = new Set<string>(); pagesById.set(id, pages); }
+      pages.add(pageRef);
       let candidate = byId.get(id);
       if (!candidate) {
         candidate = {
           id, expression, reading, partOfSpeech: token.pos,
+          posDetail: token.posDetail,
+          properName: token.posDetail === '固有名詞',
+          tokenizerKnown: token.known,
           jlpt: match.level, jlptConflict: match.conflict,
-          count: 0, occurrences: [], meaning: '', selected: false,
+          count: 0, pageCount: 0, occurrences: [], meaning: '', selected: false,
           excluded: false, contextRef: occurrence.id, exportedAt: null,
         };
         byId.set(id, candidate);
       }
       candidate.count += 1;
+      candidate.pageCount = pages.size;
+      candidate.properName = candidate.properName === true && token.posDetail === '固有名詞';
+      candidate.tokenizerKnown = candidate.tokenizerKnown === true || token.known;
       if (candidate.occurrences.length < MAX_OCCURRENCES) candidate.occurrences.push(occurrence);
     }
   });

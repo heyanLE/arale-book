@@ -36,6 +36,7 @@ import type {
   SegmentToken,
   StudyCandidate,
   StudyCandidatePatch,
+  DirectFilterOptions,
   StudyCardDraft,
   StudyCardRunRequest,
   StudyExportResult,
@@ -385,13 +386,14 @@ export function registerIpc(services: Services): void {
   handle(IPC.studyAddPhrase, (bookId: string, ref: string, expression: string, reading: string): StudyList =>
     study.addPhrase(bookId, ref, expression, reading),
   );
-  handle(IPC.studyDirectFilter, (bookId: string, levels: number[], includeUnknown: boolean): StudyList =>
-    study.directFilter(bookId, levels, includeUnknown),
+  handle(IPC.studyDirectFilter, (bookId: string, levels: number[], includeUnknown: boolean, options?: Partial<DirectFilterOptions>): StudyList =>
+    study.directFilter(bookId, levels, includeUnknown, options),
   );
   handle(IPC.studyRunFilter, (bookId: string, request: StudyFilterRunRequest): Promise<StudyList> =>
     study.runFilter(bookId, request),
   );
   handle(IPC.studyApplyCompletedFilter, (bookId: string): StudyList => study.applyCompletedFilter(bookId));
+  handle(IPC.studyClearFilterProgress, (bookId: string): StudyList => study.clearFilterProgress(bookId));
   handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): Promise<StudyList> =>
     study.runCards(bookId, request),
   );

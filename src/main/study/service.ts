@@ -3,14 +3,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import type { BookRecord, BookSegments, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardRunRequest, StudyFilterRunRequest, StudyList, StudyRunProgress } from '../../shared/types';
+import type { BookRecord, BookSegments, DirectFilterOptions, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardRunRequest, StudyFilterRunRequest, StudyList, StudyRunProgress } from '../../shared/types';
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
-import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
+import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeDirectOptions, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
+import { harnessSubmissionTool } from '../../core/study/harness-tool';
 import { createJlptIndex, lookupJlpt, normalizeReading, studyKey, type JlptRow } from '../../core/study/jlpt';
 import { bookDir } from '../paths';
 import { buildAnkiPackage } from './apkg';
 import { cropStudyOccurrence, type StudyCrop } from './crop';
+import { normalizeHarnessConcurrency, runConcurrentBatches } from './concurrency';
+import { wordfreqSource, zipfForCandidate } from './wordfreq';
 import type { LlmService } from '../llm/service';
 import type { TranslationService } from '../translation/service';
 import { tokenizeJapanese } from './tokenizer';
@@ -40,7 +43,16 @@ export class StudyService {
 
   read(bookId: string): StudyList | null {
     const value = readJson<StudyList | null>(this.fileFor(bookId), null);
-    return value?.bookId === bookId && Array.isArray(value.candidates) ? value : null;
+    if (value?.bookId !== bookId || !Array.isArray(value.candidates)) return null;
+    const source = wordfreqSource();
+    if (source && value.wordfreqSource !== source) {
+      for (const item of value.candidates) item.zipf = zipfForCandidate(item);
+    }
+    value.wordfreqSource = source;
+    for (const item of value.candidates) {
+      if (item.partOfSpeech === '短语' && item.forceInclude === undefined) item.forceInclude = true;
+    }
+    return value;
   }
 
   async generate(bookId: string): Promise<StudyList> {
@@ -67,6 +79,8 @@ export class StudyService {
         }
       }
       const candidates = buildStudyCandidates(segments.units, parsed, index);
+      const frequencySource = wordfreqSource();
+      if (frequencySource) for (const item of candidates) item.zipf = zipfForCandidate(item);
       const previousList = this.read(bookId);
       const previous = new Map(previousList?.candidates.map((item) => [item.id, item]) ?? []);
       for (let index = 0; index < candidates.length; index += 1) {
@@ -80,6 +94,7 @@ export class StudyService {
           item.selected = old.selected;
           item.excluded = old.excluded;
           item.exportedAt = old.exportedAt;
+          item.forceInclude = old.forceInclude;
           if (item.occurrences.some((one) => one.id === old.contextRef)) item.contextRef = old.contextRef;
         }
         if ((index + 1) % 100 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -89,7 +104,7 @@ export class StudyService {
       }
       const list: StudyList = {
         bookId, generatedAt: Date.now(), segmentGeneratedAt: segments.generatedAt,
-        jlptSource: source, candidates,
+        jlptSource: source, wordfreqSource: frequencySource, candidates,
         workflow: { ...(previousList?.workflow ?? defaultStudyWorkflow()), filterRun: undefined, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined },
       };
       writeJsonAtomic(this.fileFor(bookId), list);
@@ -107,12 +122,17 @@ export class StudyService {
     if (!item) throw new Error('候选词不存在；可能已重新生成');
     if (typeof patch.selected === 'boolean') item.selected = patch.selected;
     if (typeof patch.excluded === 'boolean') item.excluded = patch.excluded;
+    if (typeof patch.forceInclude === 'boolean') {
+      item.forceInclude = patch.forceInclude;
+      if (patch.forceInclude && !item.excluded) item.selected = true;
+    }
     if (typeof patch.expression === 'string' && patch.expression.trim().length > 0) item.expression = patch.expression.trim().slice(0, 100);
     if (typeof patch.reading === 'string') item.reading = normalizeReading(patch.reading).slice(0, 100);
     if (patch.expression !== undefined || patch.reading !== undefined) {
       const match = lookupJlpt(loadJlpt().index, item.expression, item.reading);
       item.jlpt = match.level;
       item.jlptConflict = match.conflict;
+      item.zipf = zipfForCandidate(item);
     }
     if (typeof patch.meaning === 'string') item.meaning = patch.meaning.slice(0, 2000);
     if (typeof patch.contextRef === 'string') {
@@ -153,6 +173,7 @@ export class StudyService {
     if (existing) {
       existing.selected = true;
       existing.excluded = false;
+      existing.forceInclude = true;
       if (!existing.occurrences.some((one) => one.id === occurrence.id)) existing.occurrences.push(occurrence);
       existing.contextRef = occurrence.id;
     } else {
@@ -160,22 +181,37 @@ export class StudyService {
         id, expression: phrase, reading: normalizeReading(reading), partOfSpeech: '短语',
         jlpt: null, jlptConflict: false, count: 1,
         occurrences: [occurrence],
-        meaning: '', selected: true, excluded: false, contextRef: occurrence.id, exportedAt: null,
+        meaning: '', selected: true, excluded: false, forceInclude: true, contextRef: occurrence.id, exportedAt: null,
       });
     }
+    const phraseCandidate = list.candidates.find((item) => item.id === id);
+    if (phraseCandidate) phraseCandidate.zipf = zipfForCandidate(phraseCandidate);
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
   }
 
   /** 第一步：按五个 JLPT 勾选项和“未分级”直接筛选，结果持久化为候选选择。 */
-  directFilter(bookId: string, levels: number[], includeUnknown: boolean): StudyList {
+  directFilter(bookId: string, levels: number[], includeUnknown: boolean, options?: Partial<DirectFilterOptions>): StudyList {
     if (this.running.has(bookId)) throw new Error('正在运行学习任务，请稍后筛选');
     const list = this.read(bookId);
     if (!list) throw new Error('请先生成学习候选');
     const normalized = normalizeLevels(levels);
-    const ids = new Set(directCandidates(list.candidates, normalized, includeUnknown).map((item) => item.id));
+    const direct = normalizeDirectOptions(options ?? list.workflow?.direct);
+    if (direct.minZipf !== null && !list.wordfreqSource) throw new Error('缺少随包的日语通用词频数据，无法启用 Zipf 筛选');
+    const previous = list.workflow;
+    const sameRules = previous !== undefined &&
+      JSON.stringify(normalizeLevels(previous.levels)) === JSON.stringify(normalized) &&
+      previous.includeUnknown === includeUnknown &&
+      JSON.stringify(normalizeDirectOptions(previous.direct)) === JSON.stringify(direct);
+    if (!sameRules && Object.keys(previous?.pendingFilterRun?.decisions ?? {}).length > 0) {
+      throw new Error('直接筛选规则已变化；先续跑或明确放弃旧 LLM 检查点，避免丢失已处理结果');
+    }
+    const ids = new Set(directCandidates(list.candidates, normalized, includeUnknown, direct).map((item) => item.id));
     for (const item of list.candidates) item.selected = ids.has(item.id);
-    list.workflow = { levels: normalized, includeUnknown };
+    list.workflow = {
+      levels: normalized, includeUnknown, direct,
+      ...(sameRules && previous?.pendingFilterRun ? { pendingFilterRun: previous.pendingFilterRun } : {}),
+    };
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
   }
@@ -189,13 +225,18 @@ export class StudyService {
     const list = this.read(bookId);
     if (!list) throw new Error('请先生成学习候选');
     const workflow = list.workflow ?? defaultStudyWorkflow();
-    const source = directCandidates(list.candidates, workflow.levels, workflow.includeUnknown);
-    if (source.length === 0) throw new Error('直接筛选没有候选词，请调整 JLPT 勾选项');
+    const source = directCandidates(list.candidates, workflow.levels, workflow.includeUnknown, workflow.direct)
+      .filter((item) => item.forceInclude !== true);
+    if (source.length === 0) throw new Error('没有需要 LLM 筛选的候选词；手动保留项不送模型');
     const sourceHash = createHash('sha256').update(JSON.stringify(source.map((item) => ({
       id: item.id, expression: item.expression, reading: item.reading, contextRef: item.contextRef, occurrences: item.occurrences,
     })))).digest('hex');
+    const concurrency = normalizeHarnessConcurrency(request.concurrency);
     const prior = workflow.pendingFilterRun;
     const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash;
+    if (!resumed && Object.keys(prior?.decisions ?? {}).length > 0) {
+      throw new Error('已有不同档位、模型或规则的 LLM 检查点；先续跑原任务或明确放弃旧检查点');
+    }
     const decisions: NonNullable<NonNullable<StudyList['workflow']>['filterRun']>['decisions'] =
       resumed ? { ...prior.decisions } : {};
     const stats = resumed && prior.stats ? { ...prior.stats } : { llmCalls: 0, translationCalls: 0, elapsedMs: 0 };
@@ -213,15 +254,16 @@ export class StudyService {
     };
     try {
       const batchSize = FILTER_TIERS[request.tier].batchSize;
+      const filterTool = harnessSubmissionTool('filter');
       emitFilterProgress([], resumed ? '从已保存的批次续跑' : '正在筛选');
       const evaluateBatch = async (batch: StudyCandidate[]): Promise<FilterRow[]> => {
-        const first = await llm.complete({ profileId: request.profileId, ...filterHarnessPrompt(request.tier, batch), temperature: 0.1, signal: job.controller.signal });
+        const first = await llm.complete({ profileId: request.profileId, ...filterHarnessPrompt(request.tier, batch), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
         stats.llmCalls += 1;
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         if (!first.ok) throw batchFailure('LLM 筛选失败', first.error, batch.length);
         const firstRows = parseFilterResponse(first.text, batch.map((item) => item.id));
         if (request.tier !== 'F3') return firstRows;
-        const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), temperature: 0.1, signal: job.controller.signal });
+        const second = await llm.complete({ profileId: request.profileId, ...verifyFilterPrompt(batch, firstRows), tool: filterTool, temperature: 0.1, signal: job.controller.signal });
         stats.llmCalls += 1;
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         if (!second.ok) throw batchFailure('LLM 复核失败', second.error, batch.length);
@@ -244,11 +286,12 @@ export class StudyService {
           return;
         }
         for (const row of rows) decisions[row.id] = { decision: row.decision, reason: row.reason };
-        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, concurrency, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
         writeJsonAtomic(this.fileFor(bookId), list);
         emitFilterProgress(rows);
         await new Promise<void>((resolve) => setImmediate(resolve));
       };
+      const pendingBatches: StudyCandidate[][] = [];
       for (let offset = 0; offset < source.length; offset += batchSize) {
         if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
         const batch = source.slice(offset, offset + batchSize).filter((item) => !decisions[item.id]);
@@ -256,18 +299,19 @@ export class StudyService {
           emitFilterProgress([], '复用已完成结果');
           continue;
         }
-        await processBatch(batch);
+        pendingBatches.push(batch);
       }
+      await runConcurrentBatches(pendingBatches, concurrency, processBatch, () => job.controller.abort());
       if (job.cancelled) throw new Error('已取消 LLM 筛选，原选择未更改');
       for (const item of list.candidates) {
         if (decisions[item.id]) item.selected = decisions[item.id]?.decision !== 'reject';
       }
-      list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+      list.workflow = { ...workflow, filterRun: { tier: request.tier, profileId: request.profileId, concurrency, completedAt: Date.now(), decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } }, pendingFilterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
       writeJsonAtomic(this.fileFor(bookId), list);
       return list;
     } catch (error) {
       list.workflow = { ...workflow, pendingFilterRun: {
-        tier: request.tier, profileId: request.profileId, sourceHash, decisions,
+        tier: request.tier, profileId: request.profileId, concurrency, sourceHash, decisions,
         stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
         lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
       } };
@@ -284,10 +328,19 @@ export class StudyService {
     const workflow = list?.workflow;
     const decisions = workflow?.pendingFilterRun?.decisions;
     if (!list || !workflow || !decisions || Object.keys(decisions).length === 0) throw new Error('没有可使用的筛选检查点');
-    for (const item of directCandidates(list.candidates, workflow.levels, workflow.includeUnknown)) {
-      item.selected = !!decisions[item.id] && decisions[item.id]?.decision !== 'reject';
+    for (const item of directCandidates(list.candidates, workflow.levels, workflow.includeUnknown, workflow.direct)) {
+      item.selected = item.forceInclude === true || (!!decisions[item.id] && decisions[item.id]?.decision !== 'reject');
     }
     list.workflow = { ...workflow, filterRun: undefined, cardRun: undefined, pendingCardRun: undefined };
+    writeJsonAtomic(this.fileFor(bookId), list);
+    return list;
+  }
+
+  clearFilterProgress(bookId: string): StudyList {
+    if (this.running.has(bookId)) throw new Error('LLM 筛选仍在运行，请先取消');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成学习候选');
+    if (list.workflow) list.workflow.pendingFilterRun = undefined;
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
   }
@@ -305,6 +358,7 @@ export class StudyService {
     const selected = selectedCandidates(list);
     if (selected.length === 0) throw new Error('请先在筛选步骤选择候选词');
     const sourceHash = selectedHash(list);
+    const concurrency = request.tier === 'R0' ? 1 : normalizeHarnessConcurrency(request.concurrency);
     const prior = list.workflow?.pendingCardRun;
     const resumed = prior?.tier === request.tier &&
       prior.translationProfileId === request.translationProfileId &&
@@ -317,6 +371,8 @@ export class StudyService {
     this.running.set(bookId, job);
     try {
       const translated = new Map<string, { candidate: StudyCandidate; translatedWord: string; translatedSentence: string }>();
+      const cardTool = harnessSubmissionTool('card');
+      const verifyTool = harnessSubmissionTool('verify');
       const translateItem = async (item: StudyCandidate): Promise<{ candidate: StudyCandidate; translatedWord: string; translatedSentence: string }> => {
         const cached = translated.get(item.id);
         if (cached) return cached;
@@ -327,7 +383,7 @@ export class StudyService {
           translation.translate({ text: occurrence.text, profileId: request.translationProfileId, targetLanguage: 'zh-Hans' }),
         ]);
         stats.translationCalls += 2;
-        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         if (!word.ok || !sentence.ok) throw new Error(`「${item.expression}」翻译失败：${word.error ?? sentence.error ?? '未知错误'}`);
         const entry = { candidate: item, translatedWord: word.text, translatedSentence: sentence.text };
         translated.set(item.id, entry);
@@ -339,9 +395,9 @@ export class StudyService {
           usage: '', nuance: '', needsReview: false, reviewReason: '',
         }));
         if (!llm) throw new Error('LLM 制卡服务未就绪');
-        const result = await llm.complete({ profileId: request.profileId, ...cardHarnessPrompt(request.tier, entries), temperature: 0.1, signal: job.controller.signal });
+        const result = await llm.complete({ profileId: request.profileId, ...cardHarnessPrompt(request.tier, entries), tool: cardTool, temperature: 0.1, signal: job.controller.signal });
         stats.llmCalls += 1;
-        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         if (!result.ok) throw batchFailure('LLM 制卡失败', result.error, entries.length);
         const ids = entries.map(({ candidate }) => candidate.id);
         const generated = parseCardBatchResponse(result.text, ids);
@@ -354,9 +410,9 @@ export class StudyService {
           return [draft.candidateId, { ...draft, needsReview: true, reviewReason: reason }] as const;
         }));
         if (request.tier !== 'R3') return ids.map((id) => byId.get(id)!);
-        const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(entries.map(({ candidate }) => ({ candidate, draft: byId.get(candidate.id)! }))), temperature: 0.1, signal: job.controller.signal });
+        const checked = await llm.complete({ profileId: request.profileId, ...verifyCardPrompt(entries.map(({ candidate }) => ({ candidate, draft: byId.get(candidate.id)! }))), tool: verifyTool, temperature: 0.1, signal: job.controller.signal });
         stats.llmCalls += 1;
-        if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+        if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         if (!checked.ok) throw batchFailure('LLM 复核失败', checked.error, entries.length);
         const verdicts = new Map(parseVerifyBatchResponse(checked.text, ids).map((verdict) => [verdict.id, verdict]));
         return ids.map((id) => {
@@ -366,6 +422,7 @@ export class StudyService {
         });
       };
       const processBatch = async (batch: StudyCandidate[]): Promise<void> => {
+        if (job.cancelled || job.controller.signal.aborted) throw new Error('已取消制卡，旧草稿保持不变');
         const entries = [];
         for (const item of batch) entries.push(await translateItem(item));
         let produced: StudyCardDraft[];
@@ -380,7 +437,7 @@ export class StudyService {
         drafts.push(...produced);
         list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), pendingCardRun: {
           tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
-          translationProfileId: request.translationProfileId, sourceHash, drafts,
+          translationProfileId: request.translationProfileId, concurrency, sourceHash, drafts,
           stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
         } };
         writeJsonAtomic(this.fileFor(bookId), list);
@@ -388,6 +445,7 @@ export class StudyService {
         await new Promise<void>((resolve) => setImmediate(resolve));
       };
       const batchSize = CARD_TIERS[request.tier].batchSize;
+      const pendingBatches: StudyCandidate[][] = [];
       for (let offset = 0; offset < selected.length; offset += batchSize) {
         if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
         const batch = selected.slice(offset, offset + batchSize).filter((item) => !drafts.some((draft) => draft.candidateId === item.id));
@@ -395,12 +453,15 @@ export class StudyService {
           this.options.workflowProgress?.({ bookId, stage: 'cards', done: Math.min(offset + batchSize, selected.length), total: selected.length, message: '复用已完成草稿' });
           continue;
         }
-        await processBatch(batch);
+        pendingBatches.push(batch);
       }
+      await runConcurrentBatches(pendingBatches, concurrency, processBatch, () => job.controller.abort());
       if (job.cancelled) throw new Error('已取消制卡，旧草稿保持不变');
+      const order = new Map(selected.map((item, index) => [item.id, index]));
+      drafts.sort((a, b) => (order.get(a.candidateId) ?? 0) - (order.get(b.candidateId) ?? 0));
       list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), cardRun: {
         tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
-        translationProfileId: request.translationProfileId, completedAt: Date.now(), sourceHash, drafts,
+        translationProfileId: request.translationProfileId, concurrency, completedAt: Date.now(), sourceHash, drafts,
         stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
       }, pendingCardRun: undefined };
       writeJsonAtomic(this.fileFor(bookId), list);
@@ -408,7 +469,7 @@ export class StudyService {
     } catch (error) {
       list.workflow = { ...(list.workflow ?? defaultStudyWorkflow()), pendingCardRun: {
         tier: request.tier, profileId: request.tier === 'R0' ? null : request.profileId ?? null,
-        translationProfileId: request.translationProfileId, sourceHash, drafts,
+        translationProfileId: request.translationProfileId, concurrency, sourceHash, drafts,
         stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
         lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
       } };

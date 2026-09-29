@@ -8,6 +8,7 @@ import type { BookRecord, BookSegments } from '../src/shared/types';
 import { ankiTsv, buildStudyCandidates } from '../src/core/study/candidates';
 import { createJlptIndex, lookupJlpt } from '../src/core/study/jlpt';
 import { StudyService, chooseMeaning } from '../src/main/study/service';
+import { tokenizeJapanese } from '../src/main/study/tokenizer';
 import { setUserDataRootForTesting } from '../src/main/paths';
 
 test('JLPT 按表记和读音匹配；动词变形可回退到唯一辞书形读音', () => {
@@ -28,6 +29,20 @@ test('候选保留原文偏移、合并相同词并区分异读', () => {
   assert.equal(candidates[0]?.count, 2);
   assert.equal(candidates[0]?.reading, 'たべる');
   assert.deepEqual(candidates[0]?.occurrences.map((one) => [one.start, one.end]), [[0, 2], [4, 6]]);
+});
+
+test('Kuromoji 细分词性与跨页次数进入候选，专名和数词可分辨', async () => {
+  const parsed = await tokenizeJapanese('太郎は2025年にいる。');
+  assert.equal(parsed.find((token) => token.surface === '太郎')?.posDetail, '固有名詞');
+  assert.equal(parsed.find((token) => token.surface === '2025')?.posDetail, '数');
+  const first = parsed.find((token) => token.surface === '太郎')!;
+  const candidates = buildStudyCandidates([
+    { ref: 'page:a#0', label: '第 1 页', text: '太郎', tokens: [] },
+    { ref: 'page:b#0', label: '第 2 页', text: '太郎', tokens: [] },
+  ], [[first], [first]], createJlptIndex([]));
+  assert.equal(candidates[0]?.pageCount, 2);
+  assert.equal(candidates[0]?.properName, true);
+  assert.equal(candidates[0]?.tokenizerKnown, true);
 });
 
 test('Anki TSV 转义 OCR 文本并按选择导出', () => {

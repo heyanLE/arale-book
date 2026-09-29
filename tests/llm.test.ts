@@ -16,6 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { LlmService, renderPrompt } from '../src/main/llm/service';
+import { HARNESS_TOOL_NAME, harnessSubmissionTool } from '../src/core/study/harness-tool';
 import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type LlmProfile } from '../src/shared/types';
 
 const tempDirs: string[] = [];
@@ -274,6 +275,65 @@ test('complete: Harness 使用指定配置、系统提示和低温度，密钥�
   assert.equal(body.temperature, 0.1);
   assert.deepEqual(body.messages.map((item) => item.role), ['system', 'user']);
   assert.equal(body.messages[1]?.content, '猫がいる');
+});
+
+test('complete: 强制调用提交工具，读取 tool_calls 的参数作为 Harness 结果', async () => {
+  const args = JSON.stringify({ items: [{ id: '猫', decision: 'keep', reason: '常见词' }] });
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: HARNESS_TOOL_NAME, arguments: args } }] } }] }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const result = await service.complete({ system: '筛选', user: '猫', tool: harnessSubmissionTool('filter') });
+  assert.equal(result.ok, true);
+  assert.equal(result.text, args);
+  const body = JSON.parse(String(captured.calls[0]?.init?.body)) as Record<string, any>;
+  assert.equal(body.tools[0].function.name, HARNESS_TOOL_NAME);
+  assert.equal(body.tools[0].function.strict, true);
+  assert.equal(body.parallel_tool_calls, false);
+  assert.deepEqual(body.tool_choice, { type: 'function', function: { name: HARNESS_TOOL_NAME } });
+});
+
+test('complete: 兼容端点拒绝工具时仅首次回退纯 JSON，后续沿用回退模式', async () => {
+  const captured = captureFetch(async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return body['tools']
+      ? new Response('{"error":"tool_choice unsupported"}', { status: 400 })
+      : jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }] });
+  });
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const tool = harnessSubmissionTool('filter');
+  assert.equal((await service.complete({ user: 'a', tool })).text, '{"items":[]}');
+  assert.equal((await service.complete({ user: 'b', tool })).text, '{"items":[]}');
+  assert.equal(captured.calls.length, 3);
+  assert.ok(JSON.parse(String(captured.calls[0]?.init?.body)).tools);
+  assert.equal(JSON.parse(String(captured.calls[1]?.init?.body)).tools, undefined);
+  assert.equal(JSON.parse(String(captured.calls[2]?.init?.body)).tools, undefined);
+});
+
+test('complete: 其它工具名不会被当作制卡结果', async () => {
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { tool_calls: [{ type: 'function', function: { name: 'delete_files', arguments: '{"items":[]}' } }] } }] }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const result = await service.complete({ user: 'a', tool: harnessSubmissionTool('filter') });
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /未知工具/);
+});
+
+test('complete: 多任务共用服务时全局最多四个在途请求', async () => {
+  let active = 0;
+  let peak = 0;
+  const captured = captureFetch(async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    active -= 1;
+    return jsonResponse({ choices: [{ message: { content: 'ok' } }] });
+  });
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'http://127.0.0.1:8080/v1' });
+  const results = await Promise.all(Array.from({ length: 8 }, () => service.complete({ user: 'test' })));
+  assert.ok(results.every((item) => item.ok));
+  assert.equal(peak, 4);
 });
 
 test('complete: 取消信号会终止进行中的 Harness 请求', async () => {

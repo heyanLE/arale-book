@@ -1,6 +1,6 @@
 /** 可复用的制卡 Harness：明确输入输出，模型不能自行决定原文和来源。 */
 import type {
-  StudyCandidate, StudyCardDraft, StudyCardTier, StudyFilterDecision,
+  DirectFilterOptions, StudyCandidate, StudyCardDraft, StudyCardTier, StudyFilterDecision,
   StudyFilterTier, StudyOccurrence, StudyWorkflow,
 } from '../../shared/types';
 
@@ -31,7 +31,34 @@ export function estimatedLlmCalls(count: number, tier: { batchSize: number; pass
 }
 
 export function defaultStudyWorkflow(): StudyWorkflow {
-  return { levels: [...DEFAULT_STUDY_LEVELS], includeUnknown: false };
+  return { levels: [...DEFAULT_STUDY_LEVELS], includeUnknown: false, direct: defaultDirectOptions() };
+}
+
+/** 新层默认不排除任何候选；旧书与已有 LLM 检查点仍按原规则运行。 */
+export function defaultDirectOptions(): DirectFilterOptions {
+  return {
+    partOfSpeech: 'all', excludeProperNames: false, excludeNumbers: false,
+    excludeTokenizerUnknown: false, excludedWords: [],
+    minOccurrences: null, minZipf: null, missingZipf: 'keep',
+  };
+}
+
+export function normalizeDirectOptions(raw?: Partial<DirectFilterOptions> | null): DirectFilterOptions {
+  const defaults = defaultDirectOptions();
+  return {
+    partOfSpeech: raw?.partOfSpeech === 'core' ? 'core' : defaults.partOfSpeech,
+    excludeProperNames: raw?.excludeProperNames === true,
+    excludeNumbers: raw?.excludeNumbers === true,
+    excludeTokenizerUnknown: raw?.excludeTokenizerUnknown === true,
+    excludedWords: [...new Set((Array.isArray(raw?.excludedWords) ? raw.excludedWords : [])
+      .filter((word): word is string => typeof word === 'string')
+      .map((word) => word.trim().normalize('NFKC')).filter(Boolean))].slice(0, 200),
+    minOccurrences: typeof raw?.minOccurrences === 'number' && Number.isInteger(raw.minOccurrences) && raw.minOccurrences >= 2 && raw.minOccurrences <= 20
+      ? raw.minOccurrences : null,
+    minZipf: typeof raw?.minZipf === 'number' && Number.isFinite(raw.minZipf) && raw.minZipf >= 0 && raw.minZipf <= 8
+      ? Math.round(raw.minZipf * 10) / 10 : null,
+    missingZipf: raw?.missingZipf === 'exclude' ? 'exclude' : defaults.missingZipf,
+  };
 }
 
 export function normalizeLevels(levels: readonly number[]): StudyWorkflow['levels'] {
@@ -44,10 +71,57 @@ export function directCandidates(
   candidates: readonly StudyCandidate[],
   levels: readonly number[],
   includeUnknown: boolean,
+  options?: Partial<DirectFilterOptions> | null,
 ): StudyCandidate[] {
+  return directFilterStages(candidates, levels, includeUnknown, options).selected;
+}
+
+export interface DirectFilterStage { name: string; remaining: number; removed: number; }
+
+/** 阶段计数与正式筛选共用同一实现，UI 不自己猜排除原因。 */
+export function directFilterStages(
+  candidates: readonly StudyCandidate[],
+  levels: readonly number[],
+  includeUnknown: boolean,
+  options?: Partial<DirectFilterOptions> | null,
+): { selected: StudyCandidate[]; stages: DirectFilterStage[] } {
   const chosen = new Set(normalizeLevels(levels));
-  return candidates.filter((item) => !item.excluded &&
-    (item.jlpt === null || item.jlptConflict ? includeUnknown : chosen.has(item.jlpt)));
+  const rules = normalizeDirectOptions(options);
+  const stages: DirectFilterStage[] = [];
+  let current = candidates.filter((item) => !item.excluded);
+  stages.push({ name: '人工排除', remaining: current.length, removed: candidates.length - current.length });
+  const apply = (name: string, keep: (item: StudyCandidate) => boolean): void => {
+    const before = current.length;
+    current = current.filter((item) => item.forceInclude === true || keep(item));
+    stages.push({ name, remaining: current.length, removed: before - current.length });
+  };
+  apply('JLPT 参考等级', (item) => item.jlpt === null || item.jlptConflict ? includeUnknown : chosen.has(item.jlpt));
+  const blockedWords = new Set(rules.excludedWords);
+  const corePos = new Set(['名詞', '動詞', '形容詞', '副詞']);
+  apply('词条类型与噪声', (item) => {
+    if (blockedWords.has(item.expression.trim().normalize('NFKC'))) return false;
+    if (rules.partOfSpeech === 'core' && !corePos.has(item.partOfSpeech)) return false;
+    if (rules.excludeProperNames && item.properName === true) return false;
+    if (rules.excludeNumbers && (item.posDetail === '数' || /^[0-9０-９一二三四五六七八九十百千]+$/u.test(item.expression))) return false;
+    if (rules.excludeTokenizerUnknown && item.tokenizerKnown === false) return false;
+    return true;
+  });
+  apply('作品内重复', (item) => rules.minOccurrences === null || item.count >= rules.minOccurrences);
+  apply('通用词频 Zipf', (item) => rules.minZipf === null ||
+    (typeof item.zipf === 'number' ? item.zipf >= rules.minZipf
+      : rules.missingZipf === 'keep'));
+  return { selected: current, stages };
+}
+
+/** 报告中的排序公式，仅决定展示顺序，不自动截断前 N 张。 */
+export function studyPriorityScore(item: StudyCandidate): number {
+  const storedPages = new Set(item.occurrences.map((one) => {
+    const marker = one.ref.lastIndexOf('#');
+    return marker >= 0 ? one.ref.slice(0, marker) : one.ref;
+  })).size;
+  const pages = item.pageCount ?? storedPages;
+  const zipf = item.zipf ?? 0;
+  return 3 * Math.log2(1 + item.count) + Math.log2(1 + pages) + Math.max(0, 2 - Math.abs(zipf - 4.5));
 }
 
 export function chosenOccurrence(item: StudyCandidate): StudyOccurrence | undefined {

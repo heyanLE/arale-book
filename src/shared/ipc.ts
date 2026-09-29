@@ -32,6 +32,7 @@ import type {
   SegmentProgress,
   StudyCandidate,
   StudyCandidatePatch,
+  DirectFilterOptions,
   StudyCardDraft,
   StudyCardRunRequest,
   StudyExportResult,
@@ -128,6 +129,7 @@ export const IPC = {
   studyDirectFilter: 'study:directFilter',
   studyRunFilter: 'study:runFilter',
   studyApplyCompletedFilter: 'study:applyCompletedFilter',
+  studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
   studyPatchCard: 'study:patchCard',
   studyExportPackage: 'study:exportPackage',
@@ -322,9 +324,10 @@ export interface AraleApi {
     patchMany(bookId: string, candidateIds: string[], patch: StudyCandidatePatch): Promise<StudyList>;
     addPhrase(bookId: string, ref: string, expression: string, reading: string): Promise<StudyList>;
     export(bookId: string): Promise<StudyExportResult>;
-    directFilter(bookId: string, levels: number[], includeUnknown: boolean): Promise<StudyList>;
+    directFilter(bookId: string, levels: number[], includeUnknown: boolean, options?: Partial<DirectFilterOptions>): Promise<StudyList>;
     runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyList>;
     applyCompletedFilter(bookId: string): Promise<StudyList>;
+    clearFilterProgress(bookId: string): Promise<StudyList>;
     runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList>;
     patchCard(bookId: string, candidateId: string, patch: Partial<Pick<StudyCardDraft, 'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>): Promise<StudyList>;
     exportPackage(bookId: string): Promise<StudyExportResult>;

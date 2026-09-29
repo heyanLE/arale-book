@@ -2217,6 +2217,7 @@ try {
     check('人工选择和释义能经 IPC 保存',
       savedStudy?.candidates?.find((item) => item.id === firstStudy.id)?.meaning === '冒烟测试释义');
   }
+  let mockToolRequests = 0;
   studyLlmServer = createServer(async (request, response) => {
     try {
       let raw = '';
@@ -2228,8 +2229,13 @@ try {
       const items = candidates.map((item, index) => ({
         id: item.id, decision: ['keep', 'reject', 'review'][index % 3], reason: '冒烟测试判断',
       }));
+      const content = JSON.stringify({ items });
+      if (input.tools?.length) mockToolRequests += 1;
+      const message = input.tools?.length
+        ? { content: null, tool_calls: [{ id: 'call_smoke', type: 'function', function: { name: input.tools[0].function.name, arguments: content } }] }
+        : { content };
       response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items }) } }] }));
+      response.end(JSON.stringify({ choices: [{ message }] }));
     } catch (error) {
       response.writeHead(500);
       response.end(String(error));
@@ -2260,6 +2266,12 @@ try {
   check('Anki 页面有直接筛选、LLM 筛选、R0–R3 制卡入口',
     (await client.evaluate("[...document.querySelectorAll('.study-workflow-step h3')].map((node) => node.textContent)"))?.length === 4 &&
     (await client.evaluate("!!document.querySelector('select[aria-label=\"制卡档位\"] option[value=\"R3\"]')")) === true);
+  check('直接筛选分层展示 JLPT、词条清理、作品重复和 Zipf 预览',
+    (await client.evaluate("[...document.querySelectorAll('.study-direct-result span')].map((node) => node.textContent)"))?.length === 5 &&
+    (await client.evaluate("document.querySelector('.study-workflow-direct')?.textContent.includes('通用词频 Zipf')")) === true);
+  check('LLM 筛选并发默认 2 且最多可选 3',
+    (await client.evaluate("document.querySelector('select[aria-label=\"筛选并发数\"]')?.value")) === '2' &&
+    (await client.evaluate("!!document.querySelector('select[aria-label=\"筛选并发数\"] option[value=\"3\"]')")) === true);
   await client.evaluate(`(() => {
     const select = document.querySelector('select[aria-label="制卡档位"]');
     const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
@@ -2289,6 +2301,7 @@ try {
     await delay(200);
   }
   check('LLM 筛选完成后正式应用结果', finishedFilter);
+  check('筛选 Harness 通过结构化提交工具返回结果', mockToolRequests > 0, `toolRequests=${mockToolRequests}`);
   if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));

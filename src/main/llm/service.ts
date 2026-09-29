@@ -39,6 +39,8 @@ export interface LlmCompletionRequest {
   /** 筛选/制卡用低温度，覆盖词卡交互分析的用户温度。 */
   temperature?: number;
   signal?: AbortSignal;
+  /** 单一提交工具：模型通过 function.arguments 返回结构化结果。 */
+  tool?: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
 /** 磁盘上的形状。**只在主进程内出现**，多出来的 `apiKey` 绝不进公共契约。 */
@@ -62,8 +64,13 @@ const DEFAULT_TEMPERATURE = 0.3;
 
 /** 一次分析的硬上限。本地大模型冷启动 + 长上下文也可能跑掉一分多钟。 */
 const REQUEST_TIMEOUT_MS = 120_000;
+const MAX_GLOBAL_LLM_REQUESTS = 4;
 
 export class LlmService {
+  private readonly toolUnsupported = new Set<string>();
+  private activeRequests = 0;
+  private readonly waiting: Array<() => void> = [];
+
   constructor(private readonly options: LlmServiceOptions) {}
 
   /** 读设置。key 永远不返回，只返回 `hasApiKey`。 */
@@ -109,6 +116,7 @@ export class LlmService {
     }
 
     writeJsonAtomic(this.options.settingsFile, next);
+    this.toolUnsupported.clear();
     return toPublic(next);
   }
 
@@ -156,51 +164,63 @@ export class LlmService {
       // 只在真有 key 时带 Authorization：多余的 `Bearer ` 会让某些本地服务直接 400。
       if (key.length > 0) headers['Authorization'] = `Bearer ${key}`;
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-      const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
-      let response: Response;
-      try {
-        response = await (this.options.fetchImpl ?? fetch)(`${profile.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
+      const send = async (withTool: boolean): Promise<{ response: Response; raw: string }> => this.withRequestSlot(request.signal, async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const signal = request.signal ? AbortSignal.any([controller.signal, request.signal]) : controller.signal;
+        try {
+          const body: Record<string, unknown> = {
             model: profile.model,
             messages: [
               ...(request.system ? [{ role: 'system', content: request.system }] : []),
               { role: 'user', content: request.user },
             ],
             temperature: request.temperature ?? profile.temperature,
-          }),
-          signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
+          };
+          if (withTool && request.tool) {
+            body['tools'] = [{ type: 'function', function: { ...request.tool, strict: true } }];
+            body['tool_choice'] = { type: 'function', function: { name: request.tool.name } };
+            body['parallel_tool_calls'] = false;
+          }
+          const response = await (this.options.fetchImpl ?? fetch)(`${profile.baseUrl}/chat/completions`, {
+            method: 'POST', headers, body: JSON.stringify(body), signal,
+          });
+          return { response, raw: await response.text() };
+        } finally { clearTimeout(timer); }
+      });
 
-      // 先读成文本再自己解析：JSON 坏掉时能把原文片段给用户看，而 `response.json()`
-      // 只会扔一句没有上下文的 SyntaxError。
-      const raw = await response.text();
-      if (!response.ok) {
-        return fail(`模型服务返回 HTTP ${response.status}：${truncate(raw, 300)}`);
-      }
+      let withTool = request.tool !== undefined && !this.toolUnsupported.has(profile.id);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { response, raw } = await send(withTool);
+        if (!response.ok) {
+          if (withTool && request.tool && toolNotSupported(response.status, raw)) {
+            this.toolUnsupported.add(profile.id);
+            withTool = false;
+            continue;
+          }
+          return fail(`模型服务返回 HTTP ${response.status}：${truncate(raw, 300)}`);
+        }
 
-      let data: unknown;
-      try {
-        data = JSON.parse(raw);
-      } catch {
-        return fail(`模型返回的不是 JSON：${truncate(raw, 200)}`);
+        let data: unknown;
+        try { data = JSON.parse(raw) as unknown; }
+        catch { return fail(`模型返回的不是 JSON：${truncate(raw, 200)}`); }
+        if (request.tool) {
+          const toolResult = extractToolArguments(data, request.tool.name);
+          if (toolResult.status === 'invalid') return fail(toolResult.error);
+          if (toolResult.status === 'called') {
+            return { ok: true, text: toolResult.arguments, profileName: profile.name, model: profile.model };
+          }
+          if (withTool) this.toolUnsupported.add(profile.id);
+        }
+        const content = extractContent(data);
+        if (content === null || content.trim().length === 0) {
+          return fail(`模型没有返回内容，检查模型名或工具调用兼容性。响应片段：${truncate(safeStringify(data), 200)}`);
+        }
+        return { ok: true, text: content, profileName: profile.name, model: profile.model };
       }
-
-      const content = extractContent(data);
-      if (content === null || content.trim().length === 0) {
-        // 模型名写错时很多服务正是这个形状（HTTP 200 但 choices 为空），
-        // 所以这里必须把响应片段带上，否则用户完全无从下手。
-        return fail(`模型没有返回内容，检查模型名是否正确。响应片段：${truncate(safeStringify(data), 200)}`);
-      }
-
-      return { ok: true, text: content, profileName: profile.name, model: profile.model };
+      return fail('模型服务不支持提交工具，纯 JSON 回退也失败');
     } catch (error) {
+      if (request.signal?.aborted) return fail('已取消 LLM 请求');
       return fail(describeError(error));
     }
   }
@@ -213,6 +233,37 @@ export class LlmService {
    */
   private readStored(): StoredShape {
     return normalizeStored(readJson<unknown>(this.options.settingsFile, null));
+  }
+
+  /** 全局最多四个在途请求，避免多本书并跑绕开每个 Harness 的并发上限。 */
+  private async withRequestSlot<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (this.activeRequests < MAX_GLOBAL_LLM_REQUESTS) {
+      this.activeRequests += 1;
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const wake = (): void => { signal?.removeEventListener('abort', abort); resolve(); };
+        const abort = (): void => {
+          const index = this.waiting.indexOf(wake);
+          if (index >= 0) this.waiting.splice(index, 1);
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        this.waiting.push(wake);
+        signal?.addEventListener('abort', abort, { once: true });
+      });
+      if (signal?.aborted) {
+        this.releaseRequestSlot();
+        throw new DOMException('Aborted', 'AbortError');
+      }
+    }
+    try { return await task(); }
+    finally { this.releaseRequestSlot(); }
+  }
+
+  private releaseRequestSlot(): void {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.activeRequests -= 1;
   }
 }
 
@@ -339,6 +390,42 @@ function extractContent(data: unknown): string | null {
   if (!isRecord(message)) return null;
   const content = message['content'];
   return typeof content === 'string' ? content : null;
+}
+
+function toolNotSupported(status: number, body: string): boolean {
+  return [400, 422, 501].includes(status) && /tools?|tool_choice|function.call|parallel_tool_calls|strict/i.test(body);
+}
+
+type ToolExtraction =
+  | { status: 'called'; arguments: string }
+  | { status: 'not_called' }
+  | { status: 'invalid'; error: string };
+
+function extractToolArguments(data: unknown, expectedName: string): ToolExtraction {
+  if (!isRecord(data) || !Array.isArray(data['choices'])) return { status: 'not_called' };
+  const first = data['choices'][0];
+  const message = isRecord(first) ? first['message'] : null;
+  if (!isRecord(message)) return { status: 'not_called' };
+  const calls = message['tool_calls'];
+  if (Array.isArray(calls) && calls.length > 0) {
+    if (calls.length !== 1) return { status: 'invalid', error: '模型一次返回了多个提交工具调用' };
+    return parseToolCall(calls[0], expectedName);
+  }
+  // 部分旧兼容端点沿用 function_call；仍只接受指定提交工具。
+  if (isRecord(message['function_call'])) {
+    return parseToolCall({ type: 'function', function: message['function_call'] }, expectedName);
+  }
+  return { status: 'not_called' };
+}
+
+function parseToolCall(call: unknown, expectedName: string): ToolExtraction {
+  if (!isRecord(call) || call['type'] !== 'function' || !isRecord(call['function']) || call['function']['name'] !== expectedName) {
+    return { status: 'invalid', error: '模型调用了未知工具，拒绝把结果当作学习卡数据' };
+  }
+  const args = call['function']['arguments'];
+  if (typeof args === 'string') return { status: 'called', arguments: args };
+  if (isRecord(args)) return { status: 'called', arguments: JSON.stringify(args) };
+  return { status: 'invalid', error: '模型提交工具缺少 JSON 参数' };
 }
 
 function fail(error: string): LlmAnalyzeResult {

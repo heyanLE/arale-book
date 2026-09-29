@@ -6,6 +6,7 @@ interface KuromojiToken {
   basic_form?: string;
   reading?: string;
   pos: string;
+  pos_detail_1?: string;
   verbose?: { word_type?: string };
 }
 
@@ -40,6 +41,7 @@ export async function tokenizeJapanese(text: string): Promise<MorphToken[]> {
     lemma: token.basic_form ?? token.surface_form,
     reading: token.reading ?? '',
     pos: token.pos,
+    posDetail: token.pos_detail_1 ?? '',
     known: token.verbose?.word_type !== 'UNKNOWN',
   }));
 }

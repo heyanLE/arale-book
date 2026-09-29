@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { unzipSync } from 'fflate';
 
 import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type BookRecord, type StudyCandidate, type StudyList, type StudyRunProgress } from '../src/shared/types';
+import { HARNESS_TOOL_NAME } from '../src/core/study/harness-tool';
 import { CARD_TIERS, FILTER_TIERS, cardHarnessPrompt, defaultStudyWorkflow, directCandidates, estimatedLlmCalls, filterHarnessPrompt, parseCardBatchResponse, parseCardResponse, parseFilterResponse, parseVerifyBatchResponse } from '../src/core/study/harness';
 import { cropRect } from '../src/main/study/crop';
 import { StudyService } from '../src/main/study/service';
@@ -239,11 +240,18 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
     } satisfies StudyList));
     let filterCalls = 0;
     let cardCalls = 0;
+    let inFlight = 0;
+    let peak = 0;
     const liveProgress: StudyRunProgress[] = [];
     const service = new StudyService({
       getBook: () => ({ id: bookId, title: '测试', format: 'comic' } as BookRecord),
       getSegments: () => null, ensureDictionary: async () => undefined, lookupMeaning: () => '',
-      llm: { complete: async ({ system, user }) => {
+      llm: { complete: async ({ system, user, tool }) => {
+        assert.equal(tool?.name, HARNESS_TOOL_NAME);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
         const input = JSON.parse(user) as Array<{ id: string; word: string }>;
         let text: string;
         if (system?.includes('筛选器')) {
@@ -271,6 +279,7 @@ test('F2 和 R1 用单次请求处理多项，按 ID 对齐输出并保存真实
     assert.equal(made.workflow?.cardRun?.stats?.translationCalls, 34);
     assert.deepEqual(made.workflow?.cardRun?.drafts.map((item) => item.candidateId), candidates.map((item) => item.id));
     assert.equal(made.workflow?.cardRun?.drafts[0]?.meaning, '义詞0');
+    assert.equal(peak, 2, '默认同一本书最多同时跑两批 LLM');
   } finally {
     setUserDataRootForTesting(null);
     fs.rmSync(root, { recursive: true, force: true });
@@ -421,9 +430,9 @@ test('R1 第二批失败后只续跑未完成的卡片批次', async () => {
       } },
     });
     service.directFilter(bookId, [3], false);
-    await assert.rejects(service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing' }), /暂时失败/);
+    await assert.rejects(service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing', concurrency: 1 }), /暂时失败/);
     assert.equal(service.read(bookId)?.workflow?.pendingCardRun?.drafts.length, 6);
-    const finished = await service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing' });
+    const finished = await service.runCards(bookId, { tier: 'R1', profileId: 'p1', translationProfileId: 'bing', concurrency: 1 });
     assert.equal(calls, 3);
     assert.equal(translated.filter((text) => text === '詞0').length, 1);
     assert.equal(finished.workflow?.cardRun?.drafts.length, 8);
@@ -457,7 +466,7 @@ test('筛选中断后可只使用已完成结果，未处理项暂不制卡且�
       } },
     });
     service.directFilter(bookId, [3], false);
-    await assert.rejects(service.runFilter(bookId, { tier: 'F2', profileId: 'p1' }), /暂时失败/);
+    await assert.rejects(service.runFilter(bookId, { tier: 'F2', profileId: 'p1', concurrency: 1 }), /暂时失败/);
     assert.equal(service.read(bookId)?.workflow?.pendingFilterRun?.decisions['詞8'], undefined);
     assert.match(service.read(bookId)?.workflow?.pendingFilterRun?.lastError ?? '', /暂时失败/);
     const partial = service.applyCompletedFilter(bookId);
@@ -465,7 +474,7 @@ test('筛选中断后可只使用已完成结果，未处理项暂不制卡且�
     assert.equal(partial.candidates[1]?.selected, true, '已判保留');
     assert.equal(partial.candidates[8]?.selected, false, '尚未处理，暂不制卡');
     assert.equal(Object.keys(partial.workflow?.pendingFilterRun?.decisions ?? {}).length, 8);
-    const complete = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1' });
+    const complete = await service.runFilter(bookId, { tier: 'F2', profileId: 'p1', concurrency: 1 });
     assert.equal(calls, 3);
     assert.equal(complete.workflow?.pendingFilterRun, undefined);
     assert.equal(complete.workflow?.filterRun?.stats?.llmCalls, 3);

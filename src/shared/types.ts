@@ -679,14 +679,26 @@ export interface StudyCandidate {
   expression: string;
   reading: string;
   partOfSpeech: string;
+  /** Kuromoji 的细分词性（旧候选缺失）；固有名词/数词筛选用。 */
+  posDetail?: string;
+  /** 全部出现都被判为固有名词时才为 true；旧候选缺失。 */
+  properName?: boolean;
+  /** 至少一次被分词器词典识别；旧候选缺失。 */
+  tokenizerKnown?: boolean;
   jlpt: JlptLevel;
   jlptConflict: boolean;
   count: number;
+  /** 跨页覆盖数。旧候选缺失，排序时只可从已存的有限出处估算。 */
+  pageCount?: number;
+  /** wordfreq 日语 large 词表的 Zipf；null = 未收录，undefined = 数据不可用/旧产物。 */
+  zipf?: number | null;
   occurrences: StudyOccurrence[];
   /** 用户可修订的词典释义。 */
   meaning: string;
   selected: boolean;
   excluded: boolean;
+  /** 用户明确保留：跳过自动直接筛选；显式 excluded 仍优先。 */
+  forceInclude?: boolean;
   /** 选作卡背的出处 id（文字块 ref + 块内位置）。 */
   contextRef: string;
   exportedAt: number | null;
@@ -697,6 +709,7 @@ export interface StudyList {
   generatedAt: number;
   segmentGeneratedAt: number;
   jlptSource: string;
+  wordfreqSource?: string | null;
   candidates: StudyCandidate[];
   /** 旧版 study-list.json 没有这个字段，读取时使用默认筛选。 */
   workflow?: StudyWorkflow;
@@ -705,6 +718,21 @@ export interface StudyList {
 export type StudyFilterTier = 'F1' | 'F2' | 'F3';
 export type StudyCardTier = 'R0' | 'R1' | 'R2' | 'R3';
 export type StudyFilterDecision = 'keep' | 'reject' | 'review';
+
+export interface DirectFilterOptions {
+  /** 当前候选已是内容词；core 进一步只留名/动/形/副。 */
+  partOfSpeech: 'all' | 'core';
+  excludeProperNames: boolean;
+  excludeNumbers: boolean;
+  excludeTokenizerUnknown: boolean;
+  /** 当前作品内精确排除的词形/人名。 */
+  excludedWords: string[];
+  /** null = 不按作品内次数筛；报告参考值为 2。 */
+  minOccurrences: number | null;
+  /** null = 不按通用词频筛；报告参考值为 Zipf 2.5。 */
+  minZipf: number | null;
+  missingZipf: 'keep' | 'exclude';
+}
 
 export interface StudyRunStats {
   llmCalls: number;
@@ -716,9 +744,12 @@ export interface StudyWorkflow {
   /** JLPT 为社区参考等级；null 单独由 includeUnknown 控制。 */
   levels: Array<1 | 2 | 3 | 4 | 5>;
   includeUnknown: boolean;
+  /** 旧工作流缺失时使用宽松默认，不会重置已有 LLM 检查点。 */
+  direct?: DirectFilterOptions;
   filterRun?: {
     tier: StudyFilterTier;
     profileId: string;
+    concurrency?: 1 | 2 | 3;
     completedAt: number;
     decisions: Record<string, { decision: StudyFilterDecision; reason: string }>;
     stats?: StudyRunStats;
@@ -726,6 +757,7 @@ export interface StudyWorkflow {
   pendingFilterRun?: {
     tier: StudyFilterTier;
     profileId: string;
+    concurrency?: 1 | 2 | 3;
     sourceHash: string;
     decisions: Record<string, { decision: StudyFilterDecision; reason: string }>;
     stats?: StudyRunStats;
@@ -735,6 +767,7 @@ export interface StudyWorkflow {
     tier: StudyCardTier;
     profileId: string | null;
     translationProfileId: string;
+    concurrency?: 1 | 2 | 3;
     completedAt: number;
     /** 生成时的候选快照指纹；候选变化后禁止导出旧卡。 */
     sourceHash: string;
@@ -745,6 +778,7 @@ export interface StudyWorkflow {
     tier: StudyCardTier;
     profileId: string | null;
     translationProfileId: string;
+    concurrency?: 1 | 2 | 3;
     sourceHash: string;
     drafts: StudyCardDraft[];
     stats?: StudyRunStats;
@@ -783,12 +817,14 @@ export interface StudyRunProgress {
 export interface StudyFilterRunRequest {
   tier: StudyFilterTier;
   profileId: string;
+  concurrency?: 1 | 2 | 3;
 }
 
 export interface StudyCardRunRequest {
   tier: StudyCardTier;
   translationProfileId: string;
   profileId?: string;
+  concurrency?: 1 | 2 | 3;
 }
 
 export interface StudyCandidatePatch {
@@ -798,6 +834,7 @@ export interface StudyCandidatePatch {
   reading?: string;
   meaning?: string;
   contextRef?: string;
+  forceInclude?: boolean;
 }
 
 export interface StudyExportResult {
