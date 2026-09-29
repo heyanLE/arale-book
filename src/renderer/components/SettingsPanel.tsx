@@ -9,12 +9,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { DictionaryStatus, LibraryInfo, OcrCapability, OcrProviderId } from '@shared/types';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
-import type { LlmProfile, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
+import type { LlmProfileInput, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
 import { ExtensionsCard } from './ExtensionsCard';
 import { LlmCard } from './LlmCard';
 import { TranslationCard } from './TranslationCard';
+import { WordCardSettingsCard } from './WordCardSettingsCard';
 import { api, call, reportApiError, useIpcEvent } from '../lib/api';
 import {
   DEFAULT_SETTINGS,
@@ -45,11 +46,10 @@ export interface SettingsPanelProps {
     loading: boolean;
     onReload: () => void;
     onUpdate: (patch: {
-      profiles?: LlmProfile[];
+      profiles?: LlmProfileInput[];
       activeProfileId?: string | null;
       prompt?: string;
-    }) => void;
-    onSetApiKey: (profileId: string, apiKey: string | null) => void;
+    }) => Promise<LlmSettings | null>;
   };
   translation?: {
     settings: TranslationSettings | null;
@@ -59,8 +59,8 @@ export interface SettingsPanelProps {
       profiles?: TranslationProfile[];
       activeProfileId?: string | null;
       targetLanguage?: TranslationSettings['targetLanguage'];
-    }) => void;
-    onSetSecret: (profileId: string, secret: string | null) => void;
+    }) => Promise<TranslationSettings | null>;
+    onSetSecret: (profileId: string, secret: string | null) => Promise<TranslationSettings | null>;
   };
   extensions?: {
     statuses: ExtensionStatus[];
@@ -168,13 +168,13 @@ export function SettingsPanel({
             type="button"
             className="btn btn-sm"
             onClick={() => {
-              if (window.confirm('恢复所有设置为默认值？')) {
+              if (window.confirm('重置界面外观和阅读器偏好？')) {
                 updateSettings({ ...DEFAULT_SETTINGS });
-                onStatus('设置已恢复默认');
+                onStatus('界面与阅读器偏好已重置');
               }
             }}
           >
-            恢复默认
+            重置界面偏好
           </button>
           <button type="button" className="btn btn-sm" onClick={onClose}>
             返回书库
@@ -183,11 +183,6 @@ export function SettingsPanel({
       </div>
 
       <div className="settings-body">
-        {/* =====================================================================
-            通用 —— 与载体无关的东西：书库位置、词典、界面外观。
-            ===================================================================== */}
-        <h2 className="settings-group">通用</h2>
-
         {/* ---------------- 书库 ---------------- */}
         <section className="settings-card">
           <div className="settings-card-head">
@@ -350,15 +345,37 @@ export function SettingsPanel({
           </div>
         </section>
 
-        {/* =====================================================================
-            漫画 —— 只影响漫画：文字识别（可选）与漫画阅读器。
-            ===================================================================== */}
-        <h2 className="settings-group">漫画</h2>
+        {llm ? (
+          <LlmCard
+            settings={llm.settings}
+            loading={llm.loading}
+            onReload={llm.onReload}
+            onUpdate={llm.onUpdate}
+          />
+        ) : (
+          <section className="settings-card">
+            <div className="detail-hint">LLM 配置还没载入。</div>
+          </section>
+        )}
+
+        {translation ? (
+          <TranslationCard
+            settings={translation.settings}
+            loading={translation.loading}
+            onReload={translation.onReload}
+            onUpdate={translation.onUpdate}
+            onSetSecret={translation.onSetSecret}
+          />
+        ) : (
+          <section className="settings-card"><div className="detail-hint">翻译配置还没载入。</div></section>
+        )}
+
+        <WordCardSettingsCard llm={llm ?? null} translation={translation ?? null} />
 
         {/* ---------------- OCR 引擎（可选能力） ---------------- */}
         <section className="settings-card">
           <div className="settings-card-head">
-            <h2 className="settings-card-title">文字识别（OCR）</h2>
+            <h2 className="settings-card-title">OCR 默认引擎</h2>
             <div className="settings-card-actions">
               <button type="button" className="btn btn-sm" onClick={onRefreshOcrCapability}>
                 重新探测
@@ -407,115 +424,9 @@ export function SettingsPanel({
             )}
           </div>
 
+          <p className="settings-hint">这里仅设置全局预选引擎，不会停用其他引擎。每本漫画执行识别时仍可选择已安装的其他引擎，并记住本书选择。</p>
+
         </section>
-
-        {/* ---------------- 漫画阅读器 ---------------- */}
-        <section className="settings-card">
-          <div className="settings-card-head">
-            <h2 className="settings-card-title">漫画阅读器</h2>
-          </div>
-
-          <div className="settings-row">
-            <span className="settings-label">新书默认方向</span>
-            <select
-              className="select settings-select-wide"
-              value={defaults?.value.direction ?? 'rtl'}
-              onChange={(e) => defaults?.onChange({ direction: e.target.value as 'ltr' | 'rtl' })}
-              title="导入新书时用它；已经导入的书不受影响"
-            >
-              <option value="rtl">RTL 从右到左</option>
-              <option value="ltr">LTR 从左到右</option>
-            </select>
-            <span className="settings-value">只影响以后导入的书</span>
-          </div>
-
-          <div className="settings-row">
-            <span className="settings-label">页面适配</span>
-            <select
-              className="select"
-              value={settings.comicFit}
-              onChange={(e) => patch({ comicFit: e.target.value as ComicFitMode })}
-            >
-              <option value="height">适应高度</option>
-              <option value="width">适应宽度</option>
-              <option value="actual">原始尺寸</option>
-            </select>
-          </div>
-
-          <div className="settings-row">
-            <span className="settings-label">双页跨页</span>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={settings.comicSpread}
-                onChange={(e) => patch({ comicSpread: e.target.checked })}
-              />
-              <span>并排显示两页（RTL 书从右往左排）</span>
-            </label>
-          </div>
-
-          <div className="settings-row">
-            <span className="settings-label">配对偏移</span>
-            <select
-              className="select settings-select-num"
-              value={String(clampSpreadOffset(settings.comicSpreadOffset))}
-              disabled={!settings.comicSpread}
-              onChange={(e) => patch({ comicSpreadOffset: clampSpreadOffset(Number(e.target.value)) })}
-            >
-              {SPREAD_OFFSETS.map((value) => (
-                <option key={value} value={String(value)}>
-                  {value}
-                </option>
-              ))}
-            </select>
-            <span className="settings-value">{spreadOffsetLabel(settings.comicSpreadOffset)}</span>
-          </div>
-
-          <p className="settings-hint">
-            偏移 N = 前 N 页单独成页，从第 N+1 页开始两两配对（只在双页时生效）。
-          </p>
-        </section>
-
-        {/* =====================================================================
-            翻译 —— 整个漫画框/选区的直译。
-            ===================================================================== */}
-        <h2 className="settings-group">翻译</h2>
-
-        {translation ? (
-          <TranslationCard
-            settings={translation.settings}
-            loading={translation.loading}
-            onReload={translation.onReload}
-            onUpdate={translation.onUpdate}
-            onSetSecret={translation.onSetSecret}
-          />
-        ) : (
-          <section className="settings-card"><div className="detail-hint">翻译配置还没载入。</div></section>
-        )}
-
-        {/* =====================================================================
-            LLM —— 词卡分析用。
-            ===================================================================== */}
-        <h2 className="settings-group">LLM</h2>
-
-        {llm ? (
-          <LlmCard
-            settings={llm.settings}
-            loading={llm.loading}
-            onReload={llm.onReload}
-            onUpdate={llm.onUpdate}
-            onSetApiKey={llm.onSetApiKey}
-          />
-        ) : (
-          <section className="settings-card">
-            <div className="detail-hint">LLM 配置还没载入。</div>
-          </section>
-        )}
-
-        {/* =====================================================================
-            扩展 —— 可下载安装的能力包（现在只有 OCR 引擎）。
-            ===================================================================== */}
-        <h2 className="settings-group">扩展</h2>
 
         {extensions ? (
           <ExtensionsCard
@@ -538,14 +449,9 @@ export function SettingsPanel({
           </section>
         )}
 
-        {/* =====================================================================
-            小说 —— 只影响 EPUB 阅读器。
-            ===================================================================== */}
-        <h2 className="settings-group">小说</h2>
-
         <section className="settings-card">
           <div className="settings-card-head">
-            <h2 className="settings-card-title">小说阅读器</h2>
+            <h2 className="settings-card-title">小说阅读器配置</h2>
           </div>
 
           <div className="settings-row">
@@ -619,6 +525,73 @@ export function SettingsPanel({
 
           <p className="settings-hint">只调整阅读器注入的排版，不覆盖书自带的 CSS。</p>
         </section>
+        {/* ---------------- 漫画阅读器 ---------------- */}
+        <section className="settings-card">
+          <div className="settings-card-head">
+            <h2 className="settings-card-title">漫画阅读器配置</h2>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">新书默认方向</span>
+            <select
+              className="select settings-select-wide"
+              value={defaults?.value.direction ?? 'rtl'}
+              onChange={(e) => defaults?.onChange({ direction: e.target.value as 'ltr' | 'rtl' })}
+              title="导入新书时用它；已经导入的书不受影响"
+            >
+              <option value="rtl">RTL 从右到左</option>
+              <option value="ltr">LTR 从左到右</option>
+            </select>
+            <span className="settings-value">只影响以后导入的书</span>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">页面适配</span>
+            <select
+              className="select"
+              value={settings.comicFit}
+              onChange={(e) => patch({ comicFit: e.target.value as ComicFitMode })}
+            >
+              <option value="height">适应高度</option>
+              <option value="width">适应宽度</option>
+              <option value="actual">原始尺寸</option>
+            </select>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">双页跨页</span>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.comicSpread}
+                onChange={(e) => patch({ comicSpread: e.target.checked })}
+              />
+              <span>并排显示两页（RTL 书从右往左排）</span>
+            </label>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">配对偏移</span>
+            <select
+              className="select settings-select-num"
+              value={String(clampSpreadOffset(settings.comicSpreadOffset))}
+              disabled={!settings.comicSpread}
+              onChange={(e) => patch({ comicSpreadOffset: clampSpreadOffset(Number(e.target.value)) })}
+            >
+              {SPREAD_OFFSETS.map((value) => (
+                <option key={value} value={String(value)}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <span className="settings-value">{spreadOffsetLabel(settings.comicSpreadOffset)}</span>
+          </div>
+
+          <p className="settings-hint">
+            偏移 N = 前 N 页单独成页，从第 N+1 页开始两两配对（只在双页时生效）。
+          </p>
+        </section>
+
       </div>
     </div>
   );

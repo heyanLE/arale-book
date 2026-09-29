@@ -1894,12 +1894,70 @@ button[aria-disabled='true'] {
   gap: 5px;
 }
 
+.profile-new { border-left: 3px solid var(--accent); background: var(--bg-active); }
+
+.profile-identity { display: flex; align-items: center; color: var(--text-dim); background: var(--bg-code); }
+
+.profile-builtin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-active);
+  border: 1px solid var(--border-soft);
+  margin: 8px 0;
+}
+
+.profile-builtin span { display: block; color: var(--text-dim); font-size: 11px; margin-top: 3px; }
+
+.wordcard-location {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.wordcard-location-muted { color: var(--text-faint); }
+
+.wordcard-settings-section { padding: 6px 0; }
+
+.wordcard-settings-section + .wordcard-settings-section {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 7px;
+  padding-top: 12px;
+}
+
+.wordcard-settings-section h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.wordcard-section-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
 .settings-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 10px 12px 20px;
-  max-width: 940px;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .settings-card {
@@ -2219,6 +2277,150 @@ button[aria-disabled='true'] {
   color: var(--text-faint);
 }
 
+.segment-tabs { display: flex; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); background: var(--bg-panel); }
+.segment-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); padding: 9px 12px; cursor: pointer; }
+.segment-tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.study-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; font-size: 12px; }
+.study-head, .study-filters { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.study-head { justify-content: space-between; }
+.study-head small { display: block; margin-top: 3px; color: var(--text-faint); }
+.study-head-actions { display: flex; gap: 6px; flex: none; }
+.study-notice { padding: 6px 12px; background: var(--bg-active); color: var(--text); }
+.study-flow-nav { display: flex; align-items: stretch; gap: 4px; flex: none; padding: 5px 12px; border-bottom: 1px solid var(--border-soft); background: var(--bg-panel); overflow-x: auto; }
+.study-flow-nav button { flex: none; padding: 9px 11px; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); background: transparent; cursor: pointer; white-space: nowrap; }
+.study-flow-nav button[aria-current='step'] { color: var(--text); border-bottom-color: var(--accent); font-weight: 700; }
+.study-flow-nav button:disabled { opacity: .5; cursor: not-allowed; }
+.study-flow-nav span { margin: auto 0 auto auto; flex: none; color: var(--text-dim); }
+.study-flow-body { display: grid; grid-template-columns: minmax(330px, 440px) minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.study-workflow { display: flex; flex-direction: column; min-width: 0; overflow: auto; border-right: 1px solid var(--border-soft); background: var(--bg-panel); }
+.study-flow-section { padding: 15px 16px 0; }
+.study-flow-section h3 { margin: 0 0 8px; font-size: 17px; }
+.study-flow-section h3 small { font-size: 12px; font-weight: 400; color: var(--text-dim); }
+.study-flow-section h4 { margin: 18px 0 6px; font-size: 13px; }
+.study-flow-section p { margin: 6px 0 12px; color: var(--text-dim); line-height: 1.5; }
+.study-flow-section > small { display: block; margin: 8px 0; color: var(--text-dim); line-height: 1.5; }
+.study-candidate-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.study-preview-total { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 10px 0; padding: 12px; border-radius: 4px; background: var(--bg-active); font-size: 13px; }
+.study-preview-total strong { font-size: 16px; }
+.study-preview-total span { color: var(--text-dim); }
+.study-draft-warning, .study-checkpoint-warning { padding: 9px; background: var(--bg-content); border-left: 3px solid var(--accent); line-height: 1.5; }
+.study-checkpoint-warning button { margin-top: 7px; }
+.study-flow-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 12px 0; margin-top: 12px; border-top: 1px solid var(--border-soft); background: var(--bg-panel); z-index: 2; }
+.study-flow-actions span { color: var(--text-dim); }
+.study-rule-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 10px 0; }
+.study-rule-presets span { font-weight: 650; }
+.study-rule-presets small { flex-basis: 100%; color: var(--text-dim); line-height: 1.5; }
+.study-rule-groups { display: grid; gap: 8px; }
+.study-rule-group { min-width: 0; padding: 11px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg-content); }
+.study-rule-group summary { cursor: pointer; }
+.study-rule-group summary strong, .study-rule-group-head strong { font-size: 13px; }
+.study-rule-group summary span, .study-rule-group-head span { float: right; color: var(--text-dim); }
+.study-rule-group-head { display: flex; justify-content: space-between; gap: 8px; }
+.study-rule-group p { margin: 8px 0; color: var(--text-dim); line-height: 1.5; }
+.study-rule-group > label { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
+.study-rule-group textarea { width: 100%; min-height: 58px; box-sizing: border-box; resize: vertical; }
+.study-rule-group select, .study-rule-group input[type='number'], .study-rule-group textarea { padding: 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-rule-group input[type='number'] { width: 58px; }
+.study-rule-checks, .study-level-checks { display: flex; flex-wrap: wrap; gap: 7px 13px; }
+.study-rule-checks label, .study-level-checks label { white-space: nowrap; }
+.study-rule-impact { display: flex; flex-wrap: wrap; gap: 4px 9px; margin-top: 10px; color: var(--text-dim); line-height: 1.6; }
+.study-rule-impact span { font-size: 11px; }
+.study-tier-choices { display: grid; gap: 7px; }
+.study-tier-choices label { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg-content); cursor: pointer; }
+.study-tier-choices label.active { border-color: var(--accent); background: var(--bg-active); }
+.study-tier-choices label input { grid-row: span 2; }
+.study-tier-choices label small { color: var(--text-dim); line-height: 1.4; }
+.study-engine-fields { display: grid; gap: 10px; margin: 16px 0; }
+.study-engine-fields label { display: grid; gap: 5px; font-weight: 600; }
+.study-engine-fields select { width: 100%; min-width: 0; height: 30px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); font-weight: 400; }
+.study-image-choices { margin: 10px 0; }
+.study-run-settings { padding: 8px 0; }
+.study-run-settings summary { cursor: pointer; }
+.study-run-settings select { margin: 8px 0; }
+.study-run-settings small { display: block; color: var(--text-dim); }
+.study-level-checks, .study-workflow-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 8px 0; }
+.study-level-checks label { white-space: nowrap; }
+.study-workflow-controls select { min-width: 130px; max-width: 220px; height: 27px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-workflow-progress { position: sticky; bottom: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--border-soft); background: var(--bg-panel); line-height: 1.5; }
+.study-card-draft { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 4px; }
+.study-card-draft h4 { margin: 0 0 8px; font-size: 14px; }
+.study-card-draft fieldset { margin: 0; padding: 0; border: 0; }
+.study-card-draft h4 span, .study-card-draft p { color: var(--text-dim); }
+.study-card-draft label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
+.study-card-draft input, .study-card-draft textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-card-draft textarea { min-height: 54px; resize: vertical; }
+.study-card-evidence { margin: 14px 0; }
+.study-card-evidence summary { cursor: pointer; font-weight: 600; }
+.study-card-evidence .study-context { margin-top: 10px; }
+.study-filters { flex: none; flex-wrap: wrap; }
+.study-filters > strong { flex: none; font-size: 13px; }
+.study-filters > small { flex: 1 1 65%; color: var(--text-dim); }
+.study-view-tabs { display: flex; flex: 1 1 100%; gap: 4px; overflow-x: auto; }
+.study-view-tabs button { flex: none; padding: 5px 8px; border: 1px solid var(--border-soft); border-radius: 3px; color: var(--text-dim); background: var(--bg-content); cursor: pointer; }
+.study-view-tabs button.active { border-color: var(--accent); color: var(--text); background: var(--bg-active); font-weight: 650; }
+.study-bulk-decision { margin: 12px 0; padding: 11px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--bg-content); }
+.study-bulk-decision > div { display: flex; gap: 6px; flex-wrap: wrap; margin: 9px 0; }
+.study-bulk-decision small { display: block; color: var(--text-dim); line-height: 1.5; }
+.study-filters label { white-space: nowrap; color: var(--text-dim); }
+.study-filters select, .study-detail select, .study-phrase input { height: 26px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-filters span { color: var(--text-faint); margin-left: auto; }
+.study-content { display: grid; grid-template-columns: minmax(300px, 45%) minmax(300px, 55%); flex: 1; min-height: 0; }
+.study-list { overflow: auto; border-right: 1px solid var(--border-soft); }
+.study-row { display: flex; align-items: center; gap: 8px; padding: 0 10px; min-height: 35px; border-bottom: 1px solid var(--border-soft); }
+.study-row.active { background: var(--bg-active); }
+.study-row:hover { background: var(--bg-hover); }
+.study-row button { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.study-row button strong { min-width: 5em; font-size: 13px; }
+.study-row button span { color: var(--text-dim); white-space: nowrap; }
+.study-row button .study-decision-badge { border-radius: 3px; padding: 2px 5px; font-size: 11px; }
+.study-row button .study-decision-badge.included { color: var(--text); background: var(--bg-active); }
+.study-row button .study-decision-badge.excluded { color: var(--text-dim); background: var(--bg-panel); }
+.study-row button .study-filter-preview { color: var(--accent); font-weight: 600; }
+.study-row button .study-level { margin-left: auto; color: var(--accent); }
+.study-pages { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 10px; color: var(--text-dim); }
+.study-detail { overflow: auto; padding: 14px 18px 28px; }
+.study-detail h3 { margin: 0 0 5px; font-size: 20px; }
+.study-detail h3 small { font-size: 12px; font-weight: 400; color: var(--text-dim); }
+.study-detail-meta { color: var(--text-faint); margin-bottom: 14px; }
+.study-reasons { margin: 12px 0; padding: 10px; border: 1px solid var(--border-soft); background: var(--bg-panel); line-height: 1.5; }
+.study-reasons ul { margin: 6px 0; padding-left: 19px; }
+.study-reasons p { margin: 5px 0; }
+.study-decision-controls { margin: 12px 0; }
+.study-decision-controls > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.study-decision-controls button[aria-pressed='true'] { border-color: var(--accent); background: var(--bg-active); font-weight: 650; }
+.study-decision-controls small { display: block; margin-top: 6px; color: var(--text-dim); }
+.study-edit-term { margin: 14px 0; }
+.study-edit-term summary { cursor: pointer; font-weight: 600; }
+.study-edit-term fieldset { margin: 0; padding: 0; border: 0; }
+.study-edit-term label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
+.study-edit-term input, .study-edit-term textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-detail > label { display: flex; flex-direction: column; gap: 5px; margin: 12px 0; color: var(--text-dim); }
+.study-detail textarea, .study-detail > label > input { box-sizing: border-box; width: 100%; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
+.study-detail textarea { min-height: 70px; resize: vertical; }
+.study-detail select { max-width: 100%; }
+.study-context { padding: 10px; background: var(--bg-panel); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.study-context mark { background: var(--accent); color: var(--bg-content); }
+.study-card-preview { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 4px; line-height: 1.7; }
+.study-card-preview > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+.study-card-preview small { color: var(--text-faint); }
+.study-detail .study-exclude { flex-direction: row; align-items: center; }
+.study-phrase { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.study-phrase strong { flex-basis: 100%; }
+.study-phrase input { padding: 0 7px; min-width: 120px; flex: 1; }
+.study-footer { flex: none; padding: 7px 12px; border-top: 1px solid var(--border-soft); color: var(--text-faint); font-size: 11px; }
+@media (max-width: 1180px) {
+  .study-flow-body { display: flex; flex-direction: column; overflow: auto; }
+  .study-workflow { flex: none; overflow: visible; border-right: 0; border-bottom: 1px solid var(--border-soft); }
+  .study-candidate-area { min-height: 560px; }
+  .study-flow-actions { position: static; }
+}
+@media (max-width: 760px) {
+  .study-content { display: block; overflow: auto; }
+  .study-list { max-height: 250px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
+  .study-detail { overflow: visible; }
+  .study-head { align-items: flex-start; flex-direction: column; }
+}
+
 /* 设置页里的单选项行 */
 .settings-list {
   display: flex;
@@ -2294,40 +2496,6 @@ button[aria-disabled='true'] {
   font-size: 11px;
 }
 
-/* ==========================================================================
-   设置页的分组标题
-   --------------------------------------------------------------------------
-   三个组（通用 / 漫画 / 小说）是**载体维度**的划分，不是功能维度：用户想知道
-   「改这个会影响漫画还是小说」。所以组标题要比卡片标题更重、更靠外，
-   用一条横线把它和上面的卡片切开，读起来像目录。
-   ========================================================================== */
-
-.settings-group {
-  margin: 22px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-}
-
-/* 第一个组标题不需要上间距（上面已经有 body 的 padding）。 */
-.settings-group:first-child {
-  margin-top: 0;
-}
-
-/* 组标题用主色的小方块做前缀，比纯文字更容易扫读。 */
-.settings-group::before {
-  content: '';
-  display: inline-block;
-  width: 3px;
-  height: 11px;
-  margin-right: 7px;
-  vertical-align: -1px;
-  border-radius: 1px;
-  background: var(--accent);
-}
 
 /* 「图片小说」角标：载体是 EPUB、阅读方式是漫画。用中性色而不是强调色 ——
    它是个说明，不是告警。 */
@@ -2514,6 +2682,9 @@ button[aria-disabled='true'] {
   font-size: var(--ui-size-sm);
 }
 
+.study-task-item .ocr-queue-meta { overflow-wrap: anywhere; }
+.study-task-item .ocr-queue-badge { min-width: 44px; }
+
 .ocr-queue-bar {
   height: 3px;
   border-radius: 2px;
@@ -2668,6 +2839,9 @@ button[aria-disabled='true'] {
 
 /* 顶部的词是**可点的按钮**（点一下变输入框），所以要把它做成不像按钮的样子。 */
 .wordcard-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-weight: 600;
   font-size: var(--ui-size);
   color: var(--text);
@@ -2676,11 +2850,13 @@ button[aria-disabled='true'] {
   border-radius: var(--radius);
   padding: 0 3px;
   max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: left;
+  cursor: pointer;
 }
+
+.wordcard-word-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wordcard-word::after { content: '✎'; opacity: 0.55; flex: none; }
+.wordcard-word:hover::after { opacity: 1; }
 
 .wordcard-word:hover {
   border-color: var(--border);
@@ -2749,10 +2925,9 @@ button[aria-disabled='true'] {
 /* ---- 翻译 / LLM 分析栏 ---- */
 .wordcard-translation,
 .wordcard-llm {
-  margin-top: 10px;
+  margin-top: 8px;
   padding-top: 8px;
-  /* 分栏之间要有看得见的分隔——之前用 --border-soft，在浅色主题下几乎看不见，
-     几栏内容糊成一片，用户分不清哪一栏是哪一栏。 */
+  /* 相邻分栏只画这一条顶线；词典不再额外画底线。 */
   border-top: 1px solid var(--border);
 }
 
@@ -2988,16 +3163,6 @@ button[aria-disabled='true'] {
 
 .comic-viewport.can-pan.is-panning:active {
   cursor: grabbing;
-}
-
-/* 顶部词旁边的编辑按钮：常驻但低调，hover 时才明显——不跟词本身抢注意力。 */
-.wordcard-edit {
-  opacity: 0.55;
-  flex: none;
-}
-
-.wordcard-edit:hover {
-  opacity: 1;
 }
 
 /* ---- 词卡里的逐词分析列表 ---- */

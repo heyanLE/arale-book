@@ -35,6 +35,7 @@ function card(word: string, analyses: WordCardAnalysis[], context = '吾輩は�
     dictionaryId: 'd1',
     dictionaryTitle: 'd',
     dictionaryReading: '',
+    source: null,
     note: '',
     analyses,
     createdAt: 1,

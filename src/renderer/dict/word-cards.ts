@@ -20,6 +20,7 @@ import type {
   WordCard,
   WordCardAnalysis,
   WordCardDraft,
+  WordCardSource,
 } from '@shared/types';
 import { collectContainedAnalyses, sortAnalyses, type AnalysedSource } from '@core/cards/analyses';
 import { api, call, run } from '../lib/api';
@@ -35,6 +36,7 @@ export interface WordCardLookupInput {
   anchor: AnchorRect;
   /** 词典结果。点击时已查好；划词时由调用方先查。 */
   result: LookupResult | null;
+  source: WordCardSource | null;
 }
 
 export interface WordCardPopupState extends WordCardLookupInput {
@@ -89,7 +91,9 @@ export interface UseWordCardsResult {
    * 它只在词卡上用，为它把 App → ReaderView → 两个阅读器一路加参数不值得。
    */
   llmProfiles: LlmProfile[];
+  llmDefaultId: string | null;
   translationProfiles: TranslationProfile[];
+  translationDefaultId: string | null;
   translatePopup: (id: string) => void;
   selectTranslationProfile: (id: string, profileId: string | null) => void;
 }
@@ -165,7 +169,9 @@ export function useWordCards(bookId: string): UseWordCardsResult {
   const [cards, setCards] = useState<WordCard[]>([]);
   const [panelOpen, setPanelOpenState] = useState(false);
   const [llmProfiles, setLlmProfiles] = useState<LlmProfile[]>([]);
+  const [llmDefaultId, setLlmDefaultId] = useState<string | null>(null);
   const [translationProfiles, setTranslationProfiles] = useState<TranslationProfile[]>([]);
+  const [translationDefaultId, setTranslationDefaultId] = useState<string | null>(null);
   /**
    * 最新词卡列表的 ref。
    *
@@ -179,14 +185,14 @@ export function useWordCards(bookId: string): UseWordCardsResult {
   useEffect(() => {
     void api.llm
       .settings()
-      .then((settings) => setLlmProfiles(settings.profiles))
+      .then((settings) => { setLlmProfiles(settings.profiles); setLlmDefaultId(settings.activeProfileId); })
       .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     void api.translation
       .settings()
-      .then((settings) => setTranslationProfiles(settings.profiles))
+      .then((settings) => { setTranslationProfiles(settings.profiles); setTranslationDefaultId(settings.activeProfileId); })
       .catch(() => undefined);
   }, []);
 
@@ -316,6 +322,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
         dictionaryId: hit?.term.dictionaryId ?? '',
         dictionaryTitle: hit?.term.dictionaryTitle ?? '',
         dictionaryReading: hit?.term.reading ?? '',
+        source: popup.source,
       };
       patchPopup(id, { saving: true });
       void (async () => {
@@ -506,6 +513,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
         length: card.length,
         anchor: panelAnchor(),
         result: result ?? null,
+        source: card.source,
       });
       patchPopup(id, {
         // 打开时回到保存那一刻选中的词典，而不是每次都跳回最佳命中。
@@ -560,7 +568,9 @@ export function useWordCards(bookId: string): UseWordCardsResult {
     removeCard,
     isSaved,
     llmProfiles,
+    llmDefaultId,
     translationProfiles,
+    translationDefaultId,
     translatePopup,
     selectTranslationProfile,
   };

@@ -15,10 +15,7 @@
  * 2. 已经生成过且没要求 `force` 时直接复用现有产物。冻结契约的 `SegmentJobResult`
  *    **没有** `skipped` 字段（那是 `OcrJobResult` 的），所以「跳过」只能表达成
  *    「`ok:true` + 现有计数 + 没有 `error`」。不能为了好看去改冻结文件。
- * 3. 没装词典也照样产出产物（`dictionaryCount: 0`）：那时注入的切词器会走空索引，
- *    对每个非空白字符产出 `matched:false` 的单码点占位——那是 `core/dict` 的行为，
- *    这里不再兜底。产物仍然有用：UI 至少能画出「哪些位置是文字」的骨架，
- *    而且用户装好词典后重新生成即可。
+ * 3. 没装词典也照样由 Kuromoji 按词切分；词典只决定 matched 标志。
  */
 
 import * as fs from 'node:fs';
@@ -33,6 +30,7 @@ import type {
   SegmentUnit,
   SegmentVocabularyEntry,
 } from '../../shared/types';
+import { CURRENT_SEGMENT_ENGINE } from '../../shared/types';
 import type { AraleEvents } from '../../shared/ipc';
 import { writeJsonAtomic } from '../../core/util/atomic-json';
 import {
@@ -49,7 +47,7 @@ import { emitEvent } from '../events';
 export const SEGMENTS_FILE = 'segments.json';
 
 /** 生成器标识：写进产物，将来换算法时用它判断「旧产物要不要重生成」。 */
-export const SEGMENT_ENGINE = 'dictionary-longest-match';
+export const SEGMENT_ENGINE = CURRENT_SEGMENT_ENGINE;
 
 /**
  * 进度节流：每 50 个单元或每 250 ms 最多发一次（谁先到算谁）。
@@ -62,8 +60,10 @@ const PROGRESS_INTERVAL_MS = 250;
 
 export interface SegmentServiceOptions {
   getBook: (bookId: string) => BookRecord | null;
-  /** 词典索引（由 ipc 层注入，避免这里依赖具体实现）。 */
-  dictionary: { segment: (text: string) => SegmentRecord[]; count: number; signature: string; ready: boolean };
+  /** 词典只标记收录状态，不决定词边界。 */
+  dictionary: { count: number; signature: string; ensureLoaded: () => Promise<unknown> };
+  /** 按形态分析切出原文区间。 */
+  tokenizeText: (text: string) => Promise<SegmentRecord[]>;
   /** 漫画文字层来源；返回每页的 blocks。 */
   readComicText: (book: BookRecord) => Array<{ pageUrl: string; blocks: Array<{ lines: string[] }> }>;
   /** 小说章节来源；返回按 spine 顺序的 {index, href, title, plainText}。 */
@@ -137,7 +137,7 @@ export class SegmentService {
     return {
       bookId: typeof parsed['bookId'] === 'string' ? parsed['bookId'] : bookId,
       generatedAt: typeof parsed['generatedAt'] === 'number' ? parsed['generatedAt'] : 0,
-      engine: typeof parsed['engine'] === 'string' ? parsed['engine'] : SEGMENT_ENGINE,
+      engine: typeof parsed['engine'] === 'string' ? parsed['engine'] : 'legacy-unknown',
       dictionarySignature: typeof parsed['dictionarySignature'] === 'string' ? parsed['dictionarySignature'] : '',
       dictionaryCount: typeof parsed['dictionaryCount'] === 'number' ? parsed['dictionaryCount'] : 0,
       units: parsed['units'] as SegmentUnit[],
@@ -148,7 +148,7 @@ export class SegmentService {
   /**
    * 起一个后台任务并**立刻**返回。
    *
-   * 同一本书已在跑 → 返回「进行中」；没有 `force` 且已有产物 → 返回现有计数（跳过）。
+   * 同一本书已在跑 → 返回「进行中」；没有 `force` 且已有当前算法产物 → 返回现有计数。
    */
   start(bookId: string, options: { force?: boolean } = {}): SegmentJobResult {
     if (this.jobs.has(bookId)) {
@@ -160,9 +160,9 @@ export class SegmentService {
 
     if (options.force !== true) {
       const existing = this.read(bookId);
-      // 已经生成过：把现有计数原样报回去。契约里没有 skipped 字段，所以「跳过」
+      // 当前算法已经生成过：把现有计数原样报回去。契约里没有 skipped 字段，所以「跳过」
       // 与「跑完」在结果上无法区分——这是有意为之：对调用方来说两者都是「现在可用」。
-      if (existing !== null) return summarize(bookId, existing);
+      if (existing !== null && existing.engine === SEGMENT_ENGINE) return summarize(bookId, existing);
     }
 
     const job: RunningJob = { cancelled: false, finished: undefined as never };
@@ -221,20 +221,15 @@ export class SegmentService {
     // 「后台任务」就只是句谎话——整个 IPC 会卡到整本书切完为止。
     await yieldToEventLoop();
 
+    await this.options.dictionary.ensureLoaded();
+    const dictionary = {
+      count: this.options.dictionary.count,
+      signature: this.options.dictionary.signature,
+    };
+
     const textUnits = this.collectUnits(book);
     const total = textUnits.length;
     this.emit({ bookId, done: 0, total, stage: 'segmenting' });
-
-    const deps = {
-      // 包一层方法调用而不是直接传 `this.options.dictionary.segment`：
-      // 注入方可能是个带 `this` 的类实例方法，裸传会丢绑定。
-      segmentText: (text: string): SegmentRecord[] => this.options.dictionary.segment(text),
-      dictionary: {
-        count: this.options.dictionary.count,
-        signature: this.options.dictionary.signature,
-      },
-      engine: SEGMENT_ENGINE,
-    };
 
     const units: SegmentUnit[] = [];
     let tokenCount = 0;
@@ -256,10 +251,15 @@ export class SegmentService {
 
       const source = textUnits[index];
       if (source === undefined) continue;
+      const parsed = source.text.trim() === '' ? [] : await this.options.tokenizeText(source.text);
 
       // 逐单元复用 core 的纯逻辑（夹紧偏移、空文本、词表规则都在那边），
       // 而不是在这里重写一遍——重写就会有两份会漂移的归一化规则。
-      const one = segmentUnits([source], deps);
+      const one = segmentUnits([source], {
+        segmentText: () => parsed,
+        dictionary,
+        engine: SEGMENT_ENGINE,
+      });
       const produced = one.units[0];
       if (produced !== undefined) {
         units.push(produced);
@@ -285,8 +285,8 @@ export class SegmentService {
       bookId,
       generatedAt: Date.now(),
       engine: SEGMENT_ENGINE,
-      dictionarySignature: this.options.dictionary.signature,
-      dictionaryCount: this.options.dictionary.count,
+      dictionarySignature: dictionary.signature,
+      dictionaryCount: dictionary.count,
       units,
       vocabulary,
     };

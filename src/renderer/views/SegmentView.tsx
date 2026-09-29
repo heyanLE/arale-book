@@ -11,12 +11,15 @@
  * 3. 已生成 → 词表 + 生成时间 + 用的是哪本词典，并提示「换了词典要重新生成」。
  */
 
-import { useMemo, useState } from 'react';
-import type { BookSegments, SegmentJobResult, SegmentProgress } from '@shared/types';
+import { useEffect, useMemo, useState } from 'react';
+import { CURRENT_SEGMENT_ENGINE, type BookSegments, type SegmentJobResult, type SegmentProgress } from '@shared/types';
+import { StudyPanel } from './StudyPanel';
 
 export interface SegmentViewProps {
   bookId: string;
   bookTitle: string;
+  initialTab?: 'vocabulary' | 'study';
+  focusToken?: number;
   /** 这本书最近一次分词任务的结束状态（没跑过为 null）。 */
   status: SegmentJobResult | null;
   /** 正在进行的任务进度（没在跑为 null）。 */
@@ -25,6 +28,7 @@ export interface SegmentViewProps {
   segments: BookSegments | null;
   /** 加载中标志（首次读盘）。 */
   loading: boolean;
+  isComic: boolean;
   onBack: () => void;
   onGenerate: (force: boolean) => void;
   onClear: () => void;
@@ -46,13 +50,16 @@ function formatTime(ms: number): string {
 }
 
 export function SegmentView(props: SegmentViewProps): JSX.Element {
-  const { bookTitle, status, progress, segments, loading, onBack, onGenerate, onClear, onReload } =
+  const { bookId, bookTitle, initialTab = 'vocabulary', focusToken, status, progress, segments, loading, isComic, onBack, onGenerate, onClear, onReload } =
     props;
 
   const [filter, setFilter] = useState('');
   const [onlyMatched, setOnlyMatched] = useState(false);
+  const [mode, setMode] = useState<'vocabulary' | 'study'>(initialTab);
+  useEffect(() => setMode(initialTab), [bookId, focusToken, initialTab]);
 
   const running = progress !== null;
+  const legacy = segments !== null && segments.engine !== CURRENT_SEGMENT_ENGINE;
 
   const vocabulary = useMemo(() => {
     const entries = segments?.vocabulary ?? [];
@@ -112,14 +119,26 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
             onClick={() => onGenerate(segments !== null)}
             title={
               segments
-                ? '用当前词典重新分词（换词典或改过文字层后应该重跑）'
-                : '按当前词典给这本书分词并保存词表'
+                ? '用日语形态分析重新分词（换词典或改过文字层后建议重跑）'
+                : '按日语词形给这本书分词并保存词表'
             }
           >
             {running ? '生成中…' : segments ? '重新生成' : '生成分词'}
           </button>
         </div>
       </div>
+
+      {isComic && <div className="segment-tabs" role="tablist" aria-label="分词页面">
+        <button type="button" role="tab" aria-selected={mode === 'vocabulary'} onClick={() => setMode('vocabulary')}>原始词表</button>
+        <button type="button" role="tab" aria-selected={mode === 'study'} onClick={() => setMode('study')}>Anki 制卡</button>
+      </div>}
+
+      {mode === 'study' && isComic && segments && <StudyPanel bookId={bookId} bookTitle={bookTitle} segmentGeneratedAt={segments.generatedAt} />}
+      {mode === 'study' && isComic && !segments && <div className="segment-empty">请先生成分词结果，再制作 Anki 词卡。</div>}
+
+      {mode === 'vocabulary' && <>
+
+      {legacy && <div className="segment-error">这份词表仍是旧的词典逐字切分结果。点击“重新生成”即可改用日语形态分析。</div>}
 
       {running && progress && (
         <div className="segment-progress">
@@ -140,9 +159,9 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
         <div className="segment-empty">
           <div className="segment-empty-title">这本书还没有分词结果</div>
           <div className="segment-empty-hint">
-            点右上角「生成分词」会按**当前词典**把全书切词并保存成词表。
+            点右上角「生成分词」会用日语形态分析把全书切词并保存成词表；词典只标记是否收录。
             <br />
-            它不影响阅读，也不会改动原文；换词典之后点「重新生成」即可。
+            它不影响阅读，也不会改动原文；换词典之后点「重新生成」可刷新收录标记。
             <br />
             漫画要先有文字层（`.mokuro` / `manga.json`，或者跑一次 OCR）才有东西可分。
           </div>
@@ -176,7 +195,7 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
             <span className="segment-meta">
               显示 {vocabulary.length} / {segments.vocabulary.length} 个词 · 词典收录{' '}
               {Math.round(matchedRatio * 100)}%
-              {segments.dictionaryCount === 0 && '（当前没装词典，只有占位切分）'}
+              {segments.dictionaryCount === 0 && '（当前没装词典，仍可按词切分）'}
             </span>
           </div>
 
@@ -203,6 +222,7 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
           )}
         </>
       )}
+      </>}
     </div>
   );
 }

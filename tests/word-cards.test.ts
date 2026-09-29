@@ -67,6 +67,7 @@ function card(overrides: Partial<WordCard> = {}): WordCard {
     dictionaryId: '',
     dictionaryTitle: '',
     dictionaryReading: '',
+    source: null,
     note: '',
     analyses: [],
     createdAt: 0,
@@ -116,6 +117,23 @@ test('addCard：字段齐、默认值对、写在书目录而不是 content/', (
   assert.equal(listed.length, 1);
   assert.deepEqual(listed[0], created, '读回来的应与写入返回的一致');
   assert.equal(countCards(bookId), 1);
+});
+
+test('词卡来源页持久化，旧卡无来源仍能读取', () => {
+  const bookId = 'bk_source';
+  const source = { kind: 'comic' as const, pageIndex: 12, pageUrl: 'images/p013.png' };
+  const saved = addCard(bookId, draft({ source }));
+  assert.deepEqual(saved.source, source);
+  assert.deepEqual(listCards(bookId)[0]?.source, source);
+  const refreshed = addCard(bookId, draft({ source: { kind: 'comic', pageIndex: 14, pageUrl: 'images/p015.png' } }));
+  assert.equal(refreshed.source?.kind === 'comic' ? refreshed.source.pageIndex : -1, 14);
+
+  const epub = addCard('bk_epub_source', draft({ source: { kind: 'epub', spineIndex: 2 } }));
+  assert.deepEqual(listCards('bk_epub_source')[0]?.source, epub.source);
+
+  const legacyBookId = 'bk_legacy_source';
+  seed(legacyBookId, [{ ...card({ id: 'legacy' }), source: undefined }]);
+  assert.equal(listCards(legacyBookId)[0]?.source, null);
 });
 
 test('listCards：createdAt 倒序；同一时刻按 id 倒序', () => {

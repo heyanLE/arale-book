@@ -134,6 +134,26 @@ const api: AraleApi = {
     cancel: (bookId) => ipcRenderer.invoke(IPC.segmentCancel, bookId),
     clear: (bookId) => ipcRenderer.invoke(IPC.segmentClear, bookId),
   },
+  study: {
+    read: (bookId) => ipcRenderer.invoke(IPC.studyRead, bookId),
+    generate: (bookId) => ipcRenderer.invoke(IPC.studyGenerate, bookId),
+    cancel: (bookId) => ipcRenderer.invoke(IPC.studyCancel, bookId),
+    patch: (bookId, candidateId, patch) => ipcRenderer.invoke(IPC.studyPatch, bookId, candidateId, patch),
+    patchMany: (bookId, candidateIds, patch) => ipcRenderer.invoke(IPC.studyPatchMany, bookId, candidateIds, patch),
+    addPhrase: (bookId, ref, expression, reading) => ipcRenderer.invoke(IPC.studyAddPhrase, bookId, ref, expression, reading),
+    export: (bookId) => ipcRenderer.invoke(IPC.studyExport, bookId),
+    directFilter: (bookId, levels, includeUnknown, options) => ipcRenderer.invoke(IPC.studyDirectFilter, bookId, levels, includeUnknown, options),
+    runFilter: (bookId, request) => ipcRenderer.invoke(IPC.studyRunFilter, bookId, request),
+    applyCompletedFilter: (bookId) => ipcRenderer.invoke(IPC.studyApplyCompletedFilter, bookId),
+    clearFilterProgress: (bookId) => ipcRenderer.invoke(IPC.studyClearFilterProgress, bookId),
+    runCards: (bookId, request) => ipcRenderer.invoke(IPC.studyRunCards, bookId, request),
+    taskQueue: () => ipcRenderer.invoke(IPC.studyTaskQueue),
+    cancelTask: (id) => ipcRenderer.invoke(IPC.studyTaskCancel, id),
+    dismissTask: (id) => ipcRenderer.invoke(IPC.studyTaskDismiss, id),
+    setImageMode: (bookId, mode) => ipcRenderer.invoke(IPC.studySetImageMode, bookId, mode),
+    patchCard: (bookId, candidateId, patch) => ipcRenderer.invoke(IPC.studyPatchCard, bookId, candidateId, patch),
+    exportPackage: (bookId) => ipcRenderer.invoke(IPC.studyExportPackage, bookId),
+  },
   on: (event, handler) => {
     ensureEventBridge();
     const id = nextSubscriptionId++;

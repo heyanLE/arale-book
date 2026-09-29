@@ -2,13 +2,12 @@
  * 分词 core —— 把「文本单元」变成可落盘的 `SegmentUnit[]` + 词表。
  *
  * **纯函数**：不 import Node/Electron、不碰磁盘、不碰词典实例。真正切词的那一步由
- * 调用方注入（主进程注入 `DictionaryStore.segment`，测试里注入假实现），于是：
+ * 调用方注入（主进程注入 Kuromoji 结果，测试里注入假实现），于是：
  * - core 层可以脱离 Electron 单测；
  * - 「谁是文本单元」「什么是词典命中」这些策略留在 main 层，core 只负责**归一化**：
  *   夹紧偏移、处理空文本、汇总词表。
  *
- * 切词本身**不在这里重新实现**：`core/dict/lookup.ts` 的 `segment()` 已经做了
- * 词典驱动的贪心最长匹配，重写一遍只会得到两份会各自漂移的行为。
+ * 切词边界**不在这里重新实现**：主进程用形态分析取得 token，词典仅标记是否收录。
  */
 
 import type { SegmentRecord, SegmentUnit, SegmentVocabularyEntry } from '../../shared/types';
@@ -29,14 +28,14 @@ export interface SegmenterDeps {
   segmentText: (text: string) => SegmentRecord[];
   /** 词典指纹与部数，写进产物（换词典后旧分词应被判定为过期）。 */
   dictionary: { count: number; signature: string };
-  /** 生成器标识，如 'dictionary-longest-match'。 */
+  /** 生成器标识，如 'kuromoji-morph-v1'。 */
   engine: string;
 }
 
 export interface SegmentUnitsResult {
   units: SegmentUnit[];
   vocabulary: SegmentVocabularyEntry[];
-  /** 一共切出多少个词（含重复、含未命中占位）。 */
+  /** 一共切出多少个形态分析 token（含重复与助词）。 */
   tokenCount: number;
 }
 
@@ -71,7 +70,7 @@ export function segmentUnits(
 
   for (const unit of units) {
     const text = typeof unit.text === 'string' ? unit.text : '';
-    // 空白文本不值得问词典：既省一次扫描，也保证「没文字」永远得到空 token 列表。
+    // 空白文本不需要分词：既省一次解析，也保证「没文字」得到空 token 列表。
     const tokens = text.trim().length === 0 ? [] : sanitizeTokens(text, callSegmentText(text, deps));
     tokenCount += tokens.length;
     out.push({ ref: unit.ref, text, tokens, label: unit.label });
@@ -115,6 +114,7 @@ function sanitizeTokens(text: string, tokens: readonly SegmentRecord[]): Segment
       start,
       end,
       matched: token.matched === true,
+      ...(typeof token.partOfSpeech === 'string' ? { partOfSpeech: token.partOfSpeech } : {}),
     });
   }
 

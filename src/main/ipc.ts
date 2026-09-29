@@ -34,6 +34,17 @@ import type {
   PageText,
   ReadingPosition,
   SegmentToken,
+  StudyCandidate,
+  StudyCandidatePatch,
+  DirectFilterOptions,
+  StudyCardPatch,
+  StudyCardRunRequest,
+  StudyImageMode,
+  StudyTaskEntry,
+  StudyTaskQueueState,
+  StudyExportResult,
+  StudyFilterRunRequest,
+  StudyList,
   TranslationRequest,
 } from '../shared/types';
 import {
@@ -62,6 +73,8 @@ import type { LlmService } from './llm/service';
 import type { TranslationService } from './translation/service';
 import type { OcrService } from './ocr/service';
 import type { SegmentService } from './segment/service';
+import type { StudyService } from './study/service';
+import type { StudyTaskQueue } from './study/task-queue';
 import { getChapterContent, getPageText, invalidateContentCache } from './reader/content';
 import { emitEvent } from './events';
 import { bookUrl } from './reader/protocol';
@@ -73,18 +86,23 @@ export interface Services {
   dict: DictionaryService;
   ocr: OcrService;
   segment: SegmentService;
+  study: StudyService;
+  studyTasks: StudyTaskQueue;
   extensions: ExtensionService;
   llm: LlmService;
   translation: TranslationService;
 }
 
 export function registerIpc(services: Services): void {
-  const { store, positions, dict, ocr, segment, extensions, llm, translation } = services;
+  const { store, positions, dict, ocr, segment, study, studyTasks, extensions, llm, translation } = services;
 
   const requireBook = (bookId: string): BookRecord => {
     const book = store.get(bookId);
     if (!book) throw new Error(`书不存在（可能已被删除）：${bookId}`);
     return book;
+  };
+  const ensureStudyIdle = (bookId: string): void => {
+    if (studyTasks.isBusy(bookId)) throw new Error('这本书有排队或运行中的 AI／翻译任务，请先等待或取消');
   };
 
   const handle = <T>(channel: string, fn: (...args: never[]) => Promise<T> | T): void => {
@@ -362,6 +380,61 @@ export function registerIpc(services: Services): void {
 
   handle(IPC.segmentClear, (bookId: string): void => {
     segment.clear(bookId);
+  });
+
+  handle(IPC.studyRead, (bookId: string): StudyList | null => study.read(bookId));
+  handle(IPC.studyGenerate, (bookId: string): Promise<StudyList> => { ensureStudyIdle(bookId); return study.generate(bookId); });
+  handle(IPC.studyCancel, (bookId: string): void => study.cancel(bookId));
+  handle(IPC.studyPatch, (bookId: string, candidateId: string, patch: StudyCandidatePatch): StudyCandidate => {
+    ensureStudyIdle(bookId); return study.patch(bookId, candidateId, patch);
+  });
+  handle(IPC.studyPatchMany, (bookId: string, candidateIds: string[], patch: StudyCandidatePatch): StudyList => {
+    ensureStudyIdle(bookId); return study.patchMany(bookId, candidateIds, patch);
+  });
+  handle(IPC.studyAddPhrase, (bookId: string, ref: string, expression: string, reading: string): StudyList => {
+    ensureStudyIdle(bookId); return study.addPhrase(bookId, ref, expression, reading);
+  });
+  handle(IPC.studyDirectFilter, (bookId: string, levels: number[], includeUnknown: boolean, options?: Partial<DirectFilterOptions>): StudyList => {
+    ensureStudyIdle(bookId); return study.directFilter(bookId, levels, includeUnknown, options);
+  });
+  handle(IPC.studyRunFilter, (bookId: string, request: StudyFilterRunRequest): StudyTaskEntry =>
+    studyTasks.enqueueFilter(bookId, request),
+  );
+  handle(IPC.studyApplyCompletedFilter, (bookId: string): StudyList => { ensureStudyIdle(bookId); return study.applyCompletedFilter(bookId); });
+  handle(IPC.studyClearFilterProgress, (bookId: string): StudyList => { ensureStudyIdle(bookId); return study.clearFilterProgress(bookId); });
+  handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): StudyTaskEntry =>
+    studyTasks.enqueueCards(bookId, request),
+  );
+  handle(IPC.studyTaskQueue, (): StudyTaskQueueState => studyTasks.queueState());
+  handle(IPC.studyTaskCancel, (id: string): void => studyTasks.cancel(id));
+  handle(IPC.studyTaskDismiss, (id: string): void => studyTasks.dismiss(id));
+  handle(IPC.studySetImageMode, (bookId: string, mode: StudyImageMode): StudyList => study.setImageMode(bookId, mode));
+  handle(IPC.studyPatchCard, (bookId: string, candidateId: string, patch: StudyCardPatch): StudyList => {
+    ensureStudyIdle(bookId); return study.patchCard(bookId, candidateId, patch);
+  });
+  handle(IPC.studyExportPackage, async (bookId: string): Promise<StudyExportResult> => {
+    requireBook(bookId);
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      title: '导出 Anki 卡组',
+      defaultPath: `aralebook-${bookId}.apkg`,
+      filters: [{ name: 'Anki 卡组', extensions: ['apkg'] }],
+    };
+    const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return { path: null, count: 0 };
+    return { path: picked.filePath, count: await study.exportPackage(bookId, picked.filePath) };
+  });
+  handle(IPC.studyExport, async (bookId: string): Promise<StudyExportResult> => {
+    requireBook(bookId);
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      title: '导出 Anki 词表',
+      defaultPath: `aralebook-${bookId}.txt`,
+      filters: [{ name: 'Anki 文本', extensions: ['txt'] }],
+    };
+    const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return { path: null, count: 0 };
+    return { path: picked.filePath, count: study.exportText(bookId, picked.filePath) };
   });
 
   // --- 单向通知 ---

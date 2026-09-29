@@ -39,13 +39,15 @@
     "node-unrar-js": "2.0.2",
     "pinyin-pro": "^3.27.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sql.js": "1.14.2"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.0.9",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "1.4.11",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",

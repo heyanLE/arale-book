@@ -53,9 +53,10 @@ npm start
 * 可配置的阅读器：单页与双页跨页（配对偏移 0–4）、阅读方向左到右 / 右到左、缩放平移、沉浸模式。
 * 小说阅读：目录树与章节导航、阅读位置记忆、字号 / 字体 / 行高 / 边距，支持竖排（縦書き）。
 * 点词或划词查词典，支持 Yomitan 格式词典；随包内嵌三部小词典，开箱即用。
-* 词卡：可固定多张、可改标题、可存进这本书的词卡夹，含上下文里的子句分析。
+* 设置可管理 LLM、翻译配置及词卡弹窗的默认选择；内置免 Key 的 Bing 翻译，漫画识别时可按书选择 OCR 引擎。
+* 词卡：可固定多张、可改标题、可存进这本书的词卡夹，含上下文里的子句分析；新词卡记住来源页/章，可跳转并返回。
 * 文字识别（OCR）：系统 OCR（零下载）或漫画专用的 ONNX 扩展，把漫画页变成可点查的文字层。
-* 整本书分词并生成词表，可反复重跑。
+* 整本书分词并生成词表；漫画可按 JLPT 参考等级审核候选词、补录短语并导出 Anki 文本。
 * LLM 词义分析：任意 OpenAI 兼容接口，本地服务（Ollama 等）也可以。
 * 深浅色主题，跟随系统。
 * 以及更多…
@@ -78,7 +79,7 @@ npm start
 * 词典只支持 Yomitan 格式，MDX / StarDict / DSL 未实现。
 * `.zip` / `.cbz` 会整体读进内存，单个超过 2 GB 的包会被拒绝（`.rar` / `.7z` 走流式解包，无此限制）。
 * 系统 OCR 为屏幕文字与文档优化；ONNX 扩展使用漫画专用模型，但竖排、拟声词、手写体仍可能误识别。
-* 「一键制卡」（导出 Anki 卡组）还没做，词卡目前只存在本地。
+* 漫画分词页可生成 JLPT 参考等级候选、人工审核并导出 Anki 文本；尚不支持带截图的 `.apkg` 卡组。
 * 没有云同步、没有联网元数据刮削、单窗口。
 
 ### 致谢
@@ -87,6 +88,7 @@ npm start
 * 日语去屈折数据来自 [Yomitan](https://github.com/yomitan/yomitan)（BSD-3-Clause）。
 * 异体字表由 [kanji-processor](https://github.com/yomidevs/kanji-processor)（MIT）生成。
 * 随包内嵌的词典来自 [MarvNC/yomitan-dictionaries](https://github.com/MarvNC/yomitan-dictionaries)。
+* 漫画制卡使用的社区 JLPT 参考数据来自 [stephenmk/yomitan-jlpt-vocab](https://github.com/stephenmk/yomitan-jlpt-vocab)，来源和许可见 [数据署名](data/JLPT-ATTRIBUTION.md)。
 
 ### 免责声明
 

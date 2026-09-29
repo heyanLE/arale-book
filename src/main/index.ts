@@ -27,6 +27,10 @@ import { setImportDefaults } from './library/importer';
 import { readAppDefaults } from './settings';
 import { OcrService } from './ocr/service';
 import { SegmentService } from './segment/service';
+import { morphologyToRecords } from '../core/segment/morph';
+import { StudyService, chooseMeaning } from './study/service';
+import { StudyTaskQueue } from './study/task-queue';
+import { tokenizeJapanese } from './study/tokenizer';
 import { SystemOcrEngine } from './ocr/providers/system';
 import { ExtensionOcrEngine } from './ocr/providers/extension';
 import {
@@ -188,15 +192,9 @@ async function bootstrap(): Promise<void> {
   // 分词：同样是可选能力，同样在后台跑。文本来源按格式分两条。
   const segment = new SegmentService({
     getBook: (bookId) => store.get(bookId),
+    tokenizeText: async (text) => morphologyToRecords(text, await tokenizeJapanese(text), (expression) => dict.hasExpression(expression)),
     dictionary: {
-      segment: (text) =>
-        dict.segment(text).map((token) => ({
-          surface: token.surface,
-          baseForm: token.baseForm,
-          start: token.start,
-          end: token.end,
-          matched: token.matched,
-        })),
+      ensureLoaded: () => dict.status().loaded ? Promise.resolve() : dict.ensureLoaded(),
       // 用 getter 而不是快照：词典是在窗口出来之后才在后台载入的，
       // 构造时取一次会永远拿到「0 部词典」。
       get count() {
@@ -209,9 +207,6 @@ async function bootstrap(): Promise<void> {
           .map((item) => `${item.id}:${item.termCount}`)
           .sort()
           .join('|');
-      },
-      get ready() {
-        return dict.ready;
       },
     },
     readComicText: (book) => {
@@ -249,8 +244,30 @@ async function bootstrap(): Promise<void> {
     onFinished: () => emitEvent('library:changed', { reason: 'update' }),
   });
 
+  let studyTasks: StudyTaskQueue | null = null;
+  const study = new StudyService({
+    getBook: (bookId) => store.get(bookId),
+    getSegments: (bookId) => segment.read(bookId),
+    ensureDictionary: () => dict.ensureLoaded(),
+    lookupMeaning: (expression, reading) => chooseMeaning(dict.lookup(expression, 0).results, expression, reading),
+    progress: (bookId, done, total) => emitEvent('study:progress', { bookId, done, total }),
+    workflowProgress: (progress) => {
+      emitEvent('study:workflow-progress', progress);
+      studyTasks?.onProgress(progress);
+    },
+    llm,
+    translation,
+  });
+  studyTasks = new StudyTaskQueue({
+    study,
+    getBook: (bookId) => store.get(bookId),
+    profileSignature: (profileId) => llm.profileSignature(profileId),
+    onChange: (state) => emitEvent('study:queue', state),
+    onDone: (task) => emitEvent('study:done', task),
+  });
+
   installBookProtocol((bookId) => store.get(bookId));
-  registerIpc({ store, positions, dict, ocr, segment, extensions, llm, translation });
+  registerIpc({ store, positions, dict, ocr, segment, study, studyTasks, extensions, llm, translation });
 
   // 命令行里带的文件（Windows/Linux）。此时窗口还没建，队列会先攒着，
   // 等 `did-finish-load` 再派发。

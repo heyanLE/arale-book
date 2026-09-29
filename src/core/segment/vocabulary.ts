@@ -13,6 +13,8 @@ import type { SegmentUnit, SegmentVocabularyEntry } from '../../shared/types';
  * UI 那一栏放不下更多；产物也没必要为了「见过 300 种写法」而膨胀。
  */
 const MAX_SURFACES = 8;
+const FUNCTION_POS = new Set(['助詞', '助動詞', '記号']);
+const SINGLE_KANA = /^[\p{Script=Hiragana}\p{Script=Katakana}]$/u;
 
 /**
  * 归一化：去掉首尾空白 + **只折叠 ASCII 大小写**。
@@ -53,7 +55,11 @@ export function buildVocabulary(units: readonly SegmentUnit[]): SegmentVocabular
     const tokens = Array.isArray(unit?.tokens) ? unit.tokens : [];
     for (const token of tokens) {
       if (!token) continue;
-      // 查不到词典时 `baseForm` 为 null，退回表面形——契约里 `base` 的语义就是这个。
+      // 形态分析会把「が」「を」等助词独立出来；它们应保留在位置数据中，
+      // 但不是供用户制卡的词表项。未知的单个假名也不再充满词表。
+      if (FUNCTION_POS.has(token.partOfSpeech ?? '')) continue;
+      if (!token.matched && SINGLE_KANA.test(token.surface)) continue;
+      // 形态分析没有基本形时 `baseForm` 为 null，退回表面形。
       const raw = (token.baseForm ?? token.surface ?? '').trim();
       const key = normalizeTerm(raw);
       // 空的去重键既没法显示也点不开，直接跳过（坏数据不该污染词表）。

@@ -43,6 +43,7 @@ export function WordCardPanel({ cards, onOpen, onRemove, onClose }: WordCardPane
                 title="打开这张词卡"
               >
                 <span className="wordcard-item-word">{card.word}</span>
+                {card.source && <span className="wordcard-item-source mono">{card.source.kind === 'comic' ? `第 ${card.source.pageIndex + 1} 页` : `第 ${card.source.spineIndex + 1} 章`}</span>}
                 {card.dictionaryExpression !== '' &&
                   card.dictionaryExpression !== card.word && (
                     <span className="wordcard-item-dict">{card.dictionaryExpression}</span>

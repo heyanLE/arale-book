@@ -17,6 +17,7 @@ import { makeDictId } from '../util/id';
 import { byNaturalOrder } from '../util/natural-sort';
 import { resolveInside } from '../util/paths';
 import { lookup, segment, type LookupOptions } from './lookup';
+import { normalizeQuery } from './normalize';
 import { emptyTermIndex, importYomitanZip, loadTermIndex, type TermIndex } from './yomitan';
 
 const META_FILE = 'meta.json';
@@ -134,6 +135,13 @@ export class DictionaryStore {
   segment(text: string, options?: LookupOptions): SegmentToken[] {
     if (!this.loaded) return segment(text, emptyTermIndex(), options);
     return segment(text, this.index, options);
+  }
+
+  /** 只用于给形态分析结果标记“词典收录”，不参与词边界判断。 */
+  hasExpression(expression: string): boolean {
+    if (!this.loaded) return false;
+    return (this.index.byKey.get(normalizeQuery(expression)) ?? [])
+      .some((term) => term.expression === expression);
   }
 
   /** true 表示 `load()` 已完成且至少有一本启用词典。 */

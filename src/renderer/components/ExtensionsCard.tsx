@@ -45,7 +45,7 @@ export function ExtensionsCard(props: ExtensionsCardProps): JSX.Element {
   return (
     <section className="settings-card">
       <div className="settings-card-head">
-        <h2 className="settings-card-title">扩展</h2>
+        <h2 className="settings-card-title">OCR 扩展与仓库</h2>
         <div className="settings-card-actions">
           <button type="button" className="btn btn-sm" onClick={onRefresh} disabled={loading}>
             {loading ? '刷新中…' : '刷新清单'}

@@ -12,6 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +67,10 @@ const child = spawn(
     '--disable-gpu',
     '--disable-software-rasterizer',
     '--disable-dev-shm-usage',
+    // 用户同时操作另一个窗口时，后台 rAF 被暂停会让若干交互断言一直等不到结果。
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
   ],
   { cwd: root, env: electronEnv, stdio: ['ignore', 'pipe', 'pipe'] },
 );
@@ -167,6 +172,8 @@ function connect(wsUrl) {
 // ---------------------------------------------------------------------------
 
 let client = null;
+let studyLlmServer = null;
+let studyTranslationServer = null;
 try {
   const target = await waitForTarget();
   client = await connect(target.webSocketDebuggerUrl);
@@ -954,6 +961,135 @@ try {
   })()`);
   check('设置页有「扩展」卡片', extCard?.hasCard === true, JSON.stringify(extCard?.titles));
   check('扩展卡片列出了条目', (extCard?.rows ?? 0) >= 1, JSON.stringify(extCard));
+  const settingsOrder = extCard?.titles ?? [];
+  check('设置按功能卡片排列，没有通用/小说/漫画分组',
+    (await client.evaluate("document.querySelectorAll('.settings-group, .settings-nav').length")) === 0 &&
+    ['LLM 配置', '翻译引擎', '词卡弹窗', 'OCR 默认引擎', 'OCR 扩展与仓库', '小说阅读器配置', '漫画阅读器配置'].every((title) => settingsOrder.includes(title)),
+    JSON.stringify(settingsOrder));
+  check('词卡、OCR 与扩展在两个阅读器配置之前',
+    ['LLM 配置', '翻译引擎', '词卡弹窗', 'OCR 默认引擎', 'OCR 扩展与仓库'].every((title) =>
+      settingsOrder.indexOf(title) >= 0 && settingsOrder.indexOf(title) < settingsOrder.indexOf('小说阅读器配置')),
+    JSON.stringify(extCard?.titles));
+  check('LLM 提示词和两个默认选择集中在词卡弹窗板块',
+    await client.evaluate(`(() => {
+      const cards = [...document.querySelectorAll('.settings-card')];
+      const popup = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+      const llm = cards.find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+      const sections = [...(popup?.querySelectorAll('.wordcard-settings-section') ?? [])];
+      return sections.length === 2 && sections[0]?.querySelector('h3')?.textContent === '翻译栏配置' &&
+        sections[0]?.querySelectorAll('select').length === 1 &&
+        sections[1]?.querySelector('h3')?.textContent === 'LLM 分析栏配置' &&
+        sections[1]?.querySelectorAll('select').length === 1 && !!sections[1]?.querySelector('textarea') &&
+        !llm?.querySelector('textarea');
+    })()`));
+  const originalPrompt = (await client.evaluate('window.arale.llm.settings()'))?.prompt ?? '';
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const area = card?.querySelector('textarea');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(area, '冒烟提示词 {{word}} {{context}}');
+    area.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('保存提示词'))?.click();
+  })()`);
+  await delay(200);
+  const savedPrompt = (await client.evaluate('window.arale.llm.settings()'))?.prompt;
+  check('词卡弹窗板块能独立保存 LLM 提示词', savedPrompt === '冒烟提示词 {{word}} {{context}}', String(savedPrompt));
+  await client.evaluate(`window.arale.llm.update({ prompt: ${JSON.stringify(originalPrompt)} })`);
+  const bingDefault = await client.evaluate('window.arale.translation.settings()');
+  check('Bing 免 Key 配置初次存在且为默认',
+    bingDefault?.profiles?.some((item) => item.id === bingDefault.activeProfileId && item.provider === 'bing' && !item.hasSecret));
+
+  await client.evaluate(`window.arale.llm.update({ profiles: [
+    { id: 'llm_smoke_a', name: '冒烟 A', baseUrl: 'http://127.0.0.1:8080/v1', model: 'a', temperature: 0.3, hasApiKey: false },
+    { id: 'llm_smoke_b', name: '冒烟 B', baseUrl: 'http://127.0.0.1:8080/v1', model: 'b', temperature: 0.3, hasApiKey: false }
+  ], activeProfileId: 'llm_smoke_a' })`);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('重新读取'))?.click();
+  })()`);
+  await delay(300);
+  const llmDraftState = await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
+    const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const select = popupCard?.querySelectorAll('select')[1];
+    if (select) { select.value = 'llm_smoke_b'; select.dispatchEvent(new Event('change', { bubbles: true })); }
+    return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
+  })()`);
+  await delay(300);
+  const llmAfterDefault = await client.evaluate(`(async () => ({
+    form: !!document.querySelector('.profile-new[aria-label="新建 LLM 配置"]'),
+    active: (await window.arale.llm.settings()).activeProfileId
+  }))()`);
+  check('LLM 新建草稿在词卡默认配置切换后仍保留', llmDraftState?.form && llmDraftState.defaultOptions === 3 && llmDraftState.radios === 0 && llmAfterDefault?.form && llmAfterDefault?.active === 'llm_smoke_b', JSON.stringify({ llmDraftState, llmAfterDefault }));
+  await client.evaluate(`(() => {
+    const input = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '新建测试 LLM'); input.dispatchEvent(new Event('input', { bubbles: true }));
+    const modelInput = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input[placeholder*="qwen2.5"]');
+    setter.call(modelInput, 'smoke-model'); modelInput.dispatchEvent(new Event('input', { bubbles: true }));
+    const keyInput = document.querySelector('.profile-new[aria-label="新建 LLM 配置"] input[type="password"]');
+    setter.call(keyInput, 'smoke-key'); keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`document.querySelector('.profile-new[aria-label="新建 LLM 配置"] .btn-primary')?.click()`);
+  await delay(200);
+  const savedNewLlm = await client.evaluate(`window.arale.llm.settings()`);
+  check('LLM 新配置点击独立保存后才进入已保存列表',
+    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.model === 'smoke-model') &&
+    (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建 LLM 配置\"]')")) === true);
+  check('LLM 新建时填写的 Key 一起保存且不会回显',
+    savedNewLlm?.profiles?.some((item) => item.name === '新建测试 LLM' && item.hasApiKey) &&
+    !JSON.stringify(savedNewLlm).includes('smoke-key'));
+  check('已保存 LLM 名称显示为固定文本', await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('LLM 配置'));
+    return [...(card?.querySelectorAll('.profile-identity') ?? [])].some((node) => node.textContent.trim() === '新建测试 LLM');
+  })()`));
+  await client.evaluate(`window.arale.llm.update({ profiles: [], activeProfileId: null })`);
+  await client.evaluate(`window.arale.translation.update({ profiles: [
+    { id: 'tr_smoke', name: '冒烟翻译', provider: 'microsoft', baseUrl: '', region: '', appId: '', hasSecret: false }
+  ], activeProfileId: 'tr_smoke' })`);
+  await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('重新读取'))?.click();
+  })()`);
+  await delay(300);
+  const translationDraftState = await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    [...(card?.querySelectorAll('button') ?? [])].find((button) => button.textContent.includes('新建配置'))?.click();
+    const popupCard = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('词卡弹窗'));
+    const select = popupCard?.querySelectorAll('select')[0];
+    if (select) { select.value = ${JSON.stringify(bingDefault.activeProfileId)}; select.dispatchEvent(new Event('change', { bubbles: true })); }
+    return { form: !!card?.querySelector('.profile-new'), defaultOptions: select?.options.length ?? 0, radios: card?.querySelectorAll('input[type="radio"]').length ?? 0 };
+  })()`);
+  await delay(300);
+  const translationAfterDefault = await client.evaluate(`(async () => ({
+    form: !!document.querySelector('.profile-new[aria-label="新建翻译配置"]'),
+    active: (await window.arale.translation.settings()).activeProfileId
+  }))()`);
+  check('翻译新建草稿切回 Bing 默认后仍保留', translationDraftState?.form && translationDraftState.defaultOptions === 2 && translationDraftState.radios === 0 && translationAfterDefault?.form && translationAfterDefault?.active === bingDefault.activeProfileId, JSON.stringify({ translationDraftState, translationAfterDefault }));
+  await client.evaluate(`(() => {
+    const input = document.querySelector('.profile-new[aria-label="新建翻译配置"] input');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '新建测试翻译'); input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await delay(100);
+  await client.evaluate(`document.querySelector('.profile-new[aria-label="新建翻译配置"] .btn-primary')?.click()`);
+  await delay(200);
+  const savedNewTranslation = await client.evaluate(`window.arale.translation.settings()`);
+  check('翻译新配置点击独立保存后才进入已保存列表',
+    savedNewTranslation?.profiles?.some((item) => item.name === '新建测试翻译') &&
+    (await client.evaluate("!document.querySelector('.profile-new[aria-label=\"新建翻译配置\"]')")) === true);
+  check('已保存翻译名称和提供商固定显示', await client.evaluate(`(() => {
+    const card = [...document.querySelectorAll('.settings-card')].find((node) => node.querySelector('.settings-card-title')?.textContent.includes('翻译引擎'));
+    const row = [...(card?.querySelectorAll('.settings-row-block') ?? [])].find((node) => node.textContent.includes('新建测试翻译'));
+    return row?.querySelectorAll('.profile-identity').length === 2 && row?.querySelectorAll('.llm-grid select').length === 0;
+  })()`));
+  await client.evaluate(`window.arale.translation.update({ profiles: [], activeProfileId: ${JSON.stringify(bingDefault.activeProfileId)} })`);
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,
   );
@@ -1315,6 +1451,36 @@ try {
   })()`);
   check('点击后弹出词卡', popupOpen !== null, JSON.stringify(popupOpen));
 
+  const cardSections = await client.evaluate(`(() => {
+    const card = document.querySelector('.dict-popup.wordcard');
+    const buttons = [...(card?.querySelectorAll('.wordcard-section-toggle') ?? [])];
+    return {
+      names: buttons.map((button) => button.textContent.trim()),
+      translationDefault: card?.querySelector('.wordcard-translation select option')?.textContent.trim() ?? null,
+      translationOptions: card?.querySelectorAll('.wordcard-translation select option').length ?? 0,
+      dictionaryOpen: buttons[0]?.getAttribute('aria-expanded') ?? null,
+      dictionaryBottom: card?.querySelector('.wordcard-section') ? getComputedStyle(card.querySelector('.wordcard-section')).borderBottomWidth : null,
+      translationTop: card?.querySelector('.wordcard-translation') ? getComputedStyle(card.querySelector('.wordcard-translation')).borderTopWidth : null,
+    };
+  })()`);
+  check('词典、翻译、LLM 三栏统一可折叠，词典下方只有一条分隔线',
+    cardSections?.names?.length === 3 && cardSections.names.some((name) => name.includes('词典')) &&
+    cardSections.names.some((name) => name.includes('翻译')) && cardSections.names.some((name) => name.includes('LLM')) &&
+    cardSections.dictionaryBottom === '0px' && cardSections.translationTop === '1px', JSON.stringify(cardSections));
+  check('仅有 Bing 时翻译选择器只显示 Bing 一项',
+    cardSections.translationOptions === 1 && cardSections.translationDefault?.includes('Bing'), JSON.stringify(cardSections));
+  const sectionToggle = await client.evaluate(`(() => {
+    const button = document.querySelector('.dict-popup.wordcard .wordcard-section-toggle');
+    const before = button?.getAttribute('aria-expanded');
+    button?.click();
+    return new Promise((resolve) => requestAnimationFrame(() => {
+      const after = button?.getAttribute('aria-expanded');
+      button?.click();
+      resolve({ before, after });
+    }));
+  })()`);
+  check('词典分栏点击标题可收起或展开', sectionToggle?.before !== sectionToggle?.after, JSON.stringify(sectionToggle));
+
   // ★ 这一条守的是本轮修掉的 bug：表头 setPointerCapture 把 click 吞掉，
   //   导致 ×、A−、A+ 全都点不动。
   const zoomWorks = await client.evaluate(`(() => {
@@ -1622,8 +1788,8 @@ try {
   // hover 只描边、不填底色：底色会和"已选中的划词高亮"撞在一起，而且会压住画面上的字。
   // 直接加类读计算样式（React 的 mouseenter 走的也是这个类），不依赖合成事件。
   const hoverStyle = await client.evaluate(`(() => {
-    const el = document.querySelector('.comic-text-block');
-    if (!el) return { skipped: 'no-block' };
+    const el = document.querySelector('.comic-text-group');
+    if (!el) return { skipped: 'no-group' };
     el.classList.add('is-hovered');
     const style = getComputedStyle(el);
     const bg = style.backgroundColor;
@@ -1728,17 +1894,19 @@ try {
     JSON.stringify(llmUi),
   );
 
-  // --- 顶部词旁边的编辑按钮 ---
+  // --- 顶部词与编辑图标是同一个按钮 ---
   const editBtn = await client.evaluate(`(() => {
     const card = document.querySelector('.dict-popup:not(.is-pinned)');
-    const btn = card?.querySelector('.wordcard-edit');
+    const btn = card?.querySelector('.wordcard-word');
     if (!btn) return null;
+    const zones = card.querySelectorAll('.wordcard-word, .wordcard-edit').length;
+    const glyph = getComputedStyle(btn, '::after').content;
     btn.click();
     return new Promise((resolve) => requestAnimationFrame(() => resolve(
-      !!card.querySelector('.wordcard-word-input')
+      { editing: !!card.querySelector('.wordcard-word-input'), zones, glyph }
     )));
   })()`);
-  check('顶部词右边有显式的编辑按钮，点了就能改', editBtn === true, String(editBtn));
+  check('顶部词和编辑图标共用一个点击区域', editBtn?.editing === true && editBtn.zones === 1 && editBtn.glyph?.includes('✎'), JSON.stringify(editBtn));
 
   // --- 多个子句分析一起展示 + 一起保存 ---
   // 没有真实 LLM，所以直接往词卡里写两条分析，然后从词卡夹打开看是否两栏都在。
@@ -1842,6 +2010,40 @@ try {
   })()`);
   check('能展开词卡夹并列出保存过的卡', (panel?.items ?? 0) >= 1, JSON.stringify(panel));
   check('词卡夹占据右侧布局空间，不再覆盖漫画', panel?.nonOverlapping === true, JSON.stringify(panel));
+
+  section('词卡来源页与返回');
+  const storedCards = await client.evaluate(`window.arale.cards.list(${JSON.stringify(comicId)})`);
+  const sourcedCard = storedCards?.find((card) => card.source?.kind === 'comic');
+  const sourcePage = sourcedCard?.source?.kind === 'comic' ? sourcedCard.source.pageIndex : -1;
+  check('保存的词卡持久记录漫画来源页', sourcePage >= 0 && !!sourcedCard?.source?.pageUrl, JSON.stringify(sourcedCard?.source));
+  await client.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(sourcePage === 0 ? 'End' : 'Home')}, bubbles: true }))`);
+  await delay(350);
+  const pageBeforeCardJump = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  const openedFromPanel = await client.evaluate(`(() => {
+    const word = ${JSON.stringify(sourcedCard?.word ?? '')};
+    const item = [...document.querySelectorAll('.wordcard-item-main')].find((node) => node.querySelector('.wordcard-item-word')?.textContent.trim() === word);
+    item?.click();
+    return !!item;
+  })()`);
+  await delay(350);
+  const jumpedFromCard = await client.evaluate(`(() => {
+    const word = ${JSON.stringify(sourcedCard?.word ?? '')};
+    const popup = [...document.querySelectorAll('.dict-popup')].find((node) => node.querySelector('.wordcard-word')?.textContent.trim() === word);
+    const button = popup?.querySelector('.wordcard-location button');
+    button?.click();
+    return button?.textContent.trim() ?? null;
+  })()`);
+  await delay(350);
+  const pageAfterCardJump = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  check('词卡来源页可点击并跳转', openedFromPanel && jumpedFromCard?.includes(`第 ${sourcePage + 1} 页`) && pageAfterCardJump?.startsWith(`${sourcePage + 1} /`), JSON.stringify({ jumpedFromCard, pageAfterCardJump }));
+  const returnButton = await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.comic-footer button')].find((node) => node.textContent.includes('返回第'));
+    button?.click();
+    return button?.textContent.trim() ?? null;
+  })()`);
+  await delay(350);
+  const pageAfterReturn = await client.evaluate("document.querySelector('[data-testid=\"comic-page-label\"]')?.textContent.trim()");
+  check('词卡跳页后能返回原页', !!returnButton && pageAfterReturn === pageBeforeCardJump, JSON.stringify({ returnButton, pageBeforeCardJump, pageAfterReturn }));
 
   await client.evaluate(
     `[...document.querySelectorAll('button')].find(b => b.textContent.includes('书库'))?.click()`,
@@ -1968,6 +2170,7 @@ try {
     await delay(300);
   }
   check('分词产物已落盘并能读回', segData !== null, segData ? `${segData.units.length} 单元` : 'null');
+  check('整书词表使用 Kuromoji 形态分析', segData?.engine === 'kuromoji-morph-v1', segData?.engine ?? 'null');
   check(
     '小说分词按章节切单元',
     Array.isArray(segData?.units) && segData.units.length > 0 && segData.units.every((u) => u.ref.startsWith('chapter:')),
@@ -1989,6 +2192,391 @@ try {
   // 重复 start 不该重跑（产物已存在且没 force）。
   const segStatus = await client.evaluate(`window.arale.segment.status(${JSON.stringify(epubId)})`);
   check('有产物时 status 能报出统计', (segStatus?.uniqueWords ?? 0) > 0, JSON.stringify(segStatus));
+
+  section('漫画学习候选与 Anki 制卡');
+  await client.evaluate(`window.arale.segment.start(${JSON.stringify(comicId)}, { force: true })`);
+  let comicSegments = null;
+  for (let i = 0; i < 60; i += 1) {
+    comicSegments = await client.evaluate(`window.arale.segment.read(${JSON.stringify(comicId)})`);
+    if (comicSegments) break;
+    await delay(100);
+  }
+  check('漫画分词有文字块可供制卡', (comicSegments?.units?.length ?? 0) > 0);
+  const studyList = await client.evaluate(`window.arale.study.generate(${JSON.stringify(comicId)})`);
+  check('Kuromoji 候选经 IPC 生成并带原文出处',
+    (studyList?.candidates?.length ?? 0) > 0 && studyList.candidates.some((item) => item.occurrences?.[0]?.text),
+    `候选=${studyList?.candidates?.length ?? 0}`);
+  check('制卡默认直接筛选 N3/N2/N1，未知可单独控制',
+    JSON.stringify(studyList?.workflow?.levels) === '[1,2,3]' && studyList?.workflow?.includeUnknown === false);
+  const directlyFiltered = await client.evaluate(`window.arale.study.directFilter(${JSON.stringify(comicId)}, [1,2,3], false)`);
+  check('直接筛选会持久选择对应等级，不混入未分级或等级冲突',
+    directlyFiltered?.candidates?.every((item) => !item.selected || (item.jlpt !== null && item.jlpt <= 3 && !item.jlptConflict)) === true);
+  const firstStudy = studyList?.candidates?.[0];
+  if (firstStudy) {
+    await client.evaluate(`window.arale.study.patch(${JSON.stringify(comicId)}, ${JSON.stringify(firstStudy.id)}, { selected: true, meaning: '冒烟测试释义' })`);
+    const savedStudy = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)})`);
+    check('人工选择和释义能经 IPC 保存',
+      savedStudy?.candidates?.find((item) => item.id === firstStudy.id)?.meaning === '冒烟测试释义');
+  }
+  let mockToolRequests = 0;
+  studyLlmServer = createServer(async (request, response) => {
+    try {
+      let raw = '';
+      for await (const chunk of request) raw += chunk.toString();
+      const input = JSON.parse(raw);
+      const user = input.messages.findLast((message) => message.role === 'user');
+      const candidates = JSON.parse(user.content);
+      await delay(800);
+      const items = candidates.map((item, index) => ({
+        id: item.id, decision: ['keep', 'reject', 'review'][index % 3], reason: '冒烟测试判断',
+      }));
+      const content = JSON.stringify({ items });
+      if (input.tools?.length) mockToolRequests += 1;
+      const message = input.tools?.length
+        ? { content: null, tool_calls: [{ id: 'call_smoke', type: 'function', function: { name: input.tools[0].function.name, arguments: content } }] }
+        : { content };
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ choices: [{ message }], usage: {
+        prompt_tokens: 100, completion_tokens: 20, prompt_cache_hit_tokens: 25, prompt_cache_miss_tokens: 75,
+      } }));
+    } catch (error) {
+      response.writeHead(500);
+      response.end(String(error));
+    }
+  });
+  await new Promise((resolve) => studyLlmServer.listen(0, '127.0.0.1', resolve));
+  const mockLlmPort = studyLlmServer.address().port;
+  let studyTranslationRequests = 0;
+  studyTranslationServer = createServer(async (request, response) => {
+    try {
+      let raw = '';
+      for await (const chunk of request) raw += chunk.toString();
+      const body = JSON.parse(raw);
+      studyTranslationRequests += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ translatedText: `译：${body.q}` }));
+    } catch (error) { response.writeHead(500); response.end(String(error)); }
+  });
+  await new Promise((resolve) => studyTranslationServer.listen(0, '127.0.0.1', resolve));
+  const mockTranslationPort = studyTranslationServer.address().port;
+  await client.evaluate(`window.arale.llm.update({profiles:[{id:'llm_study_mock',name:'冒烟筛选模型',baseUrl:'http://127.0.0.1:${mockLlmPort}/v1',model:'mock',temperature:0.1,hasApiKey:false}],activeProfileId:'llm_study_mock'})`);
+  await client.evaluate(`window.arale.translation.update({profiles:[{id:'tr_study_mock',name:'冒烟本地翻译',provider:'libretranslate',baseUrl:'http://127.0.0.1:${mockTranslationPort}',region:'',appId:'',hasSecret:false}],activeProfileId:'tr_study_mock'})`);
+  await client.evaluate(`window.arale.study.directFilter(${JSON.stringify(comicId)}, [1,2,3,4,5], true)`);
+  const openedStudyTab = await client.evaluate(`(() => {
+    const open = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === '分词');
+    if (!open) return 'missing-open';
+    open.click();
+    return 'opened';
+  })()`);
+  await delay(200);
+  const studyTab = await client.evaluate(`(() => {
+    const tab = [...document.querySelectorAll('[role="tab"]')].find((node) => node.textContent.includes('Anki 制卡'));
+    if (!tab) return 'missing-tab';
+    tab.click();
+    return 'opened';
+  })()`);
+  await delay(350);
+  check('漫画分词页可进入 Anki 制卡审核界面',
+    openedStudyTab === 'opened' && studyTab === 'opened' &&
+    (await client.evaluate("!!document.querySelector('.study-panel .study-filters')")) === true,
+    `${openedStudyTab}/${studyTab}`);
+  check('Anki 选词、释义和导出分成五个导航步骤',
+    (await client.evaluate("document.querySelectorAll('.study-flow-nav button').length")) === 5 &&
+    (await client.evaluate("document.querySelector('.study-flow-nav')?.textContent.includes('4 AI 释义生成')")) === true &&
+    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('规则筛词')")) === true);
+  check('规则页显示预计保留数、词条规则和每层新排除数',
+    (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('预计保留 40')")) === true &&
+    (await client.evaluate("document.querySelectorAll('.study-rule-impact span').length")) === 5 &&
+    (await client.evaluate("document.querySelector('.study-rule-editor')?.textContent.includes('参考通用词频')")) === true);
+  const rulePreviewOnly = await client.evaluate(`(async () => {
+    const n5 = [...document.querySelectorAll('.study-rule-group input[type=checkbox]')].find((node) => node.parentElement?.textContent.trim() === 'N5');
+    n5?.click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const preview = document.querySelector('.study-preview-total')?.textContent ?? '';
+    const formal = (await window.arale.study.read(${JSON.stringify(comicId)})).candidates.filter((item) => item.selected).length;
+    [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('撤销改动'))?.click();
+    return { preview, formal };
+  })()`);
+  check('修改规则只改变预计结果，撤销前不改正式词单',
+    !rulePreviewOnly.preview.includes('预计保留 40') && rulePreviewOnly.formal === 40,
+    JSON.stringify(rulePreviewOnly));
+  if (process.env['ARALE_SMOKE_STUDY_RULES_SCREENSHOT']) {
+    const width = Number(process.env['ARALE_SMOKE_STUDY_RULES_WIDTH'] ?? 1366);
+    const height = Number(process.env['ARALE_SMOKE_STUDY_RULES_HEIGHT'] ?? 768);
+    await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    await delay(80);
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_RULES_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 语境筛选'))?.click();
+  })()`);
+  await delay(80);
+  check('LLM 筛选并发默认 2 且最多可选 3',
+    (await client.evaluate("document.querySelector('select[aria-label=\"筛选并发数\"]')?.value")) === '2' &&
+    (await client.evaluate("!!document.querySelector('select[aria-label=\"筛选并发数\"] option[value=\"3\"]')")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 释义生成'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-tier-choices label')].find((node) => node.textContent.includes('R1 ·'))?.querySelector('input')?.click();
+  })()`);
+  await delay(80);
+  check('R0–R3 像 F 档位一样独立选择，模型配置在下方',
+    (await client.evaluate("document.querySelectorAll('input[name=study-card-tier]').length")) === 4 &&
+    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('预计 7 次 LLM 调用')")) === true &&
+    (await client.evaluate("!!document.querySelector('.study-engine-fields select[aria-label=\"制卡翻译配置\"]')")) === true);
+  if (process.env['ARALE_SMOKE_STUDY_MEANING_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_MEANING_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('5 制卡'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-image-choices label')].find((node) => node.textContent.includes('整页漫画'))?.querySelector('input')?.click();
+  })()`);
+  await delay(100);
+  check('整页漫画独立于 R 档位保存，不运行 LLM',
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode)`)) === 'page' && mockToolRequests === 0);
+  if (process.env['ARALE_SMOKE_STUDY_EXPORT_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_EXPORT_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 语境筛选'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('开始筛选'));
+    button?.click();
+  })()`);
+  await delay(950);
+  const liveFilter = await client.evaluate(`({
+    summary: document.querySelector('.study-flow-nav')?.textContent ?? '',
+    progress: document.querySelector('.study-workflow-progress')?.textContent ?? '',
+    badges: document.querySelectorAll('.study-filter-preview').length,
+  })`);
+  check('LLM 筛选处理中可见批次进度和临时判断',
+    liveFilter.progress.includes('临时判断') && liveFilter.badges > 0,
+    JSON.stringify(liveFilter));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'))?.click();
+  })()`);
+  await delay(80);
+  const backgroundStudy = await client.evaluate(`(async () => ({
+    queue: await window.arale.study.taskQueue(),
+    dock: document.querySelector('.ocr-dock-pill')?.textContent ?? '',
+    studyPanel: !!document.querySelector('.study-panel'),
+    reader: !!document.querySelector('.comic-reader'),
+  }))()`);
+  check('离开制卡页后 AI 任务继续且右下角仍可查看',
+    backgroundStudy.studyPanel === false &&
+    ((backgroundStudy.queue?.active?.bookId === comicId) || backgroundStudy.queue?.recent?.some((item) => item.bookId === comicId && item.status === 'completed')) &&
+    !!backgroundStudy.dock,
+    JSON.stringify({ active: backgroundStudy.queue?.active?.bookId, dock: backgroundStudy.dock, reader: backgroundStudy.reader }));
+  await client.evaluate(`(() => {
+    document.querySelector('.ocr-dock-pill')?.click();
+  })()`);
+  await delay(50);
+  const studyDock = await client.evaluate(`({
+    heading: document.querySelector('.ocr-dock-panel')?.getAttribute('aria-label'),
+    task: document.querySelector('.study-task-item')?.textContent ?? '',
+    open: !![...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('打开制卡页')),
+  })`);
+  check('统一任务弹层列出 AI 任务、进度与返回制卡页入口',
+    studyDock.heading === '任务队列' && studyDock.task.includes('AI 筛词') && studyDock.open,
+    JSON.stringify(studyDock));
+  if (process.env['ARALE_SMOKE_STUDY_QUEUE_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_QUEUE_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('打开制卡页'))?.click();
+  })()`);
+  await delay(300);
+  check('从右下角任务队列返回原书 Anki 页',
+    (await client.evaluate("document.querySelector('[role=tab][aria-selected=true]')?.textContent.includes('Anki 制卡')")) === true);
+  let finishedFilter = false;
+  for (let i = 0; i < 30; i += 1) {
+    finishedFilter = await client.evaluate(`(async () => {
+      const queue = await window.arale.study.taskQueue();
+      return queue.recent.some((item) => item.bookId === ${JSON.stringify(comicId)} && item.kind === 'filter' && item.status === 'completed') &&
+        document.querySelector('.study-flow-section h3')?.textContent.includes('手动筛词');
+    })()`);
+    if (finishedFilter) break;
+    await delay(200);
+  }
+  check('LLM 筛选完成后正式应用结果', finishedFilter);
+  check('筛选 Harness 通过结构化提交工具返回结果', mockToolRequests > 0, `toolRequests=${mockToolRequests}`);
+  const filterUsage = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.filterRun?.stats)`);
+  check('筛选后落盘真实 HTTP 次数和服务端缓存 token',
+    filterUsage?.llmHttpAttempts === mockToolRequests && filterUsage?.cacheHitTokens === mockToolRequests * 25 &&
+    filterUsage?.cacheMissTokens === mockToolRequests * 75,
+    JSON.stringify({ calls: filterUsage?.llmHttpAttempts, hit: filterUsage?.cacheHitTokens, miss: filterUsage?.cacheMissTokens }));
+  check('AI 完成后进入手动筛词，只有保留／排除操作并优先显示待审项',
+    (await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.includes('手动筛词')")) === true &&
+    (await client.evaluate("document.querySelector('.study-view-tabs button.active')?.textContent.includes('AI 待审')")) === true &&
+    (await client.evaluate("document.querySelectorAll('.study-decision-controls button').length")) === 2 &&
+    (await client.evaluate("document.querySelector('.study-card-draft') === null")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('当前列表全保留'))?.click();
+  })()`);
+  await delay(100);
+  const bulkKept = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.forceInclude).length)`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('撤销上次批量'))?.click();
+  })()`);
+  await delay(100);
+  const keptUndone = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.forceInclude).length)`);
+  check('当前 AI 待审列表可一键全保留并撤销，未处理其他词', bulkKept === 13 && keptUndone === 0,
+    JSON.stringify({ bulkKept, keptUndone }));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('当前列表全去除'))?.click();
+  })()`);
+  await delay(100);
+  const bulkExcluded = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.excluded).length)`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-bulk-decision button')].find((node) => node.textContent.includes('撤销上次批量'))?.click();
+  })()`);
+  await delay(100);
+  const excludedUndone = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.filter((item) => item.excluded).length)`);
+  check('当前 AI 待审列表可一键全去除并撤销', bulkExcluded === 13 && excludedUndone === 0,
+    JSON.stringify({ bulkExcluded, excludedUndone }));
+  if (process.env['ARALE_SMOKE_STUDY_SCREENSHOT']) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+  }
+  const reviewedCandidateId = await client.evaluate(`(async () => {
+    document.querySelector('.study-row button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    const chosen = document.querySelector('.study-row button strong')?.textContent.trim();
+    [...document.querySelectorAll('.study-decision-controls button')].find((node) => node.textContent.includes('手动保留'))?.click();
+    return chosen;
+  })()`);
+  await delay(100);
+  check('待审词可在同一处手动保留并从待审列表移出',
+    !!reviewedCandidateId &&
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.candidates.find((item) => item.expression === ${JSON.stringify(reviewedCandidateId)})?.forceInclude)`)) === true &&
+    (await client.evaluate("document.querySelector('.study-preview-total')?.textContent.includes('AI 待审 12')")) === true);
+  await client.evaluate(`(async () => {
+    const value = await window.arale.study.read(${JSON.stringify(comicId)});
+    await window.arale.study.patchMany(${JSON.stringify(comicId)}, value.candidates.map((item) => item.id), { selected: false });
+  })()`);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('原始词表'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('Anki 制卡'))?.click();
+  })()`);
+  await delay(180);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 释义生成'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-tier-choices label')].find((node) => node.textContent.includes('R0 ·'))?.querySelector('input')?.click();
+  })()`);
+  await delay(80);
+  check('R0 释义生成只使用翻译引擎，LLM 配置不出现',
+    (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('准备处理 1 词')")) === true &&
+    (await client.evaluate("document.querySelector('.study-engine-fields select[aria-label=\"制卡 LLM 配置\"]') === null")) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('生成 1 张释义草稿'))?.click();
+  })()`);
+  let generatedDraft = false;
+  for (let i = 0; i < 30; i += 1) {
+    generatedDraft = await client.evaluate("document.querySelector('.study-flow-section h3')?.textContent.trim() === '制卡' && !!document.querySelector('.study-card-draft')");
+    if (generatedDraft) break;
+    await delay(150);
+  }
+  check('R0 生成后进入第 5 步逐卡编辑', generatedDraft && studyTranslationRequests === 2,
+    `translationRequests=${studyTranslationRequests}`);
+  await client.evaluate(`(() => {
+    const input = [...document.querySelectorAll('.study-card-draft label')].find((node) => node.textContent.includes('词语／正面'))?.querySelector('input');
+    if (input) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '学习测试词'); input.dispatchEvent(new Event('input', { bubbles: true })); }
+  })()`);
+  await delay(50);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-card-draft button')].find((node) => node.textContent.includes('保存卡片草稿'))?.click();
+  })()`);
+  await delay(100);
+  const editedCard = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.cardRun?.drafts[0]?.expression)`);
+  check('第 5 步可修改并持久保存词卡正面', editedCard === '学习测试词', String(editedCard));
+  const callsBeforeImageChange = { llm: mockToolRequests, translation: studyTranslationRequests };
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-image-choices label')].find((node) => node.textContent.includes('不带图'))?.querySelector('input')?.click();
+  })()`);
+  await delay(100);
+  check('已有词卡切换为不带图不重跑翻译或 LLM',
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode === 'none' && value.workflow?.cardRun?.drafts.length === 1)`)) === true &&
+    mockToolRequests === callsBeforeImageChange.llm && studyTranslationRequests === callsBeforeImageChange.translation);
+  const reviewStudyFile = join(userDataDir, 'library', comicId, 'study-list.json');
+  const reviewStudyList = JSON.parse(readFileSync(reviewStudyFile, 'utf8'));
+  reviewStudyList.workflow.cardRun.drafts[0].needsReview = true;
+  reviewStudyList.workflow.cardRun.drafts[0].reviewReason = '冒烟测试：请人工核对句译';
+  writeFileSync(reviewStudyFile, JSON.stringify(reviewStudyList));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('原始词表'))?.click();
+  })()`);
+  await delay(80);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('[role=tab]')].find((node) => node.textContent.includes('Anki 制卡'))?.click();
+  })()`);
+  await delay(180);
+  check('待审词卡阻止导出并直接显示待审列表和原因',
+    (await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('制卡并导出'));
+      return !!button?.disabled && document.querySelector('.study-checkpoint-warning')?.textContent.includes('1 张待审词卡') &&
+        document.querySelector('.study-view-tabs button.active')?.textContent.includes('词卡待审') &&
+        document.querySelector('.study-card-draft')?.textContent.includes('请人工核对句译');
+    })()`)) === true);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-card-draft button')].find((node) => node.textContent.includes('确认并通过审核'))?.click();
+  })()`);
+  await delay(150);
+  check('待审词卡通过审核后制卡导出按钮可点击',
+    (await client.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('制卡并导出'));
+      return button?.disabled === false && document.querySelector('.study-preview-total')?.textContent.includes('待审 0 张');
+    })()`)) === true);
+  const toCancel = await client.evaluate(`window.arale.study.runFilter(${JSON.stringify(comicId)}, {tier:'F1',profileId:'llm_study_mock',concurrency:1})`);
+  await delay(60);
+  await client.evaluate(`(() => {
+    if (!document.querySelector('.ocr-dock-panel')) document.querySelector('.ocr-dock-pill')?.click();
+  })()`);
+  await delay(70);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('停止任务'))?.click();
+  })()`);
+  let cancelledStudyTask = false;
+  for (let i = 0; i < 30; i += 1) {
+    cancelledStudyTask = await client.evaluate(`window.arale.study.taskQueue().then((value) => value.recent.some((item) => item.id === ${JSON.stringify(toCancel?.id)} && item.status === 'cancelled'))`);
+    if (cancelledStudyTask) break;
+    await delay(100);
+  }
+  check('右下角停止 AI 任务并保留可续跑检查点', cancelledStudyTask &&
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => !!value.workflow?.pendingFilterRun?.sourceHash)`)) === true);
+  if (process.env['ARALE_SMOKE_STUDY_CARDS_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_CARDS_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    const back = [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'));
+    back?.click();
+  })()`);
 
   section('词典');
 
@@ -2096,6 +2684,14 @@ try {
 } catch (error) {
   check('冒烟测试执行完成', false, error instanceof Error ? error.message : String(error));
 } finally {
+  if (studyLlmServer) {
+    studyLlmServer.closeAllConnections();
+    await new Promise((resolve) => studyLlmServer.close(resolve));
+  }
+  if (studyTranslationServer) {
+    studyTranslationServer.closeAllConnections();
+    await new Promise((resolve) => studyTranslationServer.close(resolve));
+  }
   child.kill('SIGTERM');
   await delay(600);
   if (!exited) child.kill('SIGKILL');

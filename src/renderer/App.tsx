@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { LlmSettings, TranslationSettings } from '@shared/types';
+import { CURRENT_SEGMENT_ENGINE } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
 import { DEFAULT_APP_DEFAULTS } from '@shared/defaults';
 import type {
@@ -24,6 +25,7 @@ import type {
   OpenBookResult,
   SegmentJobResult,
   SegmentProgress,
+  StudyTaskQueueState,
 } from '@shared/types';
 import {
   api,
@@ -77,6 +79,7 @@ export function App(): JSX.Element {
    * 而队列是**主进程**的状态，跨渲染进程存活。所以挂载时先主动拉一次快照。
    */
   const [ocrQueue, setOcrQueue] = useState<OcrQueueState | null>(null);
+  const [studyQueue, setStudyQueue] = useState<StudyTaskQueueState | null>(null);
 
   /**
    * 扩展状态。
@@ -117,6 +120,10 @@ export function App(): JSX.Element {
    */
   const [segmentBookId, setSegmentBookId] = useState<string | null>(null);
   const [segmentBookTitle, setSegmentBookTitle] = useState('');
+  const [segmentIsComic, setSegmentIsComic] = useState(false);
+  const [segmentInitialTab, setSegmentInitialTab] = useState<'vocabulary' | 'study'>('vocabulary');
+  const [segmentFocusToken, setSegmentFocusToken] = useState(0);
+  const [segmentReturnView, setSegmentReturnView] = useState<'reader' | 'library'>('library');
   const [segmentStatus, setSegmentStatus] = useState<Record<string, SegmentJobResult>>({});
   const [segmentProgress, setSegmentProgress] = useState<Record<string, SegmentProgress>>({});
   const [segmentData, setSegmentData] = useState<BookSegments | null>(null);
@@ -153,6 +160,13 @@ export function App(): JSX.Element {
     setOcrQueue(state);
   });
 
+  useIpcEvent('study:queue', (state) => setStudyQueue(state));
+  useIpcEvent('study:done', (task) => {
+    setStatus(task.status === 'completed'
+      ? `${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}完成：《${task.title}》`
+      : `${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}${task.status === 'cancelled' ? '已取消' : '失败'}：《${task.title}》${task.error ? ` · ${task.error}` : ''}`);
+  });
+
   useIpcEvent('ocr:done', (result) => {
     setOcrResult((prev) => ({ ...prev, [result.bookId]: result }));
     setOcrProgress((prev) => {
@@ -174,6 +188,7 @@ export function App(): JSX.Element {
     const data = await call('读取分词结果', () => api.segment.read(bookId));
     setSegmentLoading(false);
     setSegmentData(data);
+    return data;
   }, []);
 
   useIpcEvent('segment:progress', (progress) => {
@@ -200,14 +215,22 @@ export function App(): JSX.Element {
   });
 
   const openSegments = useCallback(
-    async (bookId: string, title: string) => {
+    async (bookId: string, title: string, initialTab: 'vocabulary' | 'study' = 'vocabulary', isComic = false) => {
       setSegmentBookId(bookId);
       setSegmentBookTitle(title);
+      setSegmentIsComic(isComic);
+      setSegmentInitialTab(initialTab);
+      setSegmentFocusToken((value) => value + 1);
+      setSegmentReturnView(view === 'reader' ? 'reader' : 'library');
       setView('segments');
       setSegmentData(null);
-      await reloadSegments(bookId);
+      const data = await reloadSegments(bookId);
+      if (data !== null && data.engine !== CURRENT_SEGMENT_ENGINE) {
+        const outcome = await call('升级旧分词结果', () => api.segment.start(bookId));
+        if (outcome?.ok) setStatus('正在把旧词表升级为日语形态分析…');
+      }
     },
-    [reloadSegments],
+    [reloadSegments, view],
   );
 
   const startSegment = useCallback(
@@ -242,6 +265,7 @@ export function App(): JSX.Element {
   // 队列表现在主进程，渲染进程重载后要主动要一次（见 ocrQueue 的注释）。
   useEffect(() => {
     void api.ocr.queue().then(setOcrQueue).catch(() => undefined);
+    void api.study.taskQueue().then(setStudyQueue).catch(() => undefined);
   }, []);
 
   const loadExtensions = useCallback(async () => {
@@ -297,17 +321,10 @@ export function App(): JSX.Element {
     async (patch: Parameters<typeof api.llm.update>[0]) => {
       const next = await call('保存 LLM 配置', () => api.llm.update(patch));
       if (next) setLlmSettings(next);
+      return next;
     },
     [],
   );
-
-  const setLlmApiKey = useCallback(async (profileId: string, apiKey: string | null) => {
-    const next = await call('保存 API key', () => api.llm.setApiKey(profileId, apiKey));
-    if (next) {
-      setLlmSettings(next);
-      setStatus(apiKey === null ? '已清除 API key' : 'API key 已保存');
-    }
-  }, []);
 
   const loadTranslation = useCallback(async () => {
     setTranslationLoading(true);
@@ -324,6 +341,7 @@ export function App(): JSX.Element {
     async (patch: Parameters<typeof api.translation.update>[0]) => {
       const next = await call('保存翻译配置', () => api.translation.update(patch));
       if (next) setTranslationSettings(next);
+      return next;
     },
     [],
   );
@@ -334,6 +352,7 @@ export function App(): JSX.Element {
       setTranslationSettings(next);
       setStatus(secret === null ? '已清除翻译密钥' : '翻译密钥已保存');
     }
+    return next;
   }, []);
 
   const refreshExtensions = useCallback(async () => {
@@ -631,7 +650,7 @@ export function App(): JSX.Element {
               ocrCapability={ocrCapability}
               ocrQueue={ocrQueue}
               onOpenSegments={(bookId) =>
-                void openSegments(bookId, open.book.title)
+                void openSegments(bookId, open.book.title, 'vocabulary', (open.book.readerMode ?? open.book.format) === 'comic')
               }
             />
           ) : (
@@ -651,15 +670,14 @@ export function App(): JSX.Element {
               settings: llmSettings,
               loading: llmLoading,
               onReload: () => void loadLlm(),
-              onUpdate: (patch) => void updateLlm(patch),
-              onSetApiKey: (profileId, apiKey) => void setLlmApiKey(profileId, apiKey),
+              onUpdate: updateLlm,
             }}
             translation={{
               settings: translationSettings,
               loading: translationLoading,
               onReload: () => void loadTranslation(),
-              onUpdate: (patch) => void updateTranslation(patch),
-              onSetSecret: (profileId, secret) => void setTranslationSecret(profileId, secret),
+              onUpdate: updateTranslation,
+              onSetSecret: setTranslationSecret,
             }}
             extensions={{
               statuses: extensions.statuses,
@@ -682,12 +700,15 @@ export function App(): JSX.Element {
           <SegmentView
             bookId={segmentBookId}
             bookTitle={segmentBookTitle}
+            initialTab={segmentInitialTab}
+            focusToken={segmentFocusToken}
             status={segmentStatus[segmentBookId] ?? null}
             progress={segmentProgress[segmentBookId] ?? null}
             segments={segmentData}
             loading={segmentLoading}
+            isComic={segmentIsComic}
             onBack={() => {
-              setView(open !== null ? 'reader' : 'library');
+              setView(segmentReturnView);
               setSegmentBookId(null);
               setSegmentData(null);
             }}
@@ -710,6 +731,10 @@ export function App(): JSX.Element {
             providerLabel={providerLabel}
             onCancel={cancelOcr}
             onOpenBook={(bookId) => void openBook(bookId)}
+            studyQueue={studyQueue}
+            onCancelStudy={(id) => void call('取消 AI 任务', () => api.study.cancelTask(id))}
+            onDismissStudy={(id) => void call('清除任务结果', () => api.study.dismissTask(id))}
+            onOpenStudy={(bookId, title) => void openSegments(bookId, title, 'study', true)}
           />
         }
         statusMessage={status}
