@@ -11,13 +11,15 @@
  * 3. 已生成 → 词表 + 生成时间 + 用的是哪本词典，并提示「换了词典要重新生成」。
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CURRENT_SEGMENT_ENGINE, type BookSegments, type SegmentJobResult, type SegmentProgress } from '@shared/types';
 import { StudyPanel } from './StudyPanel';
 
 export interface SegmentViewProps {
   bookId: string;
   bookTitle: string;
+  initialTab?: 'vocabulary' | 'study';
+  focusToken?: number;
   /** 这本书最近一次分词任务的结束状态（没跑过为 null）。 */
   status: SegmentJobResult | null;
   /** 正在进行的任务进度（没在跑为 null）。 */
@@ -48,12 +50,13 @@ function formatTime(ms: number): string {
 }
 
 export function SegmentView(props: SegmentViewProps): JSX.Element {
-  const { bookId, bookTitle, status, progress, segments, loading, isComic, onBack, onGenerate, onClear, onReload } =
+  const { bookId, bookTitle, initialTab = 'vocabulary', focusToken, status, progress, segments, loading, isComic, onBack, onGenerate, onClear, onReload } =
     props;
 
   const [filter, setFilter] = useState('');
   const [onlyMatched, setOnlyMatched] = useState(false);
-  const [mode, setMode] = useState<'vocabulary' | 'study'>('vocabulary');
+  const [mode, setMode] = useState<'vocabulary' | 'study'>(initialTab);
+  useEffect(() => setMode(initialTab), [bookId, focusToken, initialTab]);
 
   const running = progress !== null;
   const legacy = segments !== null && segments.engine !== CURRENT_SEGMENT_ENGINE;

@@ -1,6 +1,6 @@
 /** 漫画学习候选审核：JLPT 筛选、出处核对、人工短语和 Anki 导出。 */
-import { useEffect, useMemo, useState } from 'react';
-import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyImageMode, StudyList, StudyOccurrence, StudyRunProgress, TranslationSettings } from '@shared/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyImageMode, StudyList, StudyOccurrence, StudyRunProgress, StudyTaskEntry, StudyTaskQueueState, TranslationSettings } from '@shared/types';
 import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, defaultDirectOptions, directFilterStages, estimatedLlmCalls, normalizeDirectOptions, studyPriorityScore } from '@core/study/harness';
 import { api, call, useIpcEvent } from '../lib/api';
 import { DirectFilterPanel } from './DirectFilterPanel';
@@ -57,7 +57,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [filterProfileId, setFilterProfileId] = useState('');
   const [cardProfileId, setCardProfileId] = useState('');
   const [translationProfileId, setTranslationProfileId] = useState('');
-  const [workflowBusy, setWorkflowBusy] = useState(false);
+  const [localWorkflowBusy, setLocalWorkflowBusy] = useState(false);
+  const [studyQueue, setStudyQueue] = useState<StudyTaskQueueState | null>(null);
+  const finishedTaskId = useRef<string | null>(null);
   const [imageSaving, setImageSaving] = useState(false);
   const [workflowProgress, setWorkflowProgress] = useState<StudyRunProgress | null>(null);
   const [liveFilterDecisions, setLiveFilterDecisions] = useState<Record<string, { decision: StudyFilterDecision; reason: string }>>({});
@@ -74,7 +76,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       if (!live) return;
       setList(value); setLoading(false);
       setStep(value?.workflow?.cardRun ? 'export' : value?.workflow?.filterRun ? 'review' : 'rules');
-      setCandidateView('included');
+      setCandidateView(Object.values(value?.workflow?.filterRun?.decisions ?? {}).some((one) => one.decision === 'review') ? 'review' : 'included');
       setLiveFilterDecisions(value?.workflow?.pendingFilterRun?.decisions ?? {});
       setLevels(value?.workflow?.levels ?? [...DEFAULT_STUDY_LEVELS]);
       setIncludeUnknown(value?.workflow?.includeUnknown ?? false);
@@ -98,6 +100,11 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     return () => { live = false; };
   }, [bookId]);
 
+  useEffect(() => {
+    finishedTaskId.current = null;
+    void api.study.taskQueue().then(setStudyQueue).catch(() => undefined);
+  }, [bookId]);
+
   useIpcEvent('study:progress', (event) => {
     if (event.bookId === bookId) setProgress({ done: event.done, total: event.total });
   });
@@ -112,6 +119,31 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       });
     }
   });
+  useIpcEvent('study:queue', (state) => setStudyQueue(state));
+  async function handleTaskDone(task: StudyTaskEntry): Promise<void> {
+    if (task.bookId !== bookId || finishedTaskId.current === task.id) return;
+    finishedTaskId.current = task.id;
+    try {
+      const next = await api.study.read(bookId);
+      if (next) setList(next);
+      setWorkflowProgress(null);
+      if (task.status === 'completed') {
+        if (task.kind === 'filter') {
+          setLiveFilterDecisions({});
+          const decisions = Object.values(next?.workflow?.filterRun?.decisions ?? {});
+          setStep('review'); setCandidateView(decisions.some((one) => one.decision === 'review') ? 'review' : 'included');
+          setNotice(`AI 筛选完成：保留 ${decisions.filter((one) => one.decision === 'keep').length}，待审 ${decisions.filter((one) => one.decision === 'review').length}，排除 ${decisions.filter((one) => one.decision === 'reject').length}`);
+        } else {
+          setStep('export'); setCandidateView('included');
+          setNotice(`释义生成完成：${next?.workflow?.cardRun?.drafts.length ?? 0} 张草稿，可逐卡修改后制卡。`);
+        }
+      } else {
+        setLiveFilterDecisions(next?.workflow?.pendingFilterRun?.decisions ?? {});
+        setNotice(`${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}${task.status === 'cancelled' ? '已取消' : '失败'}：${task.error ?? task.message ?? '可在原步骤续跑'}`);
+      }
+    } catch { setNotice('任务结束，读取学习清单失败，请刷新页面。'); }
+  }
+  useIpcEvent('study:done', (task) => { void handleTaskDone(task); });
 
   const currentDirectOptions = useMemo(() => normalizeDirectOptions({ ...directOptions, excludedWords: excludedWordsText.split(/[\n,，、]+/u) }), [directOptions, excludedWordsText]);
   const directResult = useMemo(() => directFilterStages(list?.candidates ?? [], levels, includeUnknown, currentDirectOptions), [list?.candidates, levels, includeUnknown, currentDirectOptions]);
@@ -163,6 +195,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const cardCalls = estimatedLlmCalls(selectedCount, CARD_TIERS[cardTier]);
   const pendingFilterCount = Object.keys(liveFilterDecisions).length;
   const pendingFilter = list?.workflow?.pendingFilterRun;
+  const bookTask = studyQueue?.active?.bookId === bookId ? studyQueue.active
+    : studyQueue?.pending.find((item) => item.bookId === bookId) ?? null;
+  const workflowBusy = localWorkflowBusy || bookTask !== null;
   const partialFilterApplied = pendingFilterCount > 0 && !!list?.workflow?.partialFilterAppliedAt;
   const pendingFilterMismatch = pendingFilterCount > 0 &&
     (pendingFilter?.tier !== filterTier || pendingFilter.profileId !== filterProfileId);
@@ -303,26 +338,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     const resume = prior?.tier === filterTier && prior.profileId === filterProfileId;
     const saved = resume ? prior.decisions : {};
     setLiveFilterDecisions(saved);
-    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'filter', done: Object.keys(saved).length, total: llmPreviewCount });
-    setNotice('正在逐批筛选；下方会显示临时判断，全部完成后才正式更新选择。');
-    const next = await call('运行 LLM 筛选 Harness', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId, concurrency: filterConcurrency }));
-    if (next) {
-      setList(next);
-      setLiveFilterDecisions({});
-      const decisions = Object.values(next.workflow?.filterRun?.decisions ?? {});
-      setLevel('all'); setCandidateView(decisions.some((one) => one.decision === 'review') ? 'review' : 'included'); setPage(0); setStep('review');
-      setNotice(`筛选完成：保留 ${decisions.filter((one) => one.decision === 'keep').length}，待审 ${decisions.filter((one) => one.decision === 'review').length}，排除 ${decisions.filter((one) => one.decision === 'reject').length}`);
-    } else {
-      const checkpoint = await call('读取筛选检查点', () => api.study.read(bookId));
-      if (checkpoint) {
-        setList(checkpoint);
-        const pending = checkpoint.workflow?.pendingFilterRun?.decisions ?? {};
-        setLiveFilterDecisions(pending);
-        const reason = checkpoint.workflow?.pendingFilterRun?.lastError;
-        setNotice(`本次筛选已中断：${reason ?? '未知原因'}。已保存 ${Object.keys(pending).length} 个临时判断；保持档位和配置可续跑。`);
-      }
-    }
-    setWorkflowBusy(false); setWorkflowProgress(null);
+    const task = await call('加入 AI 筛选队列', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId, concurrency: filterConcurrency }));
+    if (!task) return;
+    const queue = await api.study.taskQueue();
+    setStudyQueue(queue);
+    const finished = queue.recent.find((item) => item.id === task.id);
+    if (finished) { await handleTaskDone(finished); return; }
+    setWorkflowProgress({ bookId, stage: 'filter', done: task.done, total: task.total });
+    setNotice(`AI 筛选已加入任务队列，可先阅读或使用其他功能；进度在右下角查看。`);
   }
 
   async function useCompletedFilter(): Promise<void> {
@@ -345,17 +368,17 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
 
   async function makeCards(): Promise<void> {
     if (!translationProfileId || (cardTier !== 'R0' && !cardProfileId) || !await saveDraft()) return;
-    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'cards', done: 0, total: selectedCount });
-    const next = await call('运行制卡 Harness', () => api.study.runCards(bookId, {
+    const task = await call('加入释义生成队列', () => api.study.runCards(bookId, {
       tier: cardTier, translationProfileId, concurrency: cardConcurrency,
       ...(cardTier === 'R0' ? {} : { profileId: cardProfileId }),
     }));
-    if (next) { setList(next); setStep('export'); setNotice(`已生成 ${next.workflow?.cardRun?.drafts.length ?? 0} 张释义草稿；可逐卡修改后导出`); }
-    else {
-      const checkpoint = await call('读取制卡检查点', () => api.study.read(bookId));
-      if (checkpoint) { setList(checkpoint); setNotice(`已保存 ${checkpoint.workflow?.pendingCardRun?.drafts.length ?? 0} 张草稿，重试可续跑。`); }
-    }
-    setWorkflowBusy(false); setWorkflowProgress(null);
+    if (!task) return;
+    const queue = await api.study.taskQueue();
+    setStudyQueue(queue);
+    const finished = queue.recent.find((item) => item.id === task.id);
+    if (finished) { await handleTaskDone(finished); return; }
+    setWorkflowProgress({ bookId, stage: 'cards', done: task.done, total: task.total });
+    setNotice('释义生成已加入任务队列，可先进行其他操作；完成后在右下角打开制卡页。');
   }
 
   async function saveCardDraft(approve = false): Promise<boolean> {
@@ -378,14 +401,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
 
   async function exportPackage(): Promise<void> {
     if (!await saveDraft() || !await saveCardDraft()) return;
-    setWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'export', done: 0, total: cardRun?.drafts.length ?? 0 });
+    setLocalWorkflowBusy(true); setWorkflowProgress({ bookId, stage: 'export', done: 0, total: cardRun?.drafts.length ?? 0 });
     const result = await call('导出带图 Anki 卡组', () => api.study.exportPackage(bookId));
     if (result?.path) {
       setNotice(`已导出 ${result.count} 张 Anki 卡（${list?.workflow?.imageMode === 'none' ? '不带图' : list?.workflow?.imageMode === 'page' ? '整页漫画' : '文字框截图'}）：${result.path}`);
       const next = await call('刷新制卡清单', () => api.study.read(bookId));
       if (next) setList(next);
     }
-    setWorkflowBusy(false); setWorkflowProgress(null);
+    setLocalWorkflowBusy(false); setWorkflowProgress(null);
   }
 
   return <div className="study-panel">
@@ -407,7 +430,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     {!loading && !list && <div className="segment-empty">先生成分词，再点“生成候选”。候选来自漫画文字块；可按 JLPT 难度筛选并逐词核对。</div>}
     {list && <>
       <nav className="study-flow-nav" aria-label="制卡步骤">
-        {([['rules', '1 规则筛词'], ['ai', pendingFilterCount > 0 ? `2 AI 语境筛选 · 待续跑 ${pendingFilterCount}/${filterTotal}` : '2 AI 语境筛选 · 可跳过'], ['review', '3 手动筛词'], ['meaning', '4 AI 释义生成'], ['export', '5 制卡']] as const).map(([value, label]) =>
+        {([['rules', '1 规则筛词'], ['ai', bookTask?.kind === 'filter' ? `2 AI 语境筛选 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : pendingFilterCount > 0 ? `2 AI 语境筛选 · 待续跑 ${pendingFilterCount}/${filterTotal}` : '2 AI 语境筛选 · 可跳过'], ['review', '3 手动筛词'], ['meaning', bookTask?.kind === 'cards' ? `4 AI 释义生成 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : '4 AI 释义生成'], ['export', '5 制卡']] as const).map(([value, label]) =>
           <button key={value} type="button" aria-current={step === value ? 'step' : undefined}
             disabled={workflowBusy || (levelsDirty && value !== 'rules') ||
               ((value === 'meaning' || value === 'export') && !cardRun && !partialFilterApplied && (pendingFilterCount > 0 || wordReviewCount > 0))}
@@ -546,12 +569,16 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               <button type="button" className="btn btn-sm" disabled={selectedCount === 0 || (!partialFilterApplied && wordReviewCount > 0) || workflowBusy} onClick={() => void exportAnki()}>导出旧版 TSV</button>
             </div>
           </section>}
-        {workflowBusy && <div className="study-workflow-progress" role="status">
-          {workflowProgress?.stage === 'filter' ? 'AI 筛选' : workflowProgress?.stage === 'cards' ? '生成释义草稿' : '组装 Anki 卡组'}：{workflowProgress?.done ?? 0} / {workflowProgress?.total ?? '…'}
-          {filterProgress && <span>临时判断：保留 {filterCounts.keep} · 排除 {filterCounts.reject} · 待审 {filterCounts.review} · {filterCounts.llmCalls || list.workflow?.pendingFilterRun?.stats?.llmCalls || 0} 次请求
+        {bookTask && <div className="study-workflow-progress" role="status">
+          {bookTask.kind === 'filter' ? 'AI 筛选' : '释义生成'}：{bookTask.status === 'queued'
+            ? `排队第 ${(studyQueue?.pending.findIndex((item) => item.id === bookTask.id) ?? 0) + 1} 位`
+            : `${bookTask.done} / ${bookTask.total} 词`}
+          {bookTask.kind === 'filter' && filterProgress && <span>临时判断：保留 {filterCounts.keep} · 排除 {filterCounts.reject} · 待审 {filterCounts.review} · {filterCounts.llmCalls || list.workflow?.pendingFilterRun?.stats?.llmCalls || 0} 次请求
             {remainingMinutes !== null && ` · 按当前速度约剩余 ${remainingMinutes} 分钟`}</span>}
-          <button type="button" className="btn btn-sm" onClick={() => void api.study.cancel(bookId)}>取消</button>
+          <button type="button" className="btn btn-sm" onClick={() => void api.study.cancelTask(bookTask.id)}>{bookTask.status === 'queued' ? '取消排队' : '停止任务'}</button>
+          <small>任务在后台继续运行；可返回书库，右下角查看进度。</small>
         </div>}
+        {localWorkflowBusy && !bookTask && <div className="study-workflow-progress" role="status">组装 Anki 卡组：{workflowProgress?.done ?? 0} / {workflowProgress?.total ?? '…'}</div>}
       </aside>
       <div className="study-candidate-area">
       <div className="study-filters">
@@ -646,6 +673,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             {step === 'export' && currentCard && <div className="study-card-draft">
               <h4>{cardRun?.tier} 卡片草稿 {currentCard.needsReview && <span>· 待审核</span>}</h4>
               {currentCard.reviewReason && <p>{currentCard.reviewReason}</p>}
+              <fieldset disabled={workflowBusy}>
               <label>词语／正面<input value={cardEdit.expression} onChange={(event) => setCardEdit((old) => ({ ...old, expression: event.target.value }))} /></label>
               <label>读音<input value={cardEdit.reading} onChange={(event) => setCardEdit((old) => ({ ...old, reading: event.target.value }))} /></label>
               <label>原句／正面<textarea value={cardEdit.sentence} onChange={(event) => setCardEdit((old) => ({ ...old, sentence: event.target.value }))} /></label>
@@ -662,6 +690,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
                 <button type="button" className="btn btn-sm" onClick={() => void saveCardDraft()}>保存卡片草稿</button>
                 {currentCard.needsReview && <button type="button" className="btn btn-sm btn-primary" onClick={() => void saveCardDraft(true)}>确认并通过审核</button>}
               </div>
+              </fieldset>
               <small>改变原图出处会更新默认原句与来源文字；配图方式在左侧独立选择。</small>
             </div>}
             {step === 'export' && currentCard && <details className="study-card-evidence"><summary>查看原文证据与卡片预览</summary>

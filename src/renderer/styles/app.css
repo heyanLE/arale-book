@@ -2344,6 +2344,7 @@ button[aria-disabled='true'] {
 .study-workflow-progress { position: sticky; bottom: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--border-soft); background: var(--bg-panel); line-height: 1.5; }
 .study-card-draft { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 4px; }
 .study-card-draft h4 { margin: 0 0 8px; font-size: 14px; }
+.study-card-draft fieldset { margin: 0; padding: 0; border: 0; }
 .study-card-draft h4 span, .study-card-draft p { color: var(--text-dim); }
 .study-card-draft label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
 .study-card-draft input, .study-card-draft textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
@@ -2680,6 +2681,9 @@ button[aria-disabled='true'] {
   color: var(--text-dim);
   font-size: var(--ui-size-sm);
 }
+
+.study-task-item .ocr-queue-meta { overflow-wrap: anywhere; }
+.study-task-item .ocr-queue-badge { min-width: 44px; }
 
 .ocr-queue-bar {
   height: 3px;

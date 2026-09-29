@@ -40,6 +40,8 @@ import type {
   StudyFilterRunRequest,
   StudyList,
   StudyRunProgress,
+  StudyTaskEntry,
+  StudyTaskQueueState,
   WordCard,
   WordCardDraft,
   OpenBookResult,
@@ -132,6 +134,9 @@ export const IPC = {
   studyApplyCompletedFilter: 'study:applyCompletedFilter',
   studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
+  studyTaskQueue: 'study:taskQueue',
+  studyTaskCancel: 'study:taskCancel',
+  studyTaskDismiss: 'study:taskDismiss',
   studySetImageMode: 'study:setImageMode',
   studyPatchCard: 'study:patchCard',
   studyExportPackage: 'study:exportPackage',
@@ -327,10 +332,13 @@ export interface AraleApi {
     addPhrase(bookId: string, ref: string, expression: string, reading: string): Promise<StudyList>;
     export(bookId: string): Promise<StudyExportResult>;
     directFilter(bookId: string, levels: number[], includeUnknown: boolean, options?: Partial<DirectFilterOptions>): Promise<StudyList>;
-    runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyList>;
+    runFilter(bookId: string, request: StudyFilterRunRequest): Promise<StudyTaskEntry>;
     applyCompletedFilter(bookId: string): Promise<StudyList>;
     clearFilterProgress(bookId: string): Promise<StudyList>;
-    runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList>;
+    runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyTaskEntry>;
+    taskQueue(): Promise<StudyTaskQueueState>;
+    cancelTask(id: string): Promise<void>;
+    dismissTask(id: string): Promise<void>;
     setImageMode(bookId: string, mode: StudyImageMode): Promise<StudyList>;
     patchCard(bookId: string, candidateId: string, patch: StudyCardPatch): Promise<StudyList>;
     exportPackage(bookId: string): Promise<StudyExportResult>;
@@ -363,6 +371,8 @@ export interface AraleEvents {
   'segment:done': SegmentJobResult;
   'study:progress': { bookId: string; done: number; total: number };
   'study:workflow-progress': StudyRunProgress;
+  'study:queue': StudyTaskQueueState;
+  'study:done': StudyTaskEntry;
 }
 
 export type ShellCommand =

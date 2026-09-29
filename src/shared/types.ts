@@ -833,6 +833,32 @@ export interface StudyRunProgress {
   };
 }
 
+export type StudyTaskKind = 'filter' | 'cards';
+export type StudyTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/** 主进程后台任务的公开快照；不包含 API key、提示词或模型输入。 */
+export interface StudyTaskEntry {
+  id: string;
+  bookId: string;
+  title: string;
+  kind: StudyTaskKind;
+  tier: StudyFilterTier | StudyCardTier;
+  status: StudyTaskStatus;
+  enqueuedAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  done: number;
+  total: number;
+  message?: string;
+  error?: string;
+}
+
+export interface StudyTaskQueueState {
+  active: StudyTaskEntry | null;
+  pending: StudyTaskEntry[];
+  recent: StudyTaskEntry[];
+}
+
 export interface StudyFilterRunRequest {
   tier: StudyFilterTier;
   profileId: string;

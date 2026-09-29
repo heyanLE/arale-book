@@ -2226,7 +2226,7 @@ try {
       const input = JSON.parse(raw);
       const user = input.messages.findLast((message) => message.role === 'user');
       const candidates = JSON.parse(user.content);
-      await delay(450);
+      await delay(800);
       const items = candidates.map((item, index) => ({
         id: item.id, decision: ['keep', 'reject', 'review'][index % 3], reason: '冒烟测试判断',
       }));
@@ -2356,7 +2356,7 @@ try {
     const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('开始筛选'));
     button?.click();
   })()`);
-  await delay(780);
+  await delay(950);
   const liveFilter = await client.evaluate(`({
     summary: document.querySelector('.study-flow-nav')?.textContent ?? '',
     progress: document.querySelector('.study-workflow-progress')?.textContent ?? '',
@@ -2365,9 +2365,52 @@ try {
   check('LLM 筛选处理中可见批次进度和临时判断',
     liveFilter.progress.includes('临时判断') && liveFilter.badges > 0,
     JSON.stringify(liveFilter));
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.segment-head button')].find((button) => button.textContent.includes('书库'))?.click();
+  })()`);
+  await delay(80);
+  const backgroundStudy = await client.evaluate(`(async () => ({
+    queue: await window.arale.study.taskQueue(),
+    dock: document.querySelector('.ocr-dock-pill')?.textContent ?? '',
+    studyPanel: !!document.querySelector('.study-panel'),
+    reader: !!document.querySelector('.comic-reader'),
+  }))()`);
+  check('离开制卡页后 AI 任务继续且右下角仍可查看',
+    backgroundStudy.studyPanel === false &&
+    ((backgroundStudy.queue?.active?.bookId === comicId) || backgroundStudy.queue?.recent?.some((item) => item.bookId === comicId && item.status === 'completed')) &&
+    !!backgroundStudy.dock,
+    JSON.stringify({ active: backgroundStudy.queue?.active?.bookId, dock: backgroundStudy.dock, reader: backgroundStudy.reader }));
+  await client.evaluate(`(() => {
+    document.querySelector('.ocr-dock-pill')?.click();
+  })()`);
+  await delay(50);
+  const studyDock = await client.evaluate(`({
+    heading: document.querySelector('.ocr-dock-panel')?.getAttribute('aria-label'),
+    task: document.querySelector('.study-task-item')?.textContent ?? '',
+    open: !![...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('打开制卡页')),
+  })`);
+  check('统一任务弹层列出 AI 任务、进度与返回制卡页入口',
+    studyDock.heading === '任务队列' && studyDock.task.includes('AI 筛词') && studyDock.open,
+    JSON.stringify(studyDock));
+  if (process.env['ARALE_SMOKE_STUDY_QUEUE_SCREENSHOT']) {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_STUDY_QUEUE_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+    await client.send('Emulation.clearDeviceMetricsOverride');
+  }
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('打开制卡页'))?.click();
+  })()`);
+  await delay(300);
+  check('从右下角任务队列返回原书 Anki 页',
+    (await client.evaluate("document.querySelector('[role=tab][aria-selected=true]')?.textContent.includes('Anki 制卡')")) === true);
   let finishedFilter = false;
   for (let i = 0; i < 30; i += 1) {
-    finishedFilter = await client.evaluate("document.querySelector('.study-notice[role=status]')?.textContent.includes('筛选完成') === true");
+    finishedFilter = await client.evaluate(`(async () => {
+      const queue = await window.arale.study.taskQueue();
+      return queue.recent.some((item) => item.bookId === ${JSON.stringify(comicId)} && item.kind === 'filter' && item.status === 'completed') &&
+        document.querySelector('.study-flow-section h3')?.textContent.includes('手动筛词');
+    })()`);
     if (finishedFilter) break;
     await delay(200);
   }
@@ -2447,6 +2490,23 @@ try {
   check('已有词卡切换为不带图不重跑翻译或 LLM',
     (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => value.workflow?.imageMode === 'none' && value.workflow?.cardRun?.drafts.length === 1)`)) === true &&
     mockToolRequests === callsBeforeImageChange.llm && studyTranslationRequests === callsBeforeImageChange.translation);
+  const toCancel = await client.evaluate(`window.arale.study.runFilter(${JSON.stringify(comicId)}, {tier:'F1',profileId:'llm_study_mock',concurrency:1})`);
+  await delay(60);
+  await client.evaluate(`(() => {
+    if (!document.querySelector('.ocr-dock-panel')) document.querySelector('.ocr-dock-pill')?.click();
+  })()`);
+  await delay(70);
+  await client.evaluate(`(() => {
+    [...document.querySelectorAll('.study-task-item button')].find((node) => node.textContent.includes('停止任务'))?.click();
+  })()`);
+  let cancelledStudyTask = false;
+  for (let i = 0; i < 30; i += 1) {
+    cancelledStudyTask = await client.evaluate(`window.arale.study.taskQueue().then((value) => value.recent.some((item) => item.id === ${JSON.stringify(toCancel?.id)} && item.status === 'cancelled'))`);
+    if (cancelledStudyTask) break;
+    await delay(100);
+  }
+  check('右下角停止 AI 任务并保留可续跑检查点', cancelledStudyTask &&
+    (await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)}).then((value) => !!value.workflow?.pendingFilterRun?.sourceHash)`)) === true);
   if (process.env['ARALE_SMOKE_STUDY_CARDS_SCREENSHOT']) {
     await client.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false });
     const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
