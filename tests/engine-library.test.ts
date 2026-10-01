@@ -21,12 +21,25 @@ const LIBRARY = path.join(ROOT, 'engines');
 /** 当前发布的引擎（改名字时这里要一起改——它是应用侧 provider id 的来源）。 */
 const ENGINE = 'arale_onnx_v1';
 
+/**
+ * submodule 是否已初始化。
+ *
+ * 不能只看 engines 目录在不在：git clone 忘了 --recursive 时 git 照样建出空目录，
+ * existsSync 为真，后面的断言就会以引擎源码没了的样子失败，而不是给出
+ * 你没初始化 submodule 这条真正的线索。所以以引擎库的 README 当标志物。
+ */
+function libraryInitialized(): boolean {
+  return fs.existsSync(path.join(LIBRARY, 'README.md'));
+}
+
+const SUBMODULE_SKIP = 'submodule 没初始化：git submodule update --init --recursive';
+
 test('引擎库 README 有引擎清单，且列着当前发布的引擎', (t) => {
-  const readme = path.join(LIBRARY, 'README.md');
-  if (!fs.existsSync(readme)) {
-    t.skip('submodule 没初始化：git submodule update --init --recursive');
+  if (!libraryInitialized()) {
+    t.skip(SUBMODULE_SKIP);
     return;
   }
+  const readme = path.join(LIBRARY, 'README.md');
   const text = fs.readFileSync(readme, 'utf8');
   assert.match(text, /##\s*引擎清单/, 'README 要有「引擎清单」小节');
   assert.ok(text.includes(ENGINE), `清单里要列着引擎 ${ENGINE}`);
@@ -36,8 +49,8 @@ test('引擎库 README 有引擎清单，且列着当前发布的引擎', (t) =>
 });
 
 test('发布的引擎是无 PyTorch 的 Python/ONNX 实现，旧引擎源码已删除', (t) => {
-  if (!fs.existsSync(LIBRARY)) {
-    t.skip('submodule 没初始化');
+  if (!libraryInitialized()) {
+    t.skip(SUBMODULE_SKIP);
     return;
   }
   assert.ok(fs.existsSync(path.join(LIBRARY, ENGINE, 'python', 'ocr_run.py')));
@@ -59,7 +72,11 @@ test('发布的引擎是无 PyTorch 的 Python/ONNX 实现，旧引擎源码已�
   }
 });
 
-test('OCR 仓库 JSONL 在 submodule 中生成，且包按平台给', () => {
+test('OCR 仓库 JSONL 在 submodule 中生成，且包按平台给', (t) => {
+  if (!libraryInitialized()) {
+    t.skip(SUBMODULE_SKIP);
+    return;
+  }
   const repoPath = path.join(LIBRARY, 'repositories', 'default.jsonl');
   const entries = fs.readFileSync(repoPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line)) as
     Array<{ id: string; provides: string; release?: { repo: string; tag: string; assets: Record<string, { asset: string; sha256: string }> } }>;
