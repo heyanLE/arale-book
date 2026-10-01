@@ -1,32 +1,27 @@
 # Windows 开发迁移交接
 
-核对日期：2026-09-26。先读[当前状态](current-state.md)，再执行本页。本文是当前迁移步骤；旧版原文在 `archive/2026-09-26/`。迁移分支为 `codex/windows-handoff`，本地提交不等于推送或发布。
+核对日期：2026-10-01。先读[当前状态](current-state.md)，再执行本页。本文是当前迁移步骤；旧版原文在 `archive/2026-09-26/`。当前开发成果已合入并推送两仓库的 `main`；本地提交不等于推送或发布。
 
 ## 1. 源码通过 Git 搬迁
 
 - 应用仓库：`heyanLE/arale-book`。
 - `engines/` 是独立仓库 `heyanLE/arale-book-ocr-manga` 的 submodule。
-- 两个仓库的迁移工作分支均为 `codex/windows-handoff`；主仓库记录引擎提交的准确指针。
-- 必须先 push 引擎分支，再 push 主仓库分支。否则 Windows clone 得不到这次引擎实现。
+- `codex/windows-handoff` 是历史迁移分支；新设备从主仓库 `main` 克隆，主仓库记录引擎提交的准确指针。
+- 此轮已先推送引擎库 `main`（`460b6b4`），再推送应用 `main`（`58412b7`）。后续引擎改动仍须先推引擎仓库，再更新并推送主仓库 gitlink。
 - README 与设计笔记一并保存；`.workbuddy/` 是本地工具记忆，已忽略，不随源码提交。
 - 小型 JSONL、model-manifest、源码、构建脚本和文档应提交；模型、运行时、ZIP、node_modules 和构建缓存不提交。
 
-功能实现的历史基线提交：引擎 `59eed53`，主仓库功能与 submodule 指针 `91fc064`。换机前按顺序推送：
-
-```bash
-git -C engines push -u origin codex/windows-handoff
-git push -u origin codex/windows-handoff
-```
-
-两个仓库均 push 后，在 Windows 用已配置 GitHub SSH key 的 Git 执行：
+功能实现的历史基线提交：引擎 `59eed53`，主仓库功能与 submodule 指针 `91fc064`。在 Windows 用已配置 GitHub SSH key 的 Git 执行：
 
 ```powershell
-git clone --branch codex/windows-handoff --recurse-submodules git@github.com:heyanLE/arale-book.git
+git clone --branch main --recurse-submodules git@github.com:heyanLE/arale-book.git
 cd arale-book
 git submodule status
+git rev-parse --short HEAD
+git -C engines rev-parse --short HEAD
 ```
 
-若推的是其他分支，将 `--branch` 改成实际分支名。`.gitmodules` 的子仓库地址也是 SSH；仅把主仓库 clone URL 改为 HTTPS 不会自动改变子仓库地址。
+本轮预期主仓库为 `58412b7`、引擎 gitlink 为 `460b6b4`；若 GitHub 后续有新提交，以新 `main` 为准。已有 clone 时先检查未提交改动，再执行 `git switch main; git pull --ff-only origin main; git submodule update --init --recursive`。`.gitmodules` 的子仓库地址也是 SSH；仅把主仓库 clone URL 改为 HTTPS 不会自动改变子仓库地址。
 
 clone 后 submodule 通常处于 detached HEAD。在 Windows 开始改引擎前，先检查 `git -C engines status`，需要时建立工作分支，例如：
 
@@ -63,6 +58,14 @@ if ($actual -ne $expected) { throw 'OCR ZIP 校验失败，请重新传输' }
 $bundle = Join-Path $engine 'build\dev-win32-x64'
 Expand-Archive -LiteralPath $archive -DestinationPath $bundle
 
+# 迁移用的旧 ZIP 缺少这条路径；修复解压后的自带 Python，再用它生成新版包。
+$pth = @(Get-ChildItem -LiteralPath (Join-Path $bundle 'python') -Filter 'python*._pth')
+if ($pth.Count -ne 1) { throw '应当只有一个 python*._pth 文件' }
+$lines = @(Get-Content -LiteralPath $pth[0].FullName)
+if ($lines -notcontains '..\ocr') {
+  Set-Content -LiteralPath $pth[0].FullName -Value ($lines + '..\ocr') -Encoding ascii
+}
+
 # 还原构建输入，之后改源码可重新生成开发目录和 ZIP。
 $runtime = Join-Path $engine 'runtime\win32-x64'
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
@@ -78,7 +81,7 @@ Push-Location $bundle
 Pop-Location
 ```
 
-`--probe` 是 Windows 兼容性工作的第一个验收点；2026-09-26 已在 Windows 11 build 26200 通过。若迁移到别的机器失败，仍应先处理下面的已知问题；不要从系统 Python 安装包来掩盖自包含运行时的问题。源文件应修改 `engines/arale_onnx_v1/python/`，再重跑 `build.mjs --debug`，不要只改生成目录 `build/dev-win32-x64/ocr/`。
+`--probe` 是 Windows 兼容性工作的第一个验收点；2026-09-26 已在 Windows 11 build 26200 通过。旧 ZIP 的 `_pth` 修复必须在**复制到 `runtime/win32-x64` 前**完成，因为 `build.mjs` 只复制 runtime，不会自动补这一行。若迁移到别的机器失败，不要从系统 Python 安装包来掩盖自包含运行时的问题。源文件应修改 `engines/arale_onnx_v1/python/`，再重跑 `build.mjs --debug`，不要只改生成目录 `build/dev-win32-x64/ocr/`。
 
 ## 4. 应用依赖和原生解包器
 
