@@ -1,6 +1,8 @@
 # LLM Harness 结构化返回协议
 
-核对日期：2026-09-29。本文只描述 Anki F1–F3 筛词和 R1–R3 释义/复核的 Chat Completions 返回协议；R0 不调用 LLM。结果结构统一由 `harness-tool.ts` 定义，所有协议最终都由 `harness.ts` 核对候选 ID、数量、字段和值，未通过的批次不会被当成完成结果。
+核对日期：2026-10-02。本文描述 Anki F1–F3、旧 R1–R3 和新 A2–A4 的 Chat Completions 返回协议；A0/A1/R0 不调用 LLM。旧 schema 由 `harness-tool.ts` 定义，新 `submit_anki_pipeline` / `verify_anki_pipeline` schema 与严格字段、问题类型和证据 ID 校验由 `core/study/pipeline.ts` 定义；未通过的批次不会被当成完成结果。
+
+新 A 档位复用以下供应商协议协商。生成请求带输出 token 上限：OpenAI 官方地址用 `max_completion_tokens`，其他端点用 `max_tokens`。预算模式在每次 HTTP/协议重试前检查保守估算；返回 usage 时用供应商数字记账，未报告时用估算。`budgetTokens` 是实际/估算合并的预算记账，不能显示成已确认计费 token；正常输入/输出 token 与估算分开展示。单次实际用量仍可能超过估算；真实供应商和推理模型兼容性尚未验收。A 阶段预算不包含用户单独启动的 F 筛词，详情见 [Anki Harness](anki-harness.md)。
 
 ## 默认选择与降级
 

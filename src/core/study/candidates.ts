@@ -1,5 +1,6 @@
 import type { SegmentUnit, StudyCandidate, StudyOccurrence } from '../../shared/types';
 import { lookupJlpt, normalizeReading, studyKey, type JlptIndex } from './jlpt';
+import { bestOccurrences } from './pipeline';
 
 export interface MorphToken {
   surface: string;
@@ -59,9 +60,10 @@ export function buildStudyCandidates(
       candidate.pageCount = pages.size;
       candidate.properName = candidate.properName === true && token.posDetail === '固有名詞';
       candidate.tokenizerKnown = candidate.tokenizerKnown === true || token.known;
-      if (candidate.occurrences.length < MAX_OCCURRENCES) candidate.occurrences.push(occurrence);
+      candidate.occurrences = bestOccurrences([...candidate.occurrences, occurrence], MAX_OCCURRENCES);
     }
   });
+  for (const candidate of byId.values()) candidate.contextRef = candidate.occurrences[0]?.id ?? candidate.contextRef;
   return [...byId.values()].sort((a, b) => b.count - a.count || (a.expression < b.expression ? -1 : 1));
 }
 

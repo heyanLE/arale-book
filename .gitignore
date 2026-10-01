@@ -5,6 +5,8 @@ dist-test/
 .electron-cache/
 .home/
 .probe/
+# 隔离下载/安装验收目录，包含约 1 GiB 的 OCR 引擎
+.tmp/
 .smoke-userdata/
 .screenshot-userdata/
 # Rust 工具链与原生产物：体积大、可重建，不进仓库

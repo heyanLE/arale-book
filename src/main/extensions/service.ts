@@ -183,7 +183,10 @@ export class ExtensionService {
         ? readRepositoryFile(this.options.localRepositoryFile) : null;
       const localIsNewer = local?.ok && cached.ok && local.catalog.extensions.some((entry) => {
         const remote = cached.catalog.extensions.find((item) => item.id === entry.id);
-        return remote === undefined || compareVersion(entry.version, remote.version) > 0;
+        return remote === undefined || compareVersion(entry.version, remote.version) > 0 ||
+          (compareVersion(entry.version, remote.version) === 0 &&
+            resolveDownload(remote, process.platform, process.arch).sha256 === '' &&
+            /^[0-9a-f]{64}$/.test(resolveDownload(entry, process.platform, process.arch).sha256));
       });
       const fromLocal = local?.ok && (this.options.preferLocalRepository === true || !cached.ok || localIsNewer);
       const found = (fromLocal && local?.ok) ? local : cached.ok ? cached : null;
@@ -410,7 +413,7 @@ export class ExtensionService {
           }
           lastError =
             error instanceof DownloadError
-              ? `${error.message} @ ${url}`
+              ? `${error.message} @ ${url}\n${error.detail}`
               : error instanceof Error
                 ? `${error.message} @ ${url}`
                 : String(error);
@@ -422,6 +425,9 @@ export class ExtensionService {
       }
 
       this.progress(id, 'verifying', downloaded.bytes, downloaded.bytes);
+      if (download.bytes > 0 && downloaded.bytes !== download.bytes) {
+        return { ok: false, error: `下载大小与清单不一致：期望 ${download.bytes} 字节，实际 ${downloaded.bytes} 字节` };
+      }
       if (downloaded.sha256 !== download.sha256) {
         return {
           ok: false,

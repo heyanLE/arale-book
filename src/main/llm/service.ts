@@ -43,6 +43,9 @@ export interface LlmCompletionRequest {
   signal?: AbortSignal;
   /** 主进程任务启动时锁定配置身份；设置被修改后停止，避免一本书混用模型。 */
   expectedProfileSignature?: string;
+  /** 新制卡流水线控制单次输出及协议重试预算。 */
+  maxOutputTokens?: number;
+  tokenAllowance?: number;
   /** 单一提交工具：模型通过 function.arguments 返回结构化结果。 */
   tool?: { name: string; description: string; parameters: Record<string, unknown> };
 }
@@ -162,6 +165,7 @@ export class LlmService {
     let fallbackCount = 0;
     let mode: HarnessMode = 'plain';
     let usageTotals: LlmAnalyzeResult['usage'] | undefined;
+    let budgetTokens = 0;
     try {
       const stored = this.readStored();
       const wanted = request.profileId ?? stored.activeProfileId;
@@ -187,12 +191,12 @@ export class LlmService {
       const result = (text: string, actualMode: HarnessMode): LlmAnalyzeResult => ({
         ok: true, text, profileName: profile.name, model: profile.model,
         ...(request.tool ? { responseMode: actualMode } : {}), httpAttempts, fallbackCount,
-        ...(usageTotals ? { usage: usageTotals } : {}),
+        ...(usageTotals ? { usage: usageTotals } : {}), ...(request.maxOutputTokens ? { budgetTokens } : {}),
       });
       const failed = (error: string): LlmAnalyzeResult => ({
         ...fail(error), httpAttempts, fallbackCount,
         ...(request.tool ? { responseMode: mode } : {}),
-        ...(usageTotals ? { usage: usageTotals } : {}),
+        ...(usageTotals ? { usage: usageTotals } : {}), ...(request.maxOutputTokens ? { budgetTokens } : {}),
       });
       const send = async (selectedMode: HarnessMode): Promise<{ response: Response; raw: string }> => this.withRequestSlot(request.signal, async () => {
         const controller = new AbortController();
@@ -207,6 +211,9 @@ export class LlmService {
             ],
             temperature: request.temperature ?? profile.temperature,
           };
+          if (request.maxOutputTokens !== undefined) {
+            body[new URL(profile.baseUrl).hostname === 'api.openai.com' ? 'max_completion_tokens' : 'max_tokens'] = request.maxOutputTokens;
+          }
           if (selectedMode === 'tool' && request.tool) {
             body['tools'] = [{ type: 'function', function: { ...request.tool, strict: true } }];
             body['tool_choice'] = { type: 'function', function: { name: request.tool.name } };
@@ -228,6 +235,10 @@ export class LlmService {
 
       let emptyRetry = false;
       for (let attempt = 0; attempt < 6; attempt += 1) {
+        const reserve = request.maxOutputTokens
+          ? Math.ceil([...request.system ?? '', ...request.user, ...JSON.stringify(request.tool?.parameters ?? {})].length * 1.5) + 128 + request.maxOutputTokens : 0;
+        if (request.tokenAllowance !== undefined && budgetTokens + reserve > request.tokenAllowance) return failed('token budget：剩余预算不足以重试请求');
+        budgetTokens += reserve;
         const { response, raw } = await send(mode);
         if (!response.ok) {
           const next = request.tool && formatNotSupported(mode, response.status, raw) ? nextHarnessMode(mode) : null;
@@ -242,7 +253,9 @@ export class LlmService {
         let data: unknown;
         try { data = JSON.parse(raw) as unknown; }
         catch { return failed(`模型返回的不是 JSON：${truncate(raw, 200)}`); }
-        usageTotals = mergeUsage(usageTotals, extractUsage(data));
+        const attemptUsage = extractUsage(data);
+        if (reserve && attemptUsage?.promptTokens !== undefined && attemptUsage.completionTokens !== undefined) budgetTokens += attemptUsage.promptTokens + attemptUsage.completionTokens - reserve;
+        usageTotals = mergeUsage(usageTotals, attemptUsage);
         if (finishReason(data) === 'length') return failed('输出 token limit：模型答案被截断');
         if (request.tool && mode === 'tool') {
           const toolResult = extractToolArguments(data, request.tool.name);
@@ -279,7 +292,7 @@ export class LlmService {
     } catch (error) {
       const reason = request.signal?.aborted ? '已取消 LLM 请求' : describeError(error);
       return { ...fail(reason), httpAttempts, fallbackCount, ...(request.tool ? { responseMode: mode } : {}),
-        ...(usageTotals ? { usage: usageTotals } : {}) };
+        ...(usageTotals ? { usage: usageTotals } : {}), ...(request.maxOutputTokens ? { budgetTokens } : {}) };
     }
   }
 

@@ -89,6 +89,30 @@ test('settings: 首次运行给空 profiles + 默认提示词', () => {
   assert.equal(settings.prompt, DEFAULT_LLM_PROMPT);
 });
 
+test('制卡预算限制格式重试，未知用量保守记账且发送输出上限', async () => {
+  const captured = captureFetch(async () => new Response(JSON.stringify({ error: { message: 'tools unsupported' } }), { status: 400 }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service);
+  service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ profileId: 'p1', system: '只输出 JSON', user: '[]',
+    tool: harnessSubmissionTool('card'), maxOutputTokens: 600, tokenAllowance: 2000 });
+  assert.equal(captured.calls.length, 1);
+  assert.equal(result.ok, false); assert.match(result.error ?? '', /token budget/);
+  assert.ok((result.budgetTokens ?? 0) > 0);
+  const body = JSON.parse(String(captured.calls[0]?.init?.body));
+  assert.equal(body.max_tokens, 600);
+});
+
+test('官方 OpenAI 制卡请求使用 max_completion_tokens，usage 计入预算', async () => {
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ message: { content: '{"items":[]}' } }], usage: { prompt_tokens: 90, completion_tokens: 10 } }));
+  const { service } = makeService(captured.fetchImpl);
+  seed(service, { baseUrl: 'https://api.openai.com/v1' });
+  service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ profileId: 'p1', user: 'JSON', tool: harnessSubmissionTool('card'), maxOutputTokens: 800, tokenAllowance: 10000 });
+  assert.equal(result.ok, true); assert.equal(result.budgetTokens, 100);
+  assert.equal(JSON.parse(String(captured.calls[0]?.init?.body)).max_completion_tokens, 800);
+});
+
 test('settings: 读盘时去掉 baseUrl 末尾斜杠，空白 prompt 回退默认', () => {
   // 手写文件而不是走 update：这条测的是「用户/旧版本写下的文件」怎么被解读。
   const { service, file } = makeService();

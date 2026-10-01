@@ -147,6 +147,7 @@ const api: AraleApi = {
     applyCompletedFilter: (bookId) => ipcRenderer.invoke(IPC.studyApplyCompletedFilter, bookId),
     clearFilterProgress: (bookId) => ipcRenderer.invoke(IPC.studyClearFilterProgress, bookId),
     runCards: (bookId, request) => ipcRenderer.invoke(IPC.studyRunCards, bookId, request),
+    previewCards: (bookId, tier) => ipcRenderer.invoke(IPC.studyPreviewCards, bookId, tier),
     taskQueue: () => ipcRenderer.invoke(IPC.studyTaskQueue),
     cancelTask: (id) => ipcRenderer.invoke(IPC.studyTaskCancel, id),
     dismissTask: (id) => ipcRenderer.invoke(IPC.studyTaskDismiss, id),

@@ -3,7 +3,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
-import type { BookRecord, BookSegments, DirectFilterOptions, LlmAnalyzeResult, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardPatch, StudyCardRunRequest, StudyFilterRunRequest, StudyImageMode, StudyList, StudyRunProgress, StudyRunStats } from '../../shared/types';
+import type { BookRecord, BookSegments, DictTerm, DirectFilterOptions, LlmAnalyzeResult, StudyCandidate, StudyCandidatePatch, StudyCardDraft, StudyCardPatch, StudyCardRunRequest, StudyFilterRunRequest, StudyImageMode, StudyList, StudyRunProgress, StudyRunStats } from '../../shared/types';
+import { isPipelineTier, readyDraft, withIssues } from '../../core/study/pipeline';
+import { previewCardPipeline, runCardPipeline } from './pipeline';
 import { readJson, writeFileAtomic, writeJsonAtomic } from '../../core/util/atomic-json';
 import { ankiTsv, buildStudyCandidates } from '../../core/study/candidates';
 import { CARD_TIERS, FILTER_TIERS, MAX_HARNESS_CONTEXT_CHARS, MAX_HARNESS_TRANSLATION_CHARS, HarnessOutputError, cardHarnessPrompt, chosenOccurrence, defaultStudyWorkflow, directCandidates, filterHarnessPrompt, normalizeDirectOptions, normalizeLevels, parseCardBatchResponse, parseFilterResponse, parseVerifyBatchResponse, verifyCardPrompt, verifyFilterPrompt } from '../../core/study/harness';
@@ -26,10 +28,11 @@ export interface StudyServiceOptions {
   getSegments(bookId: string): BookSegments | null;
   ensureDictionary(): Promise<unknown>;
   lookupMeaning(expression: string, reading: string): string;
+  lookupTerms?(expression: string): DictTerm[];
   progress?(bookId: string, done: number, total: number): void;
   workflowProgress?(progress: StudyRunProgress): void;
   llm?: Pick<LlmService, 'complete'> & Partial<Pick<LlmService, 'profileSignature'>>;
-  translation?: Pick<TranslationService, 'translate'>;
+  translation?: Pick<TranslationService, 'translate'> & Partial<Pick<TranslationService, 'profileSignature'>>;
   /** 测试注入纯图片；正式运行从漫画原始页图裁取。 */
   crop?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
   pageImage?: (bookId: string, occurrence: StudyCandidate['occurrences'][number]) => StudyCrop;
@@ -52,6 +55,8 @@ export class StudyService {
     value.wordfreqSource = source;
     for (const item of value.candidates) {
       if (item.partOfSpeech === '短语' && item.forceInclude === undefined) item.forceInclude = true;
+      // 旧版默认总是第一处；不同的 contextRef 表明用户曾经选过出处。
+      if (item.contextPinned === undefined && item.contextRef !== item.occurrences[0]?.id) item.contextPinned = true;
     }
     return value;
   }
@@ -99,6 +104,13 @@ export class StudyService {
           item.excluded = old.excluded;
           item.exportedAt = old.exportedAt;
           item.forceInclude = old.forceInclude;
+          item.meaningEdited = old.meaningEdited;
+          item.contextPinned = old.contextPinned;
+          if (old.contextPinned) {
+            const pinned = segments.units.find(unit => old.occurrences.some(one => one.id === old.contextRef && one.ref === unit.ref));
+            const occurrence = old.occurrences.find(one => one.id === old.contextRef);
+            if (pinned && occurrence && pinned.text === occurrence.text && !item.occurrences.some(one => one.id === occurrence.id)) item.occurrences.push(occurrence);
+          }
           if (item.occurrences.some((one) => one.id === old.contextRef)) item.contextRef = old.contextRef;
         }
         if ((index + 1) % 100 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -143,10 +155,11 @@ export class StudyService {
       item.jlptConflict = match.conflict;
       item.zipf = zipfForCandidate(item);
     }
-    if (typeof patch.meaning === 'string') item.meaning = patch.meaning.slice(0, 2000);
+    if (typeof patch.meaning === 'string' && patch.meaning !== item.meaning) { item.meaning = patch.meaning.slice(0, 2000); item.meaningEdited = true; }
     if (typeof patch.contextRef === 'string') {
       if (!item.occurrences.some((one) => one.id === patch.contextRef)) throw new Error('出处不属于该词');
       item.contextRef = patch.contextRef;
+      item.contextPinned = true;
     }
     writeJsonAtomic(this.fileFor(bookId), list);
     return item;
@@ -253,7 +266,7 @@ export class StudyService {
     })))).digest('hex');
     const concurrency = normalizeHarnessConcurrency(request.concurrency);
     const prior = workflow.pendingFilterRun;
-    const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash;
+    const resumed = prior?.tier === request.tier && prior.profileId === request.profileId && prior.sourceHash === sourceHash && prior.profileSignature === profileSignature;
     if (!resumed && Object.keys(prior?.decisions ?? {}).length > 0) {
       throw new Error('已有不同档位、模型或规则的 LLM 检查点；先续跑原任务或明确放弃旧检查点');
     }
@@ -308,7 +321,7 @@ export class StudyService {
           return;
         }
         for (const row of rows) decisions[row.id] = { decision: row.decision, reason: row.reason };
-        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, concurrency, sourceHash, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
+        list.workflow = { ...workflow, pendingFilterRun: { tier: request.tier, profileId: request.profileId, concurrency, sourceHash, profileSignature, decisions, stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt } } };
         writeJsonAtomic(this.fileFor(bookId), list);
         emitFilterProgress(rows);
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -333,7 +346,7 @@ export class StudyService {
       return list;
     } catch (error) {
       list.workflow = { ...workflow, pendingFilterRun: {
-        tier: request.tier, profileId: request.profileId, concurrency, sourceHash, decisions,
+        tier: request.tier, profileId: request.profileId, concurrency, sourceHash, profileSignature, decisions,
         stats: { ...stats, elapsedMs: stats.elapsedMs + Date.now() - startedAt },
         lastError: (error instanceof Error ? error.message : String(error)).slice(0, 300),
       } };
@@ -367,9 +380,30 @@ export class StudyService {
     return list;
   }
 
-  /** 第三步：R0 翻译或 R1–R3 LLM Harness 制作草稿。每张原句都来自固定的漫画文字块。 */
+  /** 只读取词典和候选的消耗预览，不调用模型或翻译。 */
+  async previewCards(bookId: string, tier: string) {
+    if (!isPipelineTier(tier)) throw new Error('预算预览仅支持 A0–A4');
+    const list = this.read(bookId);
+    if (!list) throw new Error('请先生成候选');
+    await this.options.ensureDictionary();
+    return previewCardPipeline(list, tier, this.options.lookupTerms);
+  }
+
+  /** 兼容旧 R 档位，并把新 A 档位交给统一流水线。 */
   async runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyList> {
     if (this.running.has(bookId)) throw new Error('这本书已有学习任务在运行');
+    if (isPipelineTier(request.tier)) {
+      const list = this.read(bookId);
+      if (!list) throw new Error('请先生成学习候选');
+      const job = { cancelled: false, controller: new AbortController() };
+      this.running.set(bookId, job);
+      try {
+        return await runCardPipeline({ list, request: { ...request, tier: request.tier }, sourceHash: selectedHash(list),
+          llm: this.options.llm, translation: this.options.translation, ensureDictionary: this.options.ensureDictionary,
+          lookupTerms: this.options.lookupTerms, signal: job.controller.signal,
+          save: () => writeJsonAtomic(this.fileFor(bookId), list), progress: this.options.workflowProgress });
+      } finally { this.running.delete(bookId); }
+    }
     if (!['R0', 'R1', 'R2', 'R3'].includes(request.tier)) throw new Error('未知制卡档位');
     const translation = this.options.translation;
     if (!translation) throw new Error('翻译服务未就绪');
@@ -522,6 +556,10 @@ export class StudyService {
     if (!candidate) throw new Error('词卡候选已失效');
     if (patch.contextRef !== undefined) {
       if (!candidate.occurrences.some((one) => one.id === patch.contextRef)) throw new Error('词卡出处不属于该词');
+      if (patch.contextRef !== (draft.contextRef ?? candidate.contextRef)) {
+        draft.manuallyApproved = false;
+        Object.assign(draft, withIssues(draft, [{ field: 'sentence', code: 'changed', reason: '原图出处已更换，请核对新原句的词义与句译' }]));
+      }
       draft.contextRef = patch.contextRef;
     }
     for (const key of ['expression', 'reading', 'sentence', 'sourceLabel', 'meaning', 'sentenceTranslation', 'usage', 'nuance'] as const) {
@@ -530,9 +568,16 @@ export class StudyService {
       if ((key === 'expression' || key === 'sentence') && !value) throw new Error('词语和原句不能为空');
       draft[key] = value;
     }
-    if (patch.needsReview === false && draft.meaning && draft.sentenceTranslation) {
+    const missingReading = isPipelineTier(list.workflow!.cardRun!.tier) && /[\p{Script=Han}]/u.test(draft.expression ?? candidate.expression) && !(draft.reading ?? candidate.reading).trim();
+    if (isPipelineTier(list.workflow!.cardRun!.tier) && missingReading) {
+      Object.assign(draft, withIssues(draft, [...(draft.issues ?? []), { field: 'reading', code: 'missing', reason: '请补全汉字词的读音后再通过审核' }]));
+    }
+    if (patch.needsReview === false && !missingReading && draft.meaning && (list.workflow?.cardRun?.tier === 'A0' || draft.sentenceTranslation)) {
       draft.needsReview = false;
       draft.reviewReason = '';
+      draft.issues = [];
+      draft.status = 'ready';
+      draft.manuallyApproved = true;
     }
     writeJsonAtomic(this.fileFor(bookId), list);
     return list;
@@ -545,17 +590,22 @@ export class StudyService {
     const book = this.options.getBook(bookId);
     const run = list?.workflow?.cardRun;
     if (!list || !book || !run) throw new Error('请先运行制卡 Harness');
+    const segments = this.options.getSegments(bookId);
+    if (segments && segments.generatedAt !== list.segmentGeneratedAt) throw new Error('原文分词已更新，请重新生成候选和词卡');
     if (run.sourceHash !== selectedHash(list)) throw new Error('候选已变化，请重新制作词卡');
-    if (run.drafts.some((item) => item.needsReview)) throw new Error('还有存疑词卡，请先审核');
+    if (!isPipelineTier(run.tier) && run.drafts.some((item) => item.needsReview)) throw new Error('还有存疑词卡，请先审核');
     const byId = new Map(selectedCandidates(list).map((item) => [item.id, item]));
     if (run.drafts.length !== byId.size) throw new Error('制卡草稿与候选数量不一致');
+    if (new Set(run.drafts.map(d => d.candidateId)).size !== byId.size || run.drafts.some(d => !byId.has(d.candidateId))) throw new Error('制卡草稿 ID 与候选不一致');
+    const exportDrafts = isPipelineTier(run.tier) ? run.drafts.filter(d => readyDraft(d, run.tier)) : run.drafts;
+    if (!exportDrafts.length) throw new Error('没有已通过的词卡，请先处理待审或暂缓项');
     const imageMode = list.workflow?.imageMode ?? 'crop';
     const crop = this.options.crop ?? cropStudyOccurrence;
     const pageImage = this.options.pageImage ?? pageStudyOccurrence;
     const pageCache = new Map<string, StudyCrop>();
     const inputs = [];
-    for (let index = 0; index < run.drafts.length; index += 1) {
-      const draft = run.drafts[index]!;
+    for (let index = 0; index < exportDrafts.length; index += 1) {
+      const draft = exportDrafts[index]!;
       const candidate = byId.get(draft.candidateId);
       const occurrence = candidate && (candidate.occurrences.find((one) => one.id === draft.contextRef) ?? chosenOccurrence(candidate));
       if (!candidate || !occurrence) throw new Error('制卡草稿的原文出处已失效');
@@ -573,12 +623,13 @@ export class StudyService {
         }
         inputs.push({ candidate, draft, imageName: image.name, image: image.data });
       }
-      this.options.workflowProgress?.({ bookId, stage: 'export', done: index + 1, total: run.drafts.length });
+      this.options.workflowProgress?.({ bookId, stage: 'export', done: index + 1, total: exportDrafts.length });
     }
     const content = await buildAnkiPackage(bookId, book.title, run.tier, inputs);
     writeFileAtomic(targetPath, content);
     const now = Date.now();
-    for (const item of selectedCandidates(list)) item.exportedAt = now;
+    const exportedIds = new Set(exportDrafts.map(d => d.candidateId));
+    for (const item of selectedCandidates(list)) if (exportedIds.has(item.id)) item.exportedAt = now;
     writeJsonAtomic(this.fileFor(bookId), list);
     return inputs.length;
   }
@@ -668,6 +719,7 @@ export function chooseMeaning(
 ): string {
   const matchingExpression = results.filter((item) => item.term.expression === expression);
   const exact = matchingExpression.find((item) => normalizeReading(item.term.reading) === normalizeReading(reading));
-  if (reading && !exact) return '';
-  return plainGlossary((exact ?? matchingExpression[0])?.term.glossary).slice(0, 1000);
+  const kanaFallback = matchingExpression.find(item => !item.term.reading && normalizeReading(item.term.expression) === normalizeReading(reading));
+  if (reading && !exact && !kanaFallback) return '';
+  return plainGlossary((exact ?? kanaFallback ?? matchingExpression[0])?.term.glossary).slice(0, 1000);
 }

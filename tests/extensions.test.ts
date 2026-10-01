@@ -108,6 +108,22 @@ test('调试目录优先于远端缓存，直接加载且不会被卸载', () =>
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('同版本随包发布 SHA 能覆盖旧缓存的未发布状态，不覆盖远端有效 SHA', () => {
+  const root = makeRoot();
+  try {
+    const repo = path.join(root, 'default.jsonl');
+    fs.writeFileSync(repo, JSON.stringify({ ...VALID_ENTRY, platforms: [], arch: [] }));
+    const cacheDir = path.join(root, 'repositories');
+    fs.mkdirSync(cacheDir);
+    const cache = path.join(cacheDir, `${crypto.createHash('sha256').update(DEFAULT_CATALOG_URL).digest('hex')}.jsonl`);
+    fs.writeFileSync(cache, JSON.stringify({ ...VALID_ENTRY, sha256: '', platforms: [], arch: [] }));
+    const service = new ExtensionService({ root, localRepositoryFile: repo });
+    assert.equal(service.loadCatalog().catalog.extensions[0]?.sha256, VALID_ENTRY.sha256);
+    fs.writeFileSync(cache, JSON.stringify({ ...VALID_ENTRY, sha256: 'b'.repeat(64), platforms: [], arch: [] }));
+    assert.equal(service.loadCatalog().catalog.extensions[0]?.sha256, 'b'.repeat(64));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('parseCatalog: 接受合法清单', () => {
   const parsed = parseCatalog(catalog([VALID_ENTRY]));
   assert.equal(parsed.ok, true);

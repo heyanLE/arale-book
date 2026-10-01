@@ -695,6 +695,10 @@ export interface StudyCandidate {
   occurrences: StudyOccurrence[];
   /** 用户可修订的词典释义。 */
   meaning: string;
+  /** 明确人工修订的释义不被词典刷新覆盖。 */
+  meaningEdited?: boolean;
+  /** 用户指定原句时，不自动更换例句。 */
+  contextPinned?: boolean;
   selected: boolean;
   excluded: boolean;
   /** 用户明确保留：跳过自动直接筛选；显式 excluded 仍优先。 */
@@ -716,7 +720,23 @@ export interface StudyList {
 }
 
 export type StudyFilterTier = 'F1' | 'F2' | 'F3';
-export type StudyCardTier = 'R0' | 'R1' | 'R2' | 'R3';
+export type StudyPipelineTier = 'A0' | 'A1' | 'A2' | 'A3' | 'A4';
+export type StudyCardTier = 'R0' | 'R1' | 'R2' | 'R3' | StudyPipelineTier;
+export interface StudyDictionaryEvidence {
+  id: string;
+  dictionary: string;
+  expression: string;
+  reading: string;
+  text: string;
+  /** 仅是条目切分的提示，不代表已经确认语境义。 */
+  ambiguous: boolean;
+  truncated: boolean;
+}
+export interface StudyCardIssue {
+  field: 'meaning' | 'reading' | 'sentence' | 'sentenceTranslation' | 'usage';
+  code: 'missing' | 'ambiguous' | 'ocr' | 'context' | 'unsupported' | 'changed' | 'budget' | 'limit';
+  reason: string;
+}
 export type StudyImageMode = 'none' | 'crop' | 'page';
 export type StudyFilterDecision = 'keep' | 'reject' | 'review';
 
@@ -750,6 +770,8 @@ export interface StudyRunStats {
   cacheMissTokens?: number;
   cacheReportedCalls?: number;
   responseModes?: Partial<Record<'tool' | 'json_schema' | 'json_object' | 'plain', number>>;
+  /** 无 usage 时也计入预算；这是估算值，不冒充计费 token。 */
+  estimatedTokens?: number;
 }
 
 export interface StudyWorkflow {
@@ -777,6 +799,7 @@ export interface StudyWorkflow {
     profileId: string;
     concurrency?: 1 | 2 | 3;
     sourceHash: string;
+    profileSignature?: string;
     decisions: Record<string, { decision: StudyFilterDecision; reason: string }>;
     stats?: StudyRunStats;
     lastError?: string;
@@ -791,6 +814,7 @@ export interface StudyWorkflow {
     sourceHash: string;
     drafts: StudyCardDraft[];
     stats?: StudyRunStats;
+    pipeline?: StudyPipelineCheckpoint;
   };
   pendingCardRun?: {
     tier: StudyCardTier;
@@ -801,7 +825,19 @@ export interface StudyWorkflow {
     drafts: StudyCardDraft[];
     stats?: StudyRunStats;
     lastError?: string;
+    pipeline?: StudyPipelineCheckpoint;
   };
+}
+
+/** 持久化生成计划与证据，避免修改同名配置或词典后混用结果。 */
+export interface StudyPipelineCheckpoint {
+  version: 1;
+  planHash: string;
+  tokenBudget: number | null;
+  budgetUsed: number;
+  evidence: Record<string, StudyDictionaryEvidence[]>;
+  sentenceTranslations: Record<string, string>;
+  newCardLimit?: number | null;
 }
 
 export interface StudyCardDraft {
@@ -819,6 +855,13 @@ export interface StudyCardDraft {
   /** R3 复核存疑时需要人工确认才能进入牌组。 */
   needsReview: boolean;
   reviewReason: string;
+  status?: 'ready' | 'needs_review' | 'deferred';
+  issues?: StudyCardIssue[];
+  evidenceIds?: string[];
+  repairs?: number;
+  /** 本地/翻译档保留词典参考性质，不声称已核对语境。 */
+  referenceOnly?: boolean;
+  manuallyApproved?: boolean;
 }
 
 export type StudyCardPatch = Partial<Pick<StudyCardDraft,
@@ -883,6 +926,12 @@ export interface StudyCardRunRequest {
   translationProfileId: string;
   profileId?: string;
   concurrency?: 1 | 2 | 3;
+  /** A 档位的 token 预算，null/缺失不限；包含生成、复核与重试。 */
+  tokenBudget?: number | null;
+  /** 用户明确选择放弃不兼容的旧释义检查点。 */
+  restart?: boolean;
+  /** 本次最多新增处理的卡数；已完成卡保留，其余暂缓，按阅读优先度选择。 */
+  newCardLimit?: number | null;
 }
 
 export interface StudyCandidatePatch {
@@ -893,6 +942,17 @@ export interface StudyCandidatePatch {
   meaning?: string;
   contextRef?: string;
   forceInclude?: boolean;
+}
+
+export interface StudyPipelinePreview {
+  selected: number;
+  aiItems: number;
+  translationSentences: number;
+  baseCalls: number;
+  /** 字符估算，不是模型 tokenizer 或实际计费；不含动态复核/修复。 */
+  estimatedInputTokens: number;
+  outputTokenLimit: number;
+  riskItems: number;
 }
 
 export interface StudyExportResult {
@@ -1104,6 +1164,8 @@ export interface LlmAnalyzeResult {
   responseMode?: 'tool' | 'json_schema' | 'json_object' | 'plain';
   httpAttempts?: number;
   fallbackCount?: number;
+  /** 预算记账包含 usage 与未报告 HTTP 的保守估算，不等于实际计费。 */
+  budgetTokens?: number;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;

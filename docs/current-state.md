@@ -1,6 +1,6 @@
 # 当前状态与接续任务
 
-核对日期：2026-09-30。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
+核对日期：2026-10-02。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
 功能基线：应用提交 `91fc064`、文档整理前提交 `1b57c64`；引擎功能提交 `59eed53`。这些是定位历史的基线，当前 HEAD 用 `git log` 查看。
 
 ## 现在是什么
@@ -20,11 +20,11 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | OCR 仓库 | 一个 HTTPS JSONL 文件代表一个仓库；设置中可增删，默认当前引擎库 |
 | 正式应用包 | 只携带从 submodule 取得的小型仓库索引，不携带可下载引擎 |
 | 开发/调试包 | 存在 `build/dev-<platform>-<arch>/` 时直接加载；调试应用包会复制该目录 |
-| 发布 | macOS OCR ZIP 已上传到引擎仓库 `v0.2.0` 草稿 Release，尚未公开；Windows ZIP 未上传，JSONL 的 Windows SHA 仍为空。主项目 `main` 的 Anki/设置改动已推送到 GitHub；引擎源码 `main` 已同步 |
+| 发布 | 引擎仓库 `v0.2.0` 已公开，macOS/Windows 两个资产的 GitHub digest 与本地构建记录一致。Windows 已通过真实网络下载、应用安装和下载后单页 OCR；本地 JSONL 已补 Windows SHA，尚需提交/推送索引及应用改动。干净 Windows 的 VC++ 条件依赖仍未验收 |
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
-| Anki Harness | 当前为五步：规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 AI 释义生成 → 制卡。F1–F3 和 R0–R3 在主进程串行后台队列执行，可离开页面；右下角与 OCR 共用任务弹层。DeepSeek 标准地址用 JSON Output，OpenAI 官方地址优先 JSON Schema，其余兼容端点尝试工具调用并按不兼容错误降级；每书记录实际 HTTP 和缓存 token。单任务内 LLM 批次默认并发 2、最多 3。第 5 步逐卡编辑、选择无图/文字框/整页并导出 `.apkg`。详见[筛选 UX](anki-filter-ux.md)、[Anki Harness](anki-harness.md)及[LLM 协议](llm-output-protocol.md)。 |
+| Anki Harness | 五步：规则筛词 → 可选 AI 筛选 → 手动筛词 → A0–A4 证据生成/修复 → 制卡。新增全部出处优选、用户词典多条证据、字段级问题与有限换句修复；A0 本地、A1 翻译、A2 疑难 AI、A3 标准、A4 全量复核。可设置生成 token 预算和新增卡数；已通过卡可先导出，其余待审/暂缓保留。A3/A4 无需翻译配置，旧 F/R 保留兼容；后台队列、实际 HTTP/缓存 token 统计与配图独立设置沿用。详见[Anki Harness](anki-harness.md)及[LLM 协议](llm-output-protocol.md)。 |
 | 整书原始词表 | 漫画文字块和 EPUB 章节统一由 Kuromoji 按日语词形切分；Yomitan 词典只标记是否收录。助词、助动词、标点和未收录的单个假名不进入学习词表，但词位置信息仍保存在 `segments.json`。打开旧版逐字产物会自动重建；阅读时点词查询仍走词典扫描。 |
 | 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片分翻译栏与 LLM 分析栏管理各自默认项及提示词。弹窗引擎下拉只列实际配置，顶部词语与编辑图标共用按钮。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
 
@@ -45,7 +45,7 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | GUI smoke | Windows 普通 smoke 162/162；`ARALE_SMOKE_OCR=1` 真 OCR smoke 183/183，含 ONNX 4 页识别、系统 OCR 队列/进度/排队/取消 | 不是所有 Windows 版本、语言包或真实书籍的全量保证 |
 | Windows | Windows 11 build 26200 上已修复嵌入式 Python `_pth` 与 WinRT PowerShell 5.1 编码/多页参数；30 页 ONNX OCR、系统 OCR、多引擎应用集成和 GUI 均运行成功 | 尚未验证干净 Windows 的 VC++ 条件依赖；Windows 与 Mac 基线存在少量识别/框差异 |
 
-macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14，扩展条目用 `minMacOS: 14` 限制安装。Windows 和 Linux 的应用构建配置存在，但运行/打包仍需逐平台验收。
+macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14，扩展条目用 `minMacOS: 14` 限制安装。Windows x64 已完成本机运行、目录包/NSIS 构建与 OCR 正式下载安装验证，干净系统依赖和 NSIS 实际安装/卸载仍待验收；Linux 只有构建配置，尚无运行记录。
 
 ### 2026-09-27 翻译与词卡定位验证（Windows 11）
 
@@ -141,20 +141,46 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 ### 2026-09-30 macOS OCR 草稿分发（macOS arm64）
 
 - 引擎仓库 [v0.2.0 草稿 Release](https://github.com/heyanLE/arale-book-ocr-manga/releases/tag/untagged-f9d76c87bef99f6d63e5) 已上传且仅包含 `arale_onnx_v1-macos-arm64.zip`（GitHub 页面显示 Assets 1、688.85 MB、Draft）。本地 ZIP 为 722309909 字节，SHA-256 `9d83ceca86f6c5e29f635eba2b0b9ab03d06d5c9ff7bc9d09b7f0eb9de244539`，与 JSONL 一致；`unzip -tqq` 通过。草稿未公开，`v0.2.0` 标签会在正式发布时创建，当前应用内的计划下载 URL 仍不可用。
-- Windows ZIP 未上传，JSONL 的 Windows SHA 保持空值；待 Windows 设备完成干净环境与下载/安装验收后再加入此 Release。没有把交叉构建产物直接开放安装。
+- Windows ZIP 未上传，JSONL 的 Windows SHA 保持空值；2026-10-01 已在 Windows x64 目标机重新构建并验证上传候选，详情见下节。仍未把它开放安装。
+
+### 2026-10-01 Windows OCR 发布包整理（Windows 11）
+
+- `node arale_onnx_v1/build.mjs --target win32-x64` 生成 `arale_onnx_v1-windows-x64.zip`：724,856,114 字节（约 691.3 MiB），SHA-256 `568783245c842a0726b7bafddb723ad8722873bf186a9f6fe67fabbd9a5c3027`；4,632 个文件，解包 1,043,229,186 字节（约 994.9 MiB）。
+- 将最终 ZIP 解压到独立临时目录后，包内 `python/python.exe -s -u ocr/ocr_run.py --probe` 返回 `ok: true`；`python312._pth` 包含 `..\ocr`，五个模型文件 SHA 全部匹配 `model-manifest.json`。
+- 用最终 ZIP 内运行时识别 `samples/ocr-fixture.png` 成功：800×1200、7 行日文；`node tools/audit-win-deps.mjs <解压目录>` 扫描 186 个 PE 文件，没有硬缺失，仍报告 `msvcp140.dll` 条件依赖。
+- 未验证范围：干净 Windows 未安装 VC++ 运行库时的启动、从 GitHub Release 实际下载/安装、NSIS 安装/卸载和更大真实书籍。Windows 资产可先上传到草稿 Release，但 JSONL SHA 在完成发布验收前保持为空。
+
+### 2026-10-01 正式 Release 下载与安装（Windows 11）
+
+- GitHub API 确认 `v0.2.0` 为公开正式 Release，两平台资产大小及 SHA-256 均匹配构建记录；本地官方 JSONL 补入 Windows SHA 和 VC++ 运行库提示。
+- 应用扩展下载改用 Electron 网络栈，遵循系统代理/PAC，继续流式落盘、HTTPS 重定向检查与 SHA 校验；修复重定向超限、断流挂起、无数据时无法取消及 Chromium 解压 HTTP gzip 后长度误判。安装时另校验清单字节数；同版本随包有效 SHA 可覆盖旧缓存空 SHA。
+- 验收命令：`node node_modules/typescript/bin/tsc -p tsconfig.main.json`、renderer `--noEmit`、test 编译及 `node --test dist-test/tests/extension-download.test.js dist-test/tests/extensions.test.js`；相关测试 37/37 通过。
+- 使用 `ARALE_VERIFY_PROXY=http://127.0.0.1:8400` 启动 `node_modules/electron/dist/electron.exe scripts/verify-ocr-download.cjs`：隔离扩展目录、无 debug 引擎，实际从 GitHub 下载 724,856,114 字节，通过 SHA/解压/安装记录，随后由 `ExtensionOcrEngine` 对 `samples/ocr-fixture.png` 输出 7 行。报告保留在 `.tmp/release-download-dYoo4A/report.json`（不提交）。代理仅在验收脚本中指定，应用未硬编码本机代理。
+- 远端 JSONL 此次仍是旧空 SHA；隔离验收用更新后的本地索引覆盖同版本旧缓存。对所有用户开放还需推送引擎索引，旧应用可刷新仓库；应用下载器修复需新版应用。未验证 macOS 正式网络安装、镜像、干净 Windows VC++ 依赖及 NSIS 安装/卸载。
+
+### 2026-10-02 Anki Harness 重构（Windows 11 / Node 24.19.0）
+
+最后一次 GUI 冒烟的 219 个断言通过；退出清理临时目录遇到 Windows `EPERM`，退出码 1，详见 Harness 验证记录。
+
+- 新 A0–A4 统一流水线已接入 IPC/UI/后台队列：优选例句、当前手动导入词典证据、直接语境生成、风险/全量复核、最多一次修复与 A3/A4 修复后再核查；可选提示存疑自动删除，核心问题仍待审。修复并不保证正确率提升，需人工样本评测。
+- 新档位支持 token 估算/预算、每次新增卡数、同计划复用已完成卡；预算不足或数量超限暂缓。只导出已通过子集，更新实际导出的候选标记；改出处重置审核。词典、模型/端点/密钥与翻译配置变化不能混入旧待完成计划。没有自动下载词典，也没有修改用户正式词典库。
+- 验证：`node node_modules/typescript/bin/tsc -p tsconfig.main.json`、renderer `--noEmit`、test 编译通过；`node scripts/bundle-preload.mjs` 和 `node node_modules/vite/bin/vite.js build` 通过；`node --test "dist-test/tests/*.test.js"` 499 项，494 通过、5 跳过、0 失败；`node scripts/smoke.mjs` Windows Electron GUI 219/219。完整命令与跳过项见 [Harness 验证](anki-harness.md)。
+- 未验证：真实供应商输出质量/限流/费用、审核量和整卡准确率收益、Anki 客户端导入/更新、macOS/Linux 新版运行及完整多 DPI/窄窗口视觉验收。A0/A1/A2 本地结果明确标为词典参考，不宣称语境已确认；A4 仍用同一模型且能看到草稿。
 
 ## 下一步：Windows 兼容与修复
 
 优先顺序及具体命令见 [Windows 交接](windows-handoff.md)。
 
-1. push 两个仓库并搬迁 Windows OCR ZIP，恢复模型和 Windows 运行时。
+1. 提交/推送引擎索引及应用下载器改动；ZIP 已公开，不需重新上传。
 2. `_pth`、`--probe`、30 页进程 OCR、应用 provider/队列与 GUI 已通过；继续分析 Windows 与 Mac 基线差异。
 3. 在干净 Windows 上解决/验证 `msvcp140.dll` 条件依赖。
 4. Rust **解包器**脚本、`.exe` 资源、Windows 命令启动和平台资源分流已修复；补测真实 RAR 夹具。
 5. 导入、阅读、查词、OCR 队列/取消、系统 OCR、debug/release 目录包和 NSIS 构建已通过；仍需在干净机器实际安装/卸载 NSIS。
-6. 完成干净环境与跨平台差异评估后，才开放 Windows 仓库资产并上传 Release；同时更新当前文档的证据。
+6. 继续干净环境与跨平台差异评估；公开下载与本机安装验收不代表这些测试已完成。
 
 ## 其他已知限制
+
+2026-10-02 文档核对：主 README、引擎库/引擎目录 README 与开发命令页已同步 Windows 运行及构建记录；本轮仅改文档，未重新运行测试。上方按日期记录的 macOS“本轮 Windows 未验证”保留其历史含义，当前 Windows 覆盖范围以最新验证节和 README 为准。
 
 - 新增仓库能发现扩展条目，但 `src/main/index.ts` 目前只注册 `system` 和 `arale_onnx_v1` 两个 OCR provider；任意第三方 provider 的动态注册尚未实现。
 - `.zip/.cbz` 整包读内存且超过 2 GB 拒绝；`.rar/.7z` 依赖 Rust 解包器。

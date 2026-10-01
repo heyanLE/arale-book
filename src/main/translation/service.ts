@@ -62,6 +62,12 @@ export class TranslationService {
     return toPublic(this.readStored());
   }
 
+  /** 仅返回哈希，供后台生成与续跑锁定配置；不暴露密钥。 */
+  profileSignature(profileId: string): string | null {
+    const profile = this.readStored().profiles.find(p => p.id === profileId);
+    return profile ? createHash('sha256').update(JSON.stringify(profile)).digest('hex') : null;
+  }
+
   update(patch: {
     profiles?: TranslationProfile[];
     activeProfileId?: string | null;

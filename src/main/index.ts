@@ -250,6 +250,7 @@ async function bootstrap(): Promise<void> {
     getSegments: (bookId) => segment.read(bookId),
     ensureDictionary: () => dict.ensureLoaded(),
     lookupMeaning: (expression, reading) => chooseMeaning(dict.lookup(expression, 0).results, expression, reading),
+    lookupTerms: (expression) => dict.lookup(expression, 0).results.map(result => result.term),
     progress: (bookId, done, total) => emitEvent('study:progress', { bookId, done, total }),
     workflowProgress: (progress) => {
       emitEvent('study:workflow-progress', progress);
@@ -262,6 +263,7 @@ async function bootstrap(): Promise<void> {
     study,
     getBook: (bookId) => store.get(bookId),
     profileSignature: (profileId) => llm.profileSignature(profileId),
+    translationSignature: (profileId) => translation.profileSignature(profileId),
     onChange: (state) => emitEvent('study:queue', state),
     onDone: (task) => emitEvent('study:done', task),
   });

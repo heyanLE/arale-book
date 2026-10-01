@@ -405,6 +405,7 @@ export function registerIpc(services: Services): void {
   handle(IPC.studyRunCards, (bookId: string, request: StudyCardRunRequest): StudyTaskEntry =>
     studyTasks.enqueueCards(bookId, request),
   );
+  handle(IPC.studyPreviewCards, (bookId: string, tier: string) => study.previewCards(bookId, tier));
   handle(IPC.studyTaskQueue, (): StudyTaskQueueState => studyTasks.queueState());
   handle(IPC.studyTaskCancel, (id: string): void => studyTasks.cancel(id));
   handle(IPC.studyTaskDismiss, (id: string): void => studyTasks.dismiss(id));

@@ -20,6 +20,11 @@ export const FILTER_TIERS: Record<StudyFilterTier, { name: string; description: 
 };
 
 export const CARD_TIERS: Record<StudyCardTier, { name: string; description: string; batchSize: number; passes: number }> = {
+  A0: { name: '本地词典', description: '只读取已导入词典，零外部请求；无句译，词义保留参考性质。', batchSize: 6, passes: 0 },
+  A1: { name: '翻译辅助', description: '词典参考释义＋同句共享翻译；零 LLM token。', batchSize: 6, passes: 0 },
+  A2: { name: '节省 AI', description: '清晰项用词典＋翻译，疑难项用 AI；最多一次专项修复。', batchSize: 6, passes: 1 },
+  A3: { name: '标准 AI', description: '全量生成语境词义与句译，风险卡复核及修复；无需翻译配置。', batchSize: 6, passes: 1 },
+  A4: { name: '深度 AI', description: '全量生成与复核，增加备用例句和简短用法；消耗最高。', batchSize: 6, passes: 2 },
   R0: { name: '翻译释义', description: '翻译词语和原句；不调用 LLM，配图在导出时单独选择。', batchSize: 1, passes: 0 },
   R1: { name: '语境词义', description: '每批 6 卡，基于原句、词典义和译文生成本句词义。', batchSize: 6, passes: 1 },
   R2: { name: '学习提示', description: '每批 6 卡增加有用的变形、搭配与语气提示。', batchSize: 6, passes: 1 },

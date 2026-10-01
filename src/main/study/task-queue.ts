@@ -5,15 +5,17 @@ import type {
   StudyTaskEntry, StudyTaskKind, StudyTaskQueueState,
 } from '../../shared/types';
 import { defaultStudyWorkflow, directCandidates } from '../../core/study/harness';
+import { needsTranslation } from '../../core/study/pipeline';
 import type { StudyService } from './service';
 
 type Request = { kind: 'filter'; value: StudyFilterRunRequest } | { kind: 'cards'; value: StudyCardRunRequest };
-interface QueuedTask { entry: StudyTaskEntry; request: Request; sourceHash: string; profileSignature?: string; cancelled: boolean; }
+interface QueuedTask { entry: StudyTaskEntry; request: Request; sourceHash: string; profileSignature?: string; translationSignature?: string; cancelled: boolean; }
 
 export interface StudyTaskQueueOptions {
   study: Pick<StudyService, 'read' | 'runFilter' | 'runCards' | 'cancel'>;
   getBook(bookId: string): BookRecord | null;
   profileSignature?(profileId: string): string | null;
+  translationSignature?(profileId: string): string | null;
   onChange?(state: StudyTaskQueueState): void;
   onDone?(task: StudyTaskEntry): void;
 }
@@ -67,7 +69,10 @@ export class StudyTaskQueue {
     const profileId = request.value.profileId;
     const profileSignature = profileId ? this.options.profileSignature?.(profileId) ?? undefined : undefined;
     if (profileId && this.options.profileSignature && !profileSignature) throw new Error('LLM 配置不存在，请重新选择');
-    this.pending.push({ entry, request, sourceHash: sourceFingerprint(list), profileSignature, cancelled: false });
+    const translationSignature = request.kind === 'cards' && needsTranslation(request.value.tier)
+      ? this.options.translationSignature?.(request.value.translationProfileId) ?? undefined : undefined;
+    if (request.kind === 'cards' && needsTranslation(request.value.tier) && this.options.translationSignature && !translationSignature) throw new Error('翻译配置不存在，请重新选择');
+    this.pending.push({ entry, request, sourceHash: sourceFingerprint(list), profileSignature, translationSignature, cancelled: false });
     this.publish();
     this.pump();
     return { ...entry };
@@ -132,6 +137,7 @@ export class StudyTaskQueue {
         if (item.profileSignature && this.options.profileSignature?.(item.request.value.profileId ?? '') !== item.profileSignature) {
           throw new Error('排队期间 LLM 配置已变化，请重新提交任务');
         }
+        if (item.translationSignature && item.request.kind === 'cards' && this.options.translationSignature?.(item.request.value.translationProfileId) !== item.translationSignature) throw new Error('排队期间翻译配置已变化，请重新提交任务');
         if (item.request.kind === 'filter') await this.options.study.runFilter(item.entry.bookId, item.request.value);
         else await this.options.study.runCards(item.entry.bookId, item.request.value);
         if (item.cancelled) { status = 'cancelled'; message = '已取消'; }
@@ -154,6 +160,7 @@ function sourceFingerprint(list: StudyList): string {
   const rows = list.candidates.map((item) => ({
     id: item.id, selected: item.selected, excluded: item.excluded, forceInclude: item.forceInclude,
     expression: item.expression, reading: item.reading, meaning: item.meaning, contextRef: item.contextRef,
+    meaningEdited: item.meaningEdited, contextPinned: item.contextPinned,
     occurrences: item.occurrences,
   }));
   return createHash('sha256').update(JSON.stringify({ segmentGeneratedAt: list.segmentGeneratedAt,

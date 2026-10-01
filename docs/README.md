@@ -1,6 +1,6 @@
 # 开发文档入口
 
-最后核对：2026-09-29。新上下文按以下顺序阅读即可继续工作。
+最后核对：2026-10-02。新上下文按以下顺序阅读即可继续工作。
 
 1. [当前状态](current-state.md)：已完成的决策、验证边界、当前优先任务。
 2. [Windows 迁移与待修事项](windows-handoff.md)：下一台设备恢复材料、启动与验收顺序。
@@ -9,7 +9,7 @@
 5. 修改 OCR 时读 [引擎当前文档](../engines/docs/current.md)，其中集中维护模型、包体积和性能数据。
 
 漫画分词与 Anki 制卡第一版的实现和后续事项见[方案与状态](manga-vocabulary-anki-plan.md)。
-新版“规则筛词 → 可选 AI 筛选 → 手动筛词 → R0–R3 释义生成 → 制卡导出”的档位、评估和边界见[Anki Harness](anki-harness.md)。
+新版“规则筛词 → 可选 AI 筛选 → 手动筛词 → A0–A4 证据生成/修复 → 已通过卡导出”的档位、预算和边界见[Anki Harness](anki-harness.md)；旧 R0–R3 草稿与任务保留兼容。
 AI 筛选与释义生成在主进程任务队列后台运行，与 OCR 共用右下角入口；关闭页面不停止任务，具体状态与恢复边界见[Anki Harness](anki-harness.md)。
 [LLM 结构化返回协议](llm-output-protocol.md)说明 DeepSeek/OpenAI/兼容端点的 JSON 或工具选择、降级和缓存用量统计。
 筛选页交互、实现状态及新旧界面截图见[漫画词汇筛选 UX](anki-filter-ux.md)。
@@ -35,3 +35,5 @@ AI 筛选与释义生成在主进程任务队列后台运行，与 OCR 共用右
 旧引擎文档在[引擎库归档](../engines/docs/archive/2026-09-26/README.md)。
 
 后续维护当前文档时直接修订这些页面，不再创建多份同名“最新状态”。需要保存历史时按日期归档，并在此处说明取代关系。
+
+2026-10-02 已同步主仓库与 submodule README 的 Windows 状态：本机阅读/制卡/OCR、正式引擎下载安装、目录包/NSIS 构建已有记录；干净系统依赖、NSIS 实际安装/卸载和 Anki 客户端导入仍待验收。历史按日期验证节中的“Windows 未测”只描述当时范围。

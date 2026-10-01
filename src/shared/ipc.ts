@@ -35,6 +35,7 @@ import type {
   DirectFilterOptions,
   StudyCardPatch,
   StudyCardRunRequest,
+  StudyPipelinePreview,
   StudyImageMode,
   StudyExportResult,
   StudyFilterRunRequest,
@@ -134,6 +135,7 @@ export const IPC = {
   studyApplyCompletedFilter: 'study:applyCompletedFilter',
   studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
+  studyPreviewCards: 'study:previewCards',
   studyTaskQueue: 'study:taskQueue',
   studyTaskCancel: 'study:taskCancel',
   studyTaskDismiss: 'study:taskDismiss',
@@ -336,6 +338,7 @@ export interface AraleApi {
     applyCompletedFilter(bookId: string): Promise<StudyList>;
     clearFilterProgress(bookId: string): Promise<StudyList>;
     runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyTaskEntry>;
+    previewCards(bookId: string, tier: string): Promise<StudyPipelinePreview>;
     taskQueue(): Promise<StudyTaskQueueState>;
     cancelTask(id: string): Promise<void>;
     dismissTask(id: string): Promise<void>;

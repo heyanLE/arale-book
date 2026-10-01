@@ -8,7 +8,7 @@
 把漫画和小说管起来，读得舒服 —— 点一下就能查词，啃生肉不再卡壳。
 
 [![License: GPL-3.0](https://img.shields.io/github/license/heyanLE/arale-book?labelColor=27303D&color=0877d2)](/LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%2011%2B%20arm64-27303D)](https://github.com/heyanLE/arale-book/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-27303D)](https://github.com/heyanLE/arale-book/releases)
 
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=FFFFFF)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=FFFFFF)](https://www.typescriptlang.org/)
@@ -19,31 +19,39 @@
 发布包会放到 [Releases](https://github.com/heyanLE/arale-book/releases)。目前还没有正式版本，请从源码构建：
 
 ```bash
-git clone --recurse-submodules https://github.com/heyanLE/arale-book.git
+git clone --recurse-submodules git@github.com:heyanLE/arale-book.git
 cd arale-book
-npm install
+npm ci
 npm run build:native          # Rust 解包器，.rar / .7z 支持靠它
 npm run build:vision-ocr      # 可选：macOS 系统 OCR 小工具
 npm start
 ```
 
-*需要 macOS 11 Big Sur 或更高版本。*
+需要 Node.js 和 Rust 工具链；Windows 构建解包器还需 MSVC 构建工具。submodule 使用 SSH，需配置两个仓库的访问权限；HTTPS 克隆方式见[开发文档](docs/development.md)。Windows 不需要运行 `build:vision-ocr`，系统 OCR 使用随源码提供的 Windows.Media.Ocr PowerShell 脚本。
 
 <div align="left">
 
 | 平台 | 支持 | 已实测 | 说明 |
 |---|:---:|:---:|---|
-| macOS Apple Silicon（arm64） | ✅ | ✅ | 开发与发布都在这个平台，唯一完整验证过的组合 |
+| macOS Apple Silicon（arm64） | ✅ | ✅ | 已有阅读、制卡、OCR 与目录包验证；应用配置下限 macOS 11，ONNX 扩展需 macOS 14；新版 A0–A4 尚未复测 |
 | macOS Intel（x64） | ⚠️ | ❌ | Electron 本身支持，但打包配置默认只出 arm64 |
-| Windows（x64） | ⚠️ | ❌ | 有 NSIS 打包配置；系统 OCR 脚本也没在真机上跑过 |
+| Windows（x64） | ✅ | ✅ | Windows 11 build 26200 已验证阅读、查词、分词、制卡、系统/ONNX OCR、扩展真实下载与安装；目录包和 NSIS 构建通过，干净机器安装/卸载待测 |
 | Linux（x64） | ⚠️ | ❌ | 有 AppImage 打包配置，运行时依赖未经验证 |
 | 其他平台（含 Linux ARM） | ❌ | — | 没有任何构建目标配置 |
 
-*⚠️ = 构建配置已写好，但没有在真机上验证过；❌ 表示目前没有可用的构建目标。*
+*✅ 表示已有目标机运行记录，具体覆盖范围见[当前状态](docs/current-state.md)；⚠️ 表示该组合未运行验收；❌ 表示没有构建目标。核对日期：2026-10-02。*
 
 </div>
 
-自己打包的话，`npm run pack:release` 产出 `.app` 与 `.zip`，`node scripts/make-dmg.mjs` 出 `.dmg`。安装包没有做代码签名，首次打开需要右键 →「打开」。所有数据都存在本机 `~/Library/Application Support/ARaLeBook/`，删掉该目录即等于恢复出厂。
+自己打包使用 `npm run pack:release`：macOS 产出 `.app` 与 `.zip`，另可用 `node scripts/make-dmg.mjs` 生成 `.dmg`；Windows 产出 `release/ARaLeBook-0.1.0-setup.exe`。`-- --dir` 只生成目录包。当前安装包未签名，macOS 首次打开需右键 →「打开」；Windows NSIS 尚未完成干净机器安装/卸载验收。
+
+数据保存在本机：macOS 默认 `~/Library/Application Support/ARaLeBook/`，Windows 默认 `%APPDATA%\ARaLeBook\`（开发/测试可覆盖目录）。其中包含书库、词典、配置与扩展，备份时应保留整个数据目录。
+
+### Windows 已验证范围
+
+Windows 11 已运行导入/阅读/查词、Kuromoji 分词、词卡配置与来源跳转、Anki 筛选/后台任务/生成/导出，以及 Windows.Media.Ocr 队列与取消。ONNX 引擎已完成包内自检、30 页 OCR 和正式 Release 下载、SHA 校验、安装及下载后识别。
+
+2026-10-02 / Node 24.19.0：类型检查和生产构建通过；499 项单元测试中 494 通过、5 跳过；GUI 219 个断言通过，最后一次退出清理临时目录遇到 Windows `EPERM`。真实 RAR/7Z 夹具、干净系统 VC++ 依赖、NSIS 安装/卸载、Anki 客户端导入及真实模型质量仍待验收。命令和各次记录见[开发文档](docs/development.md)、[当前状态](docs/current-state.md)与[Windows 交接](docs/windows-handoff.md)。
 
 ## 功能
 
@@ -56,7 +64,7 @@ npm start
 * 设置可管理 LLM、翻译配置及词卡弹窗的默认选择；内置免 Key 的 Bing 翻译，漫画识别时可按书选择 OCR 引擎。
 * 词卡：可固定多张、可改标题、可存进这本书的词卡夹，含上下文里的子句分析；新词卡记住来源页/章，可跳转并返回。
 * 文字识别（OCR）：系统 OCR（零下载）或漫画专用的 ONNX 扩展，把漫画页变成可点查的文字层。
-* 整本书分词并生成词表；漫画可按 JLPT 参考等级审核候选词、补录短语并导出 Anki 文本。
+* 整本书分词并生成词表；漫画可按 JLPT 参考等级筛选候选词、补录短语，生成 Anki 文本或带截图的 `.apkg`。A0–A4 提供本地词典、翻译辅助和不同 AI 消耗档位，支持预算、自动校验/修复、待审原因与已通过卡先导出。
 * LLM 词义分析：任意 OpenAI 兼容接口，本地服务（Ollama 等）也可以。
 * 深浅色主题，跟随系统。
 * 以及更多…
@@ -75,11 +83,11 @@ npm start
 
 ### 已知限制
 
-* 可下载的 ONNX OCR 扩展需要 macOS 14+；macOS 11–13 仍可使用系统 OCR。
+* 可下载的 ONNX OCR 扩展支持 macOS arm64（14+）和 Windows x64；macOS 11–13 仍可使用系统 OCR。Windows 干净环境的 VC++ v14 x64 条件依赖尚未验收；系统 OCR 需要对应识别语言支持。
 * 词典只支持 Yomitan 格式，MDX / StarDict / DSL 未实现。
 * `.zip` / `.cbz` 会整体读进内存，单个超过 2 GB 的包会被拒绝（`.rar` / `.7z` 走流式解包，无此限制）。
 * 系统 OCR 为屏幕文字与文档优化；ONNX 扩展使用漫画专用模型，但竖排、拟声词、手写体仍可能误识别。
-* 漫画分词页可生成 JLPT 参考等级候选、人工审核并导出 Anki 文本；尚不支持带截图的 `.apkg` 卡组。
+* `.apkg` 生成与包内容已测试，Anki 桌面客户端的实际导入/更新仍未验收；自动校验不保证词义正确，缺词典证据或存在核心问题的卡仍需审核。
 * 没有云同步、没有联网元数据刮削、单窗口。
 
 ### 致谢

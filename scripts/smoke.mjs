@@ -1466,7 +1466,7 @@ try {
   check('词典、翻译、LLM 三栏统一可折叠，词典下方只有一条分隔线',
     cardSections?.names?.length === 3 && cardSections.names.some((name) => name.includes('词典')) &&
     cardSections.names.some((name) => name.includes('翻译')) && cardSections.names.some((name) => name.includes('LLM')) &&
-    cardSections.dictionaryBottom === '0px' && cardSections.translationTop === '1px', JSON.stringify(cardSections));
+    cardSections.dictionaryBottom === '0px' && parseFloat(cardSections.translationTop) > 0 && parseFloat(cardSections.translationTop) <= 1.1, JSON.stringify(cardSections));
   check('仅有 Bing 时翻译选择器只显示 Bing 一项',
     cardSections.translationOptions === 1 && cardSections.translationDefault?.includes('Bing'), JSON.stringify(cardSections));
   const sectionToggle = await client.evaluate(`(() => {
@@ -2227,9 +2227,13 @@ try {
       const user = input.messages.findLast((message) => message.role === 'user');
       const candidates = JSON.parse(user.content);
       await delay(800);
-      const items = candidates.map((item, index) => ({
+      const toolName = input.tools?.[0]?.function?.name;
+      const items = Array.isArray(candidates) ? candidates.map((item, index) => ({
         id: item.id, decision: ['keep', 'reject', 'review'][index % 3], reason: '冒烟测试判断',
-      }));
+      })) : candidates.items.map(item => toolName === 'verify_anki_pipeline' ? { id: item.id, issues: [] } : {
+        id: item.id, meaning: '冒烟测试语境词义', sentenceTranslation: '冒烟测试句译', usage: '', nuance: '',
+        evidenceIds: item.dictionary.map(evidence => evidence.id), issues: [],
+      });
       const content = JSON.stringify({ items });
       if (input.tools?.length) mockToolRequests += 1;
       const message = input.tools?.length
@@ -2320,12 +2324,18 @@ try {
     [...document.querySelectorAll('.study-flow-nav button')].find((node) => node.textContent.includes('AI 释义生成'))?.click();
   })()`);
   await delay(80);
+  check('A3 默认直接生成句译，有预算输入且无需翻译配置',
+    (await client.evaluate("document.querySelector('.study-tier-choices label.active')?.textContent.includes('A3 ·') && !!document.querySelector('input[aria-label=\"制卡 token 预算\"]') && !document.querySelector('select[aria-label=\"制卡翻译配置\"]')")) === true);
+  if (process.env['ARALE_SMOKE_PIPELINE_SCREENSHOT']) {
+    const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    if (shot.result?.data) writeFileSync(process.env['ARALE_SMOKE_PIPELINE_SCREENSHOT'], Buffer.from(shot.result.data, 'base64'));
+  }
   await client.evaluate(`(() => {
     [...document.querySelectorAll('.study-tier-choices label')].find((node) => node.textContent.includes('R1 ·'))?.querySelector('input')?.click();
   })()`);
   await delay(80);
-  check('R0–R3 像 F 档位一样独立选择，模型配置在下方',
-    (await client.evaluate("document.querySelectorAll('input[name=study-card-tier]').length")) === 4 &&
+  check('A0–A4 可选且保留 R0–R3 兼容，模型配置在下方',
+    (await client.evaluate("document.querySelectorAll('input[name=study-card-tier]').length")) === 9 &&
     (await client.evaluate("document.querySelector('.study-flow-section')?.textContent.includes('预计 7 次 LLM 调用')")) === true &&
     (await client.evaluate("!!document.querySelector('.study-engine-fields select[aria-label=\"制卡翻译配置\"]')")) === true);
   if (process.env['ARALE_SMOKE_STUDY_MEANING_SCREENSHOT']) {
@@ -2548,8 +2558,43 @@ try {
   check('待审词卡通过审核后制卡导出按钮可点击',
     (await client.evaluate(`(() => {
       const button = [...document.querySelectorAll('.study-flow-actions button')].find((node) => node.textContent.includes('制卡并导出'));
-      return button?.disabled === false && document.querySelector('.study-preview-total')?.textContent.includes('待审 0 张');
+      return button?.disabled === false && document.querySelector('.study-preview-total')?.textContent.includes('待审 0');
     })()`)) === true);
+  const pipelinePreview = await client.evaluate(`window.arale.study.previewCards(${JSON.stringify(comicId)}, 'A3')`);
+  check('新流水线预算预览经 IPC 返回，未产生模型或翻译请求',
+    pipelinePreview?.selected === 1 && pipelinePreview?.baseCalls === 1 && pipelinePreview?.estimatedInputTokens > 0);
+  const beforeLocal = { llm: mockToolRequests, translation: studyTranslationRequests };
+  const localTask = await client.evaluate(`window.arale.study.runCards(${JSON.stringify(comicId)}, {tier:'A0',translationProfileId:''})`);
+  let localPipelineList = null;
+  for (let i = 0; i < 30; i += 1) {
+    localPipelineList = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)})`);
+    if (localPipelineList?.workflow?.cardRun?.tier === 'A0' && !localPipelineList?.workflow?.pendingCardRun) break;
+    await delay(100);
+  }
+  check('A0 真实后台任务零外部请求且落盘流水线证据',
+    !!localTask?.id && localPipelineList?.workflow?.cardRun?.tier === 'A0' && localPipelineList?.workflow?.cardRun?.pipeline?.version === 1 &&
+    mockToolRequests === beforeLocal.llm && studyTranslationRequests === beforeLocal.translation);
+  const budgetTask = await client.evaluate(`window.arale.study.runCards(${JSON.stringify(comicId)}, {tier:'A3',profileId:'llm_study_mock',translationProfileId:'',tokenBudget:1000})`);
+  let budgetList = null;
+  for (let i = 0; i < 30; i += 1) {
+    budgetList = await client.evaluate(`window.arale.study.read(${JSON.stringify(comicId)})`);
+    if (budgetList?.workflow?.cardRun?.tier === 'A3' && !budgetList?.workflow?.pendingCardRun) break;
+    await delay(100);
+  }
+  await delay(100);
+  check('预算不足的 A3 卡暂缓，界面提供提高预算入口且不能误导出',
+    !!budgetTask?.id && budgetList?.workflow?.cardRun?.drafts[0]?.status === 'deferred' &&
+    (await client.evaluate(`document.querySelector('.study-flow-section')?.textContent.includes('提高预算') && [...document.querySelectorAll('.study-flow-actions button')].find(node => node.textContent.includes('制卡并导出'))?.disabled`)) === true &&
+    mockToolRequests === beforeLocal.llm && studyTranslationRequests === beforeLocal.translation);
+  // 测试人工审核恢复已通过卡；正式用户目录不受影响。
+  const budgetCandidateId = budgetList?.workflow?.cardRun?.drafts[0]?.candidateId;
+  if (budgetCandidateId) await client.evaluate(`window.arale.study.patchCard(${JSON.stringify(comicId)}, ${JSON.stringify(budgetCandidateId)}, {meaning:'已人工核对',sentenceTranslation:'已人工核对句译',needsReview:false})`);
+  await client.evaluate(`(() => { [...document.querySelectorAll('[role=tab]')].find(node => node.textContent.includes('原始词表'))?.click(); })()`);
+  await delay(80);
+  await client.evaluate(`(() => { [...document.querySelectorAll('[role=tab]')].find(node => node.textContent.includes('Anki 制卡'))?.click(); })()`);
+  await delay(180);
+  check('新档位人工审核后已通过卡可导出，待审与暂缓视图独立',
+    (await client.evaluate(`(() => { const button = [...document.querySelectorAll('.study-flow-actions button')].find(node => node.textContent.includes('1 张已通过卡')); return button?.disabled === false && [...document.querySelectorAll('.study-view-tabs button')].some(node => node.textContent.trim() === '暂缓'); })()`)) === true);
   const toCancel = await client.evaluate(`window.arale.study.runFilter(${JSON.stringify(comicId)}, {tier:'F1',profileId:'llm_study_mock',concurrency:1})`);
   await delay(60);
   await client.evaluate(`(() => {

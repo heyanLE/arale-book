@@ -16,6 +16,7 @@
 
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import type { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import * as https from 'node:https';
 import { URL } from 'node:url';
@@ -58,18 +59,23 @@ export async function downloadToFile(options: DownloadOptions): Promise<{ bytes:
   let url = options.url;
   let response: IncomingMessage | null = null;
 
-  // 自己跟重定向而不是引入 follow-redirects：GitHub Releases 会 302 到
-  // objects.githubusercontent.com，不跟就永远下不到。
+  // Node 分支手动跟重定向；Electron 分支在 requestOnce 内检查并跟随。
+  // GitHub Releases 会 302 到资产服务器，两条路径都限制 HTTPS 与跳转次数。
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    if (options.isCancelled?.()) throw new DownloadCancelledError();
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') {
       throw new DownloadError('扩展下载只允许 HTTPS', `被拒绝的地址：${url}`);
     }
-    response = await requestOnce(parsed);
+    response = await requestOnce(parsed, options.isCancelled);
     const status = response.statusCode ?? 0;
     if (status >= 300 && status < 400) {
       const location = response.headers.location;
       response.resume();
+      if (hop === MAX_REDIRECTS) {
+        response.destroy();
+        throw new DownloadError('重定向次数过多', options.url);
+      }
       if (typeof location !== 'string' || location === '') {
         throw new DownloadError('重定向没有给出新地址', `HTTP ${status} @ ${url}`);
       }
@@ -89,7 +95,9 @@ export async function downloadToFile(options: DownloadOptions): Promise<{ bytes:
 
   if (response === null) throw new DownloadError('下载没有开始', options.url);
 
-  const total = Number(response.headers['content-length'] ?? 0) || 0;
+  // Chromium 自动解压 HTTP gzip；响应头的长度是压缩前的传输体积，不能用于校验落盘长度。
+  const total = process.versions.electron && response.headers['content-encoding']
+    ? 0 : Number(response.headers['content-length'] ?? 0) || 0;
   const hash = crypto.createHash('sha256');
   const out = fs.createWriteStream(options.dest);
   let received = 0;
@@ -97,7 +105,24 @@ export async function downloadToFile(options: DownloadOptions): Promise<{ bytes:
 
   try {
     await new Promise<void>((resolve, reject) => {
+      // 断流/取消不能依赖下一个 data 事件，否则服务器停住时界面一直等待。
+      let lastActivity = Date.now();
+      let ended = false;
+      const watchdog = setInterval(() => {
+        const error = options.isCancelled?.() ? new DownloadCancelledError()
+          : Date.now() - lastActivity > 30_000 ? new DownloadError('下载超时', `URL: ${url}\n已下载 ${received} 字节，30 秒未收到数据`) : null;
+        if (error) { response?.destroy(); out.destroy(); reject(error); }
+      }, 250);
+      const cleanup = (): void => { clearInterval(watchdog); };
+      out.once('close', cleanup);
+      response.once('close', () => {
+        if (!ended) {
+          out.destroy();
+          reject(new DownloadError('下载中断', `URL: ${url}\n已下载 ${received} 字节`));
+        }
+      });
       const onData = (chunk: Buffer): void => {
+        lastActivity = Date.now();
         if (options.isCancelled?.() === true) {
           response?.destroy();
           out.destroy();
@@ -119,6 +144,8 @@ export async function downloadToFile(options: DownloadOptions): Promise<{ bytes:
       };
       response.on('data', onData);
       response.on('end', () => {
+        ended = true;
+        cleanup();
         out.end(() => {
           options.onProgress?.(received, total);
           resolve();
@@ -151,26 +178,44 @@ export async function downloadToFile(options: DownloadOptions): Promise<{ bytes:
   return { bytes: received, sha256: hash.digest('hex') };
 }
 
-function requestOnce(url: URL): Promise<IncomingMessage> {
+function requestOnce(url: URL, isCancelled?: () => boolean): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
-    const request = https.get(
-      url,
-      {
-        headers: {
-          // GitHub raw / Releases 会按 UA 拒绝空 UA 的请求。
-          'user-agent': 'ARaLeBook/0.1 (+https://github.com/)',
-          accept: '*/*',
-        },
-        timeout: 30_000,
-      },
-      (response) => resolve(response),
-    );
-    request.on('timeout', () => {
-      request.destroy(new Error('连接超时（30 秒）'));
-    });
+    const headers = { 'user-agent': 'ARaLeBook/0.1 (+https://github.com/)', accept: '*/*' };
+    // Electron 网络栈使用系统代理/PAC；纯 Node 测试保留 https 实现。
+    // 两种 response 都提供 Node readable 的 data/end/error 与状态、响应头。
+    const request = process.versions.electron
+      ? (require('electron') as typeof import('electron')).net.request({ url: url.toString(), redirect: 'manual' })
+      : https.get(url, { headers });
+    const stop = (): void => { request.abort(); };
+    const deadline = setTimeout(() => {
+      reject(new DownloadError('连接超时（30 秒）', url.toString()));
+      stop();
+    }, 30_000);
+    const cancellation = setInterval(() => {
+      if (isCancelled?.()) { reject(new DownloadCancelledError()); stop(); }
+    }, 250);
+    const cleanup = (): void => { clearTimeout(deadline); clearInterval(cancellation); };
+    (request as EventEmitter).once('response', (response: IncomingMessage) => { cleanup(); resolve(response); });
+    request.once('abort', cleanup);
+    request.once('close', cleanup);
     request.on('error', (error) => {
+      cleanup();
       reject(new DownloadError('无法连接下载服务器', `${url.toString()}\n${error.message}`));
     });
+    if (process.versions.electron) {
+      let redirects = 0;
+      (request as EventEmitter).on('redirect', (_status: number, _method: string, redirectUrl: string) => {
+        if (++redirects > MAX_REDIRECTS || new URL(redirectUrl).protocol !== 'https:') {
+          cleanup();
+          reject(new DownloadError('重定向地址被拒绝', redirectUrl));
+          stop();
+          return;
+        }
+        (request as import('electron').ClientRequest).followRedirect();
+      });
+      for (const [key, value] of Object.entries(headers)) request.setHeader(key, value);
+      request.end();
+    }
   });
 }
 
