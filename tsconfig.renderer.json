@@ -6,7 +6,8 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "noEmit": true,
-    "types": ["vite/client"],
+    // Type-check the Node data adapter too; Vite replaces it with bundled JSON for workers.
+    "types": ["vite/client", "node"],
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {

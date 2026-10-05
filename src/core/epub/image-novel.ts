@@ -29,7 +29,6 @@
  * 反过来放宽到 20 才能覆盖上面第 2 类。见 [IMAGE_CHAPTER_MAX_TEXT_CHARS]。
  */
 
-import * as path from 'node:path';
 
 import type { SpineItem } from '../../shared/types';
 
@@ -122,10 +121,10 @@ export function resolveResourceHref(chapterHref: string, ref: string): string | 
     // 裸 `%` 之类：保持原样，别因此丢掉一个资源。
   }
 
-  const baseDir = path.posix.dirname(chapterHref);
+  const baseDir = chapterHref.slice(0, chapterHref.lastIndexOf('/') + 1) || '.';
   // 以 `/` 开头的是书目录绝对路径。
-  const joined = value.startsWith('/') ? value : path.posix.join(baseDir, value);
-  const normalized = path.posix.normalize(joined).replace(/^\/+/, '');
+  const joined = value.startsWith('/') ? value : `${baseDir}/${value}`;
+  const normalized = normalizeResourcePath(joined);
   // `..` 逃出书目录 → 不是书内资源。
   if (normalized === '' || normalized.startsWith('..')) return null;
   return normalized;
@@ -135,7 +134,7 @@ export function resolveResourceHref(chapterHref: string, ref: string): string | 
 const PAGE_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 
 export function isPageImage(href: string): boolean {
-  const ext = path.posix.extname(href).toLowerCase();
+  const ext = (/\.[^./]*$/.exec(href)?.[0] ?? '').toLowerCase();
   return PAGE_IMAGE_EXTENSIONS.includes(ext);
 }
 
@@ -238,4 +237,16 @@ export function judgeImageNovel(
 /** 挑出参与判定的 spine 项：linear 且非 nav。 */
 export function contentSpineItems(spine: readonly SpineItem[]): SpineItem[] {
   return spine.filter((item) => item.linear && !item.href.toLowerCase().endsWith('nav.xhtml'));
+}
+
+/** POSIX resource paths without requiring a Node runtime in the EPUB worker. */
+function normalizeResourcePath(value: string): string {
+  const parts: string[] = [];
+  for (const part of value.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..' && parts.length && parts[parts.length - 1] !== '..') parts.pop();
+    else if (part === '..' && value.startsWith('/')) continue;
+    else parts.push(part);
+  }
+  return parts.join('/') + (value.endsWith('/') && parts.length ? '/' : '');
 }

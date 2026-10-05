@@ -1,5 +1,5 @@
 /**
- * DictionaryStore —— 词典子系统的唯一入口（Electron 主进程只认这一个类）。
+ * DictionaryStore —— 词典子系统的唯一入口（词典 Worker只认这一个类）。
  *
  * 生命周期约定（很重要，UI 依赖它）：
  * - `lookup`/`segment` 是**同步**的，且在 `load()` 完成前也必须能用（返回空结果），

@@ -2,14 +2,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DirectFilterOptions, LlmSettings, StudyCandidate, StudyCandidatePatch, StudyCardTier, StudyFilterDecision, StudyFilterTier, StudyImageMode, StudyList, StudyOccurrence, StudyRunProgress, StudyRunStats, StudyTaskEntry, StudyTaskQueueState, TranslationSettings } from '@shared/types';
 import { CARD_TIERS, DEFAULT_STUDY_LEVELS, FILTER_TIERS, defaultDirectOptions, directFilterStages, estimatedLlmCalls, normalizeDirectOptions, studyPriorityScore } from '@core/study/harness';
-import { isPipelineTier, needsLlm, needsTranslation, PIPELINE_TIERS, readyDraft } from '@core/study/pipeline';
+import { CARD_FIELDS, isPipelineTier, needsLlm, needsTranslation, normalizeCardFields, PIPELINE_TIERS, readyDraft } from '@core/study/pipeline';
 import type { StudyPipelinePreview } from '@shared/types';
 import { api, call, useIpcEvent } from '../lib/api';
 import { DirectFilterPanel } from './DirectFilterPanel';
+import { AiModeChoice, ManualAiPanel } from './ManualAiPanel';
+import { sanitizeGlossaryHtml } from '@core/dict/glossary';
+import { studyResumeStep, type StudyStep } from '@core/study/flow';
 
 type LevelFilter = 'all' | 'n3plus' | 'n2plus' | 'n1' | 'n2' | 'n3' | 'n4' | 'n5' | 'unknown';
-type StudyStep = 'rules' | 'ai' | 'review' | 'meaning' | 'export';
-type CandidateView = 'included' | 'excluded' | 'review' | 'card_review' | 'ready' | 'deferred' | 'manual' | 'all';
+type CandidateView = 'included' | 'excluded' | 'review' | 'card_review' | 'ready' | 'deferred' | 'manual' | 'missing' | 'all';
 type BulkSnapshot = Array<{ id: string; selected: boolean; excluded: boolean; forceInclude: boolean }>;
 const PAGE_SIZE = 100;
 
@@ -71,7 +73,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [directOptions, setDirectOptions] = useState<DirectFilterOptions>(defaultDirectOptions);
   const [excludedWordsText, setExcludedWordsText] = useState('');
   const [filterTier, setFilterTier] = useState<StudyFilterTier>('F1');
+  const [manualFilter, setManualFilter] = useState(false);
+  const [manualCards, setManualCards] = useState(false);
   const [cardTier, setCardTier] = useState<StudyCardTier>('A3');
+  const [cardFields, setCardFields] = useState<import('@shared/types').StudyCardField[]>([...CARD_FIELDS]);
   const [tokenBudget, setTokenBudget] = useState('');
   const [newCardLimit, setNewCardLimit] = useState('');
   const [pipelinePreview, setPipelinePreview] = useState<StudyPipelinePreview | null>(null);
@@ -86,7 +91,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const [imageSaving, setImageSaving] = useState(false);
   const [workflowProgress, setWorkflowProgress] = useState<StudyRunProgress | null>(null);
   const [liveFilterDecisions, setLiveFilterDecisions] = useState<Record<string, { decision: StudyFilterDecision; reason: string }>>({});
-  const [cardEdit, setCardEdit] = useState({ expression: '', reading: '', sentence: '', sourceLabel: '', contextRef: '', meaning: '', sentenceTranslation: '', usage: '', nuance: '' });
+  const [cardEdit, setCardEdit] = useState({ expression: '', lemma: '', reading: '', sentence: '', sourceLabel: '', contextRef: '', meaning: '', sentenceTranslation: '', usage: '', nuance: '' });
 
   useEffect(() => {
     let live = true;
@@ -96,10 +101,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       call('读取制卡清单', () => api.study.read(bookId)),
       call('读取 LLM 配置', () => api.llm.settings()),
       call('读取翻译配置', () => api.translation.settings()),
-    ]).then(([value, llm, translation]) => {
+      call('读取制卡队列', () => api.study.taskQueue()),
+    ]).then(([value, llm, translation, queue]) => {
       if (!live) return;
       setList(value); setLoading(false);
-      setStep(value?.workflow?.cardRun ? 'export' : value?.workflow?.filterRun ? 'review' : 'rules');
+      const task = queue?.active?.bookId === bookId ? queue.active : queue?.pending.find(one => one.bookId === bookId);
+      setStep(value?.segmentGeneratedAt !== segmentGeneratedAt ? 'rules' : studyResumeStep(value, task));
+      if (queue) setStudyQueue(queue);
+      setManualFilter(!!value?.workflow?.manualAi?.filter);
+      setManualCards(!!value?.workflow?.manualAi?.cards);
       setCandidateView(value?.workflow?.cardRun
         ? value.workflow.cardRun.drafts.some((draft) => draft.needsReview) ? 'card_review' : 'included'
         : Object.values(value?.workflow?.filterRun?.decisions ?? {}).some((one) => one.decision === 'review') ? 'review' : 'included');
@@ -112,6 +122,8 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       setTranslationSettings(translation);
       setFilterTier(value?.workflow?.pendingFilterRun?.tier ?? value?.workflow?.filterRun?.tier ?? 'F1');
       setCardTier(value?.workflow?.pendingCardRun?.tier ?? value?.workflow?.cardRun?.tier ?? 'A3');
+      const savedRun = value?.workflow?.pendingCardRun ?? value?.workflow?.cardRun;
+      setCardFields(normalizeCardFields(value?.workflow?.manualAi?.cards?.fields ?? savedRun?.pipeline?.fields, savedRun?.tier ?? 'A3'));
       const savedBudget = value?.workflow?.pendingCardRun?.pipeline?.tokenBudget ?? value?.workflow?.cardRun?.pipeline?.tokenBudget;
       setTokenBudget(savedBudget ? String(savedBudget) : '');
       const savedLimit = value?.workflow?.pendingCardRun?.pipeline?.newCardLimit ?? value?.workflow?.cardRun?.pipeline?.newCardLimit;
@@ -172,6 +184,8 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
         }
       } else {
         setLiveFilterDecisions(next?.workflow?.pendingFilterRun?.decisions ?? {});
+        setStep(task.kind === 'filter' ? 'ai' : 'meaning');
+        setCandidateView('included'); setPage(0);
         setNotice(`${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}${task.status === 'cancelled' ? '已取消' : '失败'}：${task.error ?? task.message ?? '可在原步骤续跑'}`);
       }
     } catch { setNotice('任务结束，读取学习清单失败，请刷新页面。'); }
@@ -189,32 +203,32 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   const levelsDirty = !hasAppliedRules || JSON.stringify([...levels].sort()) !== JSON.stringify([...(list?.workflow?.levels ?? DEFAULT_STUDY_LEVELS)].sort()) ||
     includeUnknown !== (list?.workflow?.includeUnknown ?? false) ||
     JSON.stringify(currentDirectOptions) !== JSON.stringify(normalizeDirectOptions(list?.workflow?.direct));
+  function inCandidateView(item: StudyCandidate, view: CandidateView): boolean {
+    const included = step === 'rules' ? previewIds.has(item.id) : item.selected && !item.excluded;
+    const card = list?.workflow?.cardRun?.drafts.find(d => d.candidateId === item.id);
+    if (step === 'export' && !included) return false;
+    if (view === 'all') return true;
+    if (view === 'included') return included;
+    if (view === 'excluded') return !included;
+    if (view === 'ready') return !!card && readyDraft(card, list!.workflow!.cardRun!.tier);
+    if (view === 'deferred') return card?.status === 'deferred';
+    if (view === 'card_review') return !!card && card.status !== 'deferred' && !readyDraft(card, list!.workflow!.cardRun!.tier);
+    if (view === 'missing') return !card;
+    if (view === 'manual') return item.forceInclude === true || item.excluded;
+    return included && !item.forceInclude && (list?.workflow?.filterRun?.decisions[item.id]?.decision === 'review' || liveFilterDecisions[item.id]?.decision === 'review');
+  }
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const cardReviewIds = new Set(list?.workflow?.cardRun?.drafts.filter((draft) => draft.needsReview).map((draft) => draft.candidateId) ?? []);
-    const deferredIds = new Set(list?.workflow?.cardRun?.drafts.filter(draft => draft.status === 'deferred').map(draft => draft.candidateId) ?? []);
-    const readyIds = new Set(list?.workflow?.cardRun?.drafts.filter(draft => readyDraft(draft, list.workflow!.cardRun!.tier)).map(draft => draft.candidateId) ?? []);
-    const matches = (list?.candidates ?? []).filter((item) => {
-      const included = step === 'rules' ? previewIds.has(item.id) : item.selected && !item.excluded;
-      const inView = candidateView === 'all' || (candidateView === 'included' && included) ||
-        (candidateView === 'excluded' && !included) || (candidateView === 'manual' && (item.forceInclude === true || item.excluded)) ||
-        (candidateView === 'card_review' && cardReviewIds.has(item.id)) || (candidateView === 'ready' && readyIds.has(item.id)) || (candidateView === 'deferred' && deferredIds.has(item.id));
-      const review = !item.forceInclude && !item.excluded &&
-        (list?.workflow?.filterRun?.decisions[item.id]?.decision === 'review' ||
-          liveFilterDecisions[item.id]?.decision === 'review');
-      if (candidateView === 'review') return review && passesLevel(item, level) &&
-        (!needle || item.expression.toLowerCase().includes(needle) || item.reading.includes(needle));
-      return inView && passesLevel(item, level) &&
-        (!needle || item.expression.toLowerCase().includes(needle) || item.reading.includes(needle));
-    });
-    if (sortMode === 'priority') matches.sort((a, b) => studyPriorityScore(b) - studyPriorityScore(a) || b.count - a.count || (a.expression < b.expression ? -1 : a.expression > b.expression ? 1 : 0));
+    const matches = (list?.candidates ?? []).filter(item => inCandidateView(item, candidateView) && passesLevel(item, level) &&
+      (!needle || item.expression.toLowerCase().includes(needle) || item.reading.includes(needle)));
+    if (sortMode === 'priority') matches.sort((a, b) => studyPriorityScore(b) - studyPriorityScore(a) || b.count - a.count || a.expression.localeCompare(b.expression));
     return matches;
   }, [list, query, level, candidateView, sortMode, step, previewIds, liveFilterDecisions]);
   const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
   const active = filtered.find((item) => item.id === activeId) ?? filtered[0] ?? null;
   const selectedCount = list?.candidates.filter((item) => item.selected && !item.excluded).length ?? 0;
   const incompleteCount = list?.workflow?.cardRun
-    ? list.workflow.cardRun.drafts.filter((item) => !item.meaning || (list.workflow!.cardRun!.tier !== 'A0' && !item.sentenceTranslation)).length
+    ? list.workflow.cardRun.drafts.filter((item) => item.status !== 'deferred' && !readyDraft(item, list.workflow!.cardRun!.tier) && list.candidates.some(c => c.id === item.candidateId && c.selected && !c.excluded)).length
     : list?.candidates.filter((item) => item.selected && !item.excluded && (!item.reading || !item.meaning)).length ?? 0;
   const chosenOccurrence = active?.occurrences.find((one) => one.id === active.contextRef) ?? active?.occurrences[0];
   const shownOccurrence = step === 'export'
@@ -227,12 +241,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       (list.workflow?.partialFilterAppliedAt && list.workflow.pendingFilterRun?.decisions[item.id]?.decision === 'review'))).length ?? 0;
   const pendingCardCount = list?.workflow?.pendingCardRun?.drafts.length ?? 0;
   const currentCard = cardRun?.drafts.find((item) => item.candidateId === active?.id);
-  const reviewCount = cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
-  const readyCount = cardRun?.drafts.filter(item => readyDraft(item, cardRun.tier)).length ?? 0;
-  const deferredCount = cardRun?.drafts.filter(item => item.status === 'deferred').length ?? 0;
+  const selectedDrafts = cardRun?.drafts.filter(d => list?.candidates.some(c => c.id === d.candidateId && c.selected && !c.excluded)) ?? [];
+  const reviewCount = selectedDrafts.filter(item => item.status !== 'deferred' && !readyDraft(item, cardRun!.tier)).length;
+  const readyCount = selectedDrafts.filter(item => readyDraft(item, cardRun!.tier)).length;
+  const deferredCount = selectedDrafts.filter(item => item.status === 'deferred').length ?? 0;
   const pipelineSelected = isPipelineTier(cardTier);
-  const cardNeedsLlm = needsLlm(cardTier);
-  const cardNeedsTranslation = needsTranslation(cardTier);
+  const cardNeedsLlm = needsLlm(cardTier, pipelineSelected ? cardFields : undefined);
+  const cardNeedsTranslation = needsTranslation(cardTier, pipelineSelected ? cardFields : undefined);
+  const cardTranslationRequired = cardNeedsTranslation && (!pipelineSelected || !['A3', 'A4'].includes(cardTier));
   const budgetInvalid = pipelineSelected && cardNeedsLlm && tokenBudget !== '' && (!Number.isSafeInteger(Number(tokenBudget)) || Number(tokenBudget) < 1000);
   const limitInvalid = pipelineSelected && newCardLimit !== '' && (!Number.isSafeInteger(Number(newCardLimit)) || Number(newCardLimit) < 1 || Number(newCardLimit) > 10000);
   const filterCalls = estimatedLlmCalls(llmPreviewCount, FILTER_TIERS[filterTier]);
@@ -266,11 +282,11 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   useEffect(() => {
     let live = true;
     setPipelinePreview(null);
-    if (step === 'meaning' && list && isPipelineTier(cardTier)) {
-      void api.study.previewCards(bookId, cardTier).then(value => { if (live) setPipelinePreview(value); }).catch(() => undefined);
+    if (step === 'meaning' && !manualCards && list && isPipelineTier(cardTier)) {
+      void api.study.previewCards(bookId, cardTier, cardFields).then(value => { if (live) setPipelinePreview(value); }).catch(() => undefined);
     }
     return () => { live = false; };
-  }, [bookId, cardTier, step, list]);
+  }, [bookId, cardTier, cardFields, step, list, manualCards]);
 
   useEffect(() => {
     setDraft({ expression: active?.expression ?? '', reading: active?.reading ?? '', meaning: active?.meaning ?? '' });
@@ -279,6 +295,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   useEffect(() => {
     const occurrence = active?.occurrences.find((one) => one.id === currentCard?.contextRef) ?? chosenOccurrence;
     setCardEdit({
+      lemma: currentCard?.lemma ?? '',
       expression: currentCard?.expression ?? active?.expression ?? '', reading: currentCard?.reading ?? active?.reading ?? '',
       sentence: currentCard?.sentence ?? occurrence?.text ?? '', sourceLabel: currentCard?.sourceLabel ?? `${bookTitle} · ${occurrence?.label ?? ''}`,
       contextRef: currentCard?.contextRef ?? active?.contextRef ?? '',
@@ -295,7 +312,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     setProgress({ done: 0, total: 0 });
     setNotice('');
     const next = await call('生成学习候选', () => api.study.generate(bookId));
-    if (next) { setList(next); setActiveId(null); setPage(0); setNotice(`已生成 ${next.candidates.length} 个候选词`); }
+    if (next) {
+      setList(next); setActiveId(null); setPage(0); setStep('rules'); setCandidateView('included');
+      setQuery(''); setLevel('all'); setBulkUndo(null); setWorkflowProgress(null); setLiveFilterDecisions({});
+      setManualFilter(false); setManualCards(false);
+      setLevels(next.workflow?.levels ?? [...DEFAULT_STUDY_LEVELS]); setIncludeUnknown(next.workflow?.includeUnknown ?? false);
+      setDirectOptions(normalizeDirectOptions(next.workflow?.direct));
+      setExcludedWordsText((next.workflow?.direct?.excludedWords ?? []).join('\n'));
+      setNotice(`已重新准备 ${next.candidates.length} 个候选词，请从第 1 步应用规则。`);
+    }
     setGenerating(false);
     setProgress(null);
   }
@@ -312,6 +337,11 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       return patchOne(active.id, draft);
     }
     return true;
+  }
+
+  function manualAiChanged(next: StudyList): void {
+    setList(next);
+    if (!next.workflow?.pendingFilterRun) setLiveFilterDecisions({});
   }
 
   async function switchCandidate(id: string): Promise<void> {
@@ -428,6 +458,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     setLiveFilterDecisions(saved);
     const task = await call('加入 AI 筛选队列', () => api.study.runFilter(bookId, { tier: filterTier, profileId: filterProfileId, concurrency: filterConcurrency }));
     if (!task) return;
+    setStep('ai'); setCandidateView('included'); setPage(0);
     const queue = await api.study.taskQueue();
     setStudyQueue(queue);
     const finished = queue.recent.find((item) => item.id === task.id);
@@ -455,13 +486,14 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
   }
 
   async function makeCards(restart = false): Promise<void> {
-    if ((cardNeedsTranslation && !translationProfileId) || (cardNeedsLlm && !cardProfileId) || budgetInvalid || limitInvalid || !await saveDraft()) return;
+    if ((cardTranslationRequired && !translationProfileId) || (cardNeedsLlm && !cardProfileId) || budgetInvalid || limitInvalid || !await saveDraft()) return;
     const task = await call('加入释义生成队列', () => api.study.runCards(bookId, {
       tier: cardTier, translationProfileId: cardNeedsTranslation ? translationProfileId : '', concurrency: cardConcurrency,
       ...(cardNeedsLlm ? { profileId: cardProfileId } : {}),
-      ...(pipelineSelected ? { tokenBudget: tokenBudget && cardNeedsLlm ? Number(tokenBudget) : null, newCardLimit: newCardLimit ? Number(newCardLimit) : null, restart } : {}),
+      ...(pipelineSelected ? { fields: cardFields, tokenBudget: tokenBudget && cardNeedsLlm ? Number(tokenBudget) : null, newCardLimit: newCardLimit ? Number(newCardLimit) : null, restart } : {}),
     }));
     if (!task) return;
+    setStep('meaning'); setCandidateView('included'); setPage(0);
     const queue = await api.study.taskQueue();
     setStudyQueue(queue);
     const finished = queue.recent.find((item) => item.id === task.id);
@@ -481,13 +513,29 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       setList(next);
       if (approve) {
         const remaining = next.workflow?.cardRun?.drafts.filter((item) => item.needsReview).length ?? 0;
-        if (!remaining) { setCandidateView('included'); setPage(0); }
+        const saved = next.workflow?.cardRun?.drafts.find(d => d.candidateId === active.id);
+        if (saved && !saved.needsReview) {
+          const nextDraft = next.workflow?.cardRun?.drafts.find(d => d.needsReview && d.status !== 'deferred');
+          if (nextDraft) { setCandidateView('card_review'); setActiveId(nextDraft.candidateId); setQuery(''); setLevel('all'); }
+          else { setCandidateView('ready'); setActiveId(null); }
+          setPage(0);
+        }
         setNotice(next.workflow?.cardRun?.drafts.find((item) => item.candidateId === active.id)?.needsReview
           ? '词义、所需句译和汉字读音需要补全，才能通过审核。'
           : remaining > 0 ? `已通过审核，剩余 ${remaining} 张待审词卡。` : '待审词卡已全部审核，现在可以导出。');
       }
     }
     return next !== null;
+  }
+
+  async function deferCard(): Promise<void> {
+    if (!active || !currentCard || !await saveCardDraft()) return;
+    const next = await call('暂缓词卡', () => api.study.patchCard(bookId, active.id, { status: 'deferred', needsReview: true }));
+    if (!next) return;
+    setList(next); setPage(0); setQuery(''); setLevel('all');
+    const remaining = next.workflow?.cardRun?.drafts.find(d => d.needsReview && d.status !== 'deferred');
+    setCandidateView(remaining ? 'card_review' : 'deferred'); setActiveId(remaining?.candidateId ?? null);
+    setNotice('已暂缓，之后可在“暂缓”列表继续核对。');
   }
 
   async function chooseImageMode(mode: StudyImageMode): Promise<void> {
@@ -517,10 +565,10 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       </div>
       <div className="study-head-actions">
         {generating && <button type="button" className="btn btn-sm" onClick={() => void call('取消候选生成', () => api.study.cancel(bookId))}>取消</button>}
-        <button type="button" className="btn btn-sm" disabled={generating || pendingFilterCount > 0} title={pendingFilterCount > 0 ? '先续跑或放弃 AI 检查点' : undefined} onClick={() => void generate()}>{list ? '重新生成候选' : '生成候选'}</button>
+        <button type="button" className="btn btn-sm" disabled={generating || workflowBusy || !!pendingFilter || !!list?.workflow?.pendingCardRun || Object.values(list?.workflow?.manualAi ?? {}).some(s => s && !s.completedAt)} title="重建候选并回到第 1 步；未完成的任务须先续跑或放弃" onClick={() => void generate()}>{list ? '重新生成候选 · 回到第 1 步' : '生成候选'}</button>
       </div>
     </div>
-    {step === 'export' && incompleteCount > 0 && <div className="study-notice">{cardRun ? `有 ${incompleteCount} 张草稿缺词义或句译，需补全后导出。` : `准备制卡的词中有 ${incompleteCount} 个缺读音或释义，建议导出前核对。`}</div>}
+    {step === 'export' && incompleteCount > 0 && <div className="study-notice">{cardRun ? `有 ${incompleteCount} 张草稿待核对；已通过卡仍可导出。` : `准备制卡的词中有 ${incompleteCount} 个缺读音或释义，建议导出前核对。`}</div>}
     {stale && <div className="segment-error">分词结果已更新，请重新生成学习候选。人工选择和短语会保留。</div>}
     {generating && <div className="segment-progress">正在分析漫画文字块 · {progress?.done ?? 0} / {progress?.total ?? '…'}</div>}
     {notice && <div className="study-notice" role="status">{notice}</div>}
@@ -528,12 +576,12 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
     {!loading && !list && <div className="segment-empty">先生成分词，再点“生成候选”。候选来自漫画文字块；可按 JLPT 难度筛选并逐词核对。</div>}
     {list && <>
       <nav className="study-flow-nav" aria-label="制卡步骤">
-        {([['rules', '1 规则筛词'], ['ai', bookTask?.kind === 'filter' ? `2 AI 语境筛选 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : pendingFilterCount > 0 ? `2 AI 语境筛选 · 待续跑 ${pendingFilterCount}/${filterTotal}` : '2 AI 语境筛选 · 可跳过'], ['review', '3 手动筛词'], ['meaning', bookTask?.kind === 'cards' ? `4 AI 释义生成 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : '4 AI 释义生成'], ['export', '5 制卡']] as const).map(([value, label]) =>
+        {([['rules', hasAppliedRules ? '1 规则筛词 · 已应用' : '1 规则筛词 · 待应用'], ['ai', bookTask?.kind === 'filter' ? `2 AI 语境筛选 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : pendingFilterCount > 0 ? `2 AI 语境筛选 · 待续跑 ${pendingFilterCount}/${filterTotal}` : '2 AI 语境筛选 · 可跳过'], ['review', `3 手动筛词 · ${wordReviewCount ? wordReviewCount+' 待核对' : selectedCount+' 已选'}`], ['meaning', bookTask?.kind === 'cards' ? `4 词卡内容生成 · ${bookTask.status === 'queued' ? '排队中' : `${bookTask.done}/${bookTask.total}`}` : '4 词卡内容生成'], ['export', `5 审核与导出 · ${readyCount} 可导出`]] as const).map(([value, label]) =>
           <button key={value} type="button" aria-current={step === value ? 'step' : undefined}
-            disabled={workflowBusy || (levelsDirty && value !== 'rules') ||
+            disabled={generating || workflowBusy || (levelsDirty && value !== 'rules') || (value === 'export' && !cardRun) || (value === 'meaning' && selectedCount === 0) ||
               ((value === 'meaning' || value === 'export') && !cardRun && !partialFilterApplied && (pendingFilterCount > 0 || wordReviewCount > 0))}
             onClick={() => void navigateTo(value)}>{label}</button>)}
-        <span>准备制卡 {selectedCount} 词</span>
+        <span>已选 {selectedCount} 词 · 可导出 {readyCount} 张 · 待核对 {reviewCount} 张</span>
       </nav>
       <div className="study-flow-body">
       <aside className="study-workflow">
@@ -570,6 +618,11 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
         </section>}
           {step === 'ai' && <section className="study-flow-section">
             <h3>AI 语境筛选 <small>可跳过</small></h3>
+            <AiModeChoice label="筛词执行模式" manual={manualFilter} onChange={setManualFilter} />
+            {manualFilter ? <ManualAiPanel bookId={bookId} bookTitle={bookTitle} kind="filter" session={list.workflow?.manualAi?.filter}
+              disabled={workflowBusy || stale || levelsDirty || !hasAppliedRules} running={workflowBusy} beforeExport={saveDraft} onChange={manualAiChanged}
+              pendingFilter={!!list.workflow?.pendingFilterRun} pendingCards={!!list.workflow?.pendingCardRun}
+              onNext={() => { setStep('review'); setCandidateView(Object.values(list.workflow?.filterRun?.decisions ?? {}).some(d => d.decision === 'review') ? 'review' : 'included'); setPage(0); }} /> : <>
             <p>让模型根据原句判断候选是否适合制卡；也可以直接使用规则筛词结果。</p>
             <div className="study-tier-choices" role="group" aria-label="AI 筛选档位">
               {(['F1', 'F2', 'F3'] as const).map((tier) => <label key={tier} className={filterTier === tier ? 'active' : ''}>
@@ -600,6 +653,7 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             {!workflowBusy && list.workflow?.pendingFilterRun?.lastError && <small>上次中断：{list.workflow.pendingFilterRun.lastError}</small>}
             {pendingFilterCount > 0 && !workflowBusy && <div className="study-workflow-controls"><button type="button" className="btn btn-sm" onClick={() => void useCompletedFilter()}>只使用已判断的 {pendingFilterCount} 词（未处理词暂不制卡）</button><button type="button" className="btn btn-sm" onClick={() => void discardFilterProgress()}>放弃旧检查点</button></div>}
             {list.workflow?.filterRun && <small>上次：{list.workflow.filterRun.tier} · {list.workflow.filterRun.stats?.llmCalls ?? '—'} 次 Harness 调用{llmStatsText(list.workflow.filterRun.stats)} · {Math.round((list.workflow.filterRun.stats?.elapsedMs ?? 0) / 1000)} 秒。结果可在下方逐词修改。</small>}
+            </>}
           </section>}
           {step === 'review' && <section className="study-flow-section">
             <h3>手动筛词</h3>
@@ -629,7 +683,19 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
           </section>}
           {step === 'meaning' && <section className="study-flow-section">
             <h3>词卡生成</h3>
-            <p>自动挑选例句并读取已启用的手动导入词典，校验后按问题修复。档位控制外部请求范围；已通过卡可先导出。</p>
+            <AiModeChoice label="词卡执行模式" manual={manualCards} onChange={setManualCards} />
+            <p>{manualCards ? '先选择卡片字段，再导出任务文件。原句和辞书形由程序固定，其余勾选内容由外部 AI 生成。' : '先选择卡片字段，再选择生成深度。原文与辞书形由程序提供，词义优先词典，译文优先翻译服务。'}</p>
+            {(pipelineSelected || manualCards) && <div role="group" aria-label="词卡生成字段">{CARD_FIELDS.map(field => <label key={field} style={{ display: 'inline-flex', gap: 6, marginRight: 16 }}>
+              <input type="checkbox" checked={cardFields.includes(field)} onChange={event => { const checked = event.target.checked;
+                setCardFields(previous => checked ? [...previous, field] : previous.filter(f => f !== field)); }} />
+              {{ reading: '假名', meaning: '本词含义', sentence: '原句', sentenceTranslation: '句子含义', lemma: '辞书形' }[field]}
+            </label>)}</div>}
+            {manualCards ? <ManualAiPanel bookId={bookId} bookTitle={bookTitle} kind="cards" fields={cardFields} session={list.workflow?.manualAi?.cards}
+              disabled={workflowBusy || stale || levelsDirty || selectedCount === 0 || (pendingFilterCount > 0 && !partialFilterApplied)}
+              running={workflowBusy} beforeExport={saveDraft} onChange={manualAiChanged} pendingFilter={!!list.workflow?.pendingFilterRun} pendingCards={!!list.workflow?.pendingCardRun}
+              onNext={() => { setStep('export'); setCandidateView(list.workflow?.cardRun?.drafts.some(d => d.needsReview) ? 'card_review' : 'included'); setPage(0); }} /> : <>
+            {pipelineSelected && cardFields.length === 0 && <small>请至少选择一个字段。</small>}
+            {cardTier === 'A0' && cardFields.includes('sentenceTranslation') && <small>A0 不调用翻译；句子含义需手动补充，或取消选择该字段。</small>}
             <div className="study-tier-choices study-pipeline-choices" role="group" aria-label="释义生成档位">
               {PIPELINE_TIERS.map((tier) => <label key={tier} className={cardTier === tier ? 'active' : ''}>
                 <input type="radio" name="study-card-tier" checked={cardTier === tier} onChange={() => setCardTier(tier)} />
@@ -641,22 +707,22 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
                 <input type="radio" name="study-card-tier" checked={cardTier === tier} onChange={() => setCardTier(tier)} /><strong>{tier} · {CARD_TIERS[tier].name}</strong><small>{CARD_TIERS[tier].description}</small>
               </label>)}
             </div></details>
-            <p>准备处理 {selectedCount} 词，{pipelineSelected ? cardNeedsLlm ? `${cardTier === 'A2' ? '疑难项生成最多' : '基础生成/复核约'} ${cardCalls} 次 LLM 调用，专项修复和格式重试另计。` : '零 LLM 调用。' : `预计 ${cardCalls} 次 LLM 调用；每词另需翻译词与原句。`}</p>
-            {pipelinePreview && <p>预计 AI 生成 {pipelinePreview.aiItems} 词，翻译 {pipelinePreview.translationSentences} 个原句。基础生成输入约 {pipelinePreview.estimatedInputTokens} tokens，输出上限 {pipelinePreview.outputTokenLimit}；复核、修复和重试另计。估算仅供参考。</p>}
-            {pipelineSelected && <small>{cardNeedsTranslation ? '同一句只翻译一次，疑难项由 AI 直接生成句译。' : cardTier === 'A0' ? '本地词典参考卡不含句译。' : 'AI 直接生成句译，不需要配置翻译服务。'} 词典未收录或证据不足的卡进入待审；不会自动下载词典。</small>}
+            <p>准备处理 {selectedCount} 词，{pipelineSelected ? cardNeedsLlm ? `基础生成约 ${pipelinePreview?.baseCalls ?? cardCalls} 次 LLM 调用，专项修复和格式重试另计。` : '零 LLM 调用。' : `预计 ${cardCalls} 次 LLM 调用；每词另需翻译词与原句。`}</p>
+            {pipelinePreview && <details className="study-token-details"><summary>预计本地处理 {Math.max(0, selectedCount - pipelinePreview.aiItems)} 词 · AI {pipelinePreview.aiItems} 词 · 翻译 {pipelinePreview.translationSentences} 个输入</summary><p>预计 AI 生成 {pipelinePreview.aiItems} 词，翻译 {pipelinePreview.translationSentences} 个不同输入（含缺假名时的辞书形）。基础生成输入约 {pipelinePreview.estimatedInputTokens} tokens，输出上限 {pipelinePreview.outputTokenLimit}；修复和重试另计。这是每个请求最大输出的总和，并非预计用量或实际扣费；修复和重试另计。</p></details>}
+            {pipelineSelected && <small>同一翻译输入只请求一次；A1/A2 允许多个词义，A3/A4 才按语境选义。未选择字段不因缺失而待审。不会自动下载词典。</small>}
             {pipelineSelected && <label className="study-budget-field">本次新增卡数（留空不限）<input aria-label="本次新增卡数" type="number" min={1} max={10000} value={newCardLimit} onChange={event => setNewCardLimit(event.target.value)} />
               <small>先处理阅读优先度高的词；已完成卡保留，其余下次继续。上方消耗预览为全部已选词。</small>{limitInvalid && <small>请输入 1–10000 的整数。</small>}
             </label>}
             <div className="study-engine-fields">
               {cardNeedsTranslation && <label>翻译引擎 <select aria-label="制卡翻译配置" value={translationProfileId} onChange={(event) => setTranslationProfileId(event.target.value)}>
-                <option value="">选择翻译配置</option>{translationSettings?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                <option value="">{cardTranslationRequired ? '选择翻译配置' : '不提供翻译参考（可选）'}</option>{translationSettings?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · 中文译文{profile.capabilities?.sourceReading === 'romaji' ? '＋原文罗马音（可能缺失）' : profile.capabilities?.sourceReading === 'kana' ? '＋原文假名' : ''}</option>)}
               </select></label>}
               {cardNeedsLlm && <label>LLM 配置 <select aria-label="制卡 LLM 配置" value={cardProfileId} onChange={(event) => setCardProfileId(event.target.value)}>
                 <option value="">选择 LLM 配置</option>{llmSettings?.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>)}
               </select></label>}
             </div>
             {pipelineSelected && cardNeedsLlm && <label className="study-budget-field">生成阶段 token 预算（留空不限）<input aria-label="制卡 token 预算" type="number" min={1000} step={1000} value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} />
-              <small>包含复核和修复；预算不足的卡暂缓，之后可提高预算继续。未报告用量时保守估算，实际用量可能超出估算。</small>{budgetInvalid && <small>请输入至少 1000 的整数。</small>}
+              <small>包含修复和重试；预算不足的卡暂缓，之后可提高预算继续。未报告用量时保守估算，实际用量可能超出估算。</small>{budgetInvalid && <small>请输入至少 1000 的整数。</small>}
             </label>}
             {cardNeedsLlm && <details className="study-run-settings"><summary>运行设置 · {pipelineSelected && tokenBudget ? '预算模式并发 1' : `并发 ${cardConcurrency}`}</summary>
               <select aria-label="制卡并发数" value={cardConcurrency} onChange={(event) => setCardConcurrency(Number(event.target.value) as 1 | 2 | 3)}>
@@ -667,16 +733,19 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             {list.workflow?.pendingCardRun && <small>已完成 {pendingCardCount} 张草稿；保持档位与配置可续跑。</small>}
             {list.workflow?.pendingCardRun?.lastError && <p className="study-checkpoint-warning">上次中断：{list.workflow.pendingCardRun.lastError}</p>}
             <div className="study-flow-actions">
-              <button type="button" className="btn btn-sm btn-primary" disabled={selectedCount === 0 || (!partialFilterApplied && (pendingFilterCount > 0 || (!pipelineSelected && wordReviewCount > 0))) || (cardNeedsTranslation && !translationProfileId) || (cardNeedsLlm && !cardProfileId) || budgetInvalid || limitInvalid || workflowBusy || stale || levelsDirty} onClick={() => void makeCards()}>生成 {selectedCount} 张释义草稿</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={selectedCount === 0 || (pipelineSelected && cardFields.length === 0) || (!partialFilterApplied && (pendingFilterCount > 0 || (!pipelineSelected && wordReviewCount > 0))) || (cardTranslationRequired && !translationProfileId) || (cardNeedsLlm && !cardProfileId) || budgetInvalid || limitInvalid || workflowBusy || stale || levelsDirty} onClick={() => void makeCards()}>{list.workflow?.pendingCardRun ? '续跑未完成任务' : cardRun ? '继续生成未完成卡' : `生成 ${selectedCount} 张释义草稿`}</button>
               {pipelineSelected && list.workflow?.pendingCardRun && <button type="button" className="btn btn-sm" disabled={workflowBusy} onClick={() => { if (window.confirm('放弃旧释义检查点，并按当前档位和配置重新生成？')) void makeCards(true); }}>放弃旧检查点并重新生成</button>}
+              {pipelineSelected && cardRun && !list.workflow?.pendingCardRun && <button type="button" className="btn btn-sm" disabled={workflowBusy} onClick={() => { if (window.confirm('按当前设置重新生成全部已选词卡？将覆盖这些词的已有草稿和人工卡面修改，并重新消耗所需翻译/LLM 用量。')) void makeCards(true); }}>重新生成全部词卡</button>}
               {cardRun && <button type="button" className="btn btn-sm" onClick={() => setStep('export')}>查看已有草稿</button>}
             </div>
+            </>}
           </section>}
           {step === 'export' && <section className="study-flow-section">
             <h3>制卡</h3>
+            <button type="button" className="btn btn-sm" onClick={() => void navigateTo('meaning')}>返回第 4 步，调整生成设置</button>
             <p>逐张修改卡面、句子、译文与出处。导出只组装已有草稿，不再调用翻译或 LLM。</p>
-            <div className="study-preview-total"><strong>释义草稿 {cardRun?.drafts.length ?? pendingCardCount} 张</strong><span>已通过 {readyCount} · 待审 {reviewCount - deferredCount} · 暂缓 {deferredCount}</span></div>
-            {cardRun && isPipelineTier(cardRun.tier) && <p>导出 {readyCount} 张已通过卡；待审与暂缓卡保留，可稍后修正或提高预算续跑。A0/A1 和 A2 本地项为词典参考卡，未声称已确认语境义。</p>}
+            <div className="study-preview-total"><strong>释义草稿 {cardRun?.drafts.length ?? pendingCardCount} 张</strong><span>已通过 {readyCount} · 待审 {reviewCount} · 暂缓 {deferredCount}</span></div>
+            {cardRun && isPipelineTier(cardRun.tier) && <p>导出 {readyCount} 张已通过卡；待审与暂缓卡保留，可稍后修正或提高预算续跑。A0/A1 和 A2/A3 本地项为词典参考卡，未声称已确认语境义。</p>}
             {deferredCount > 0 && <button type="button" className="btn btn-sm" onClick={() => setStep('meaning')}>返回继续暂缓卡，可提高预算或调整新增数量</button>}
             {reviewCount > 0 && <button type="button" className="btn btn-sm" onClick={() => { setCandidateView('card_review'); setQuery(''); setLevel('all'); setPage(0); }}>查看 {reviewCount} 张待审词卡</button>}
             <h4>漫画配图</h4>
@@ -711,10 +780,15 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
       </aside>
       <div className="study-candidate-area">
       <div className="study-filters">
-        <strong>查看词表</strong><small>搜索和排序只改变显示，不修改准备制卡的词单。</small>
+        <strong>{step === 'export' ? '词卡审核' : '候选词列表'}</strong><small>{step === 'export' ? '只显示已选词。待核对需要人工确认；可导出已通过；暂缓保留待处理；未生成尚无卡片。' : step === 'rules' ? '按当前规则预览保留与排除。点击“应用规则”后生效。' : '已选词进入制卡；AI 不确定是其中需要核对的词。切换列表不会改变选择。'}</small>
         <div className="study-view-tabs" role="group" aria-label="词表视图">
-          {([['included', '预计保留'], ['excluded', '预计排除'], step === 'export' ? ['card_review', '词卡待审'] as const : ['review', 'AI 待审'] as const, ...(step === 'export' ? [['ready', '已通过'], ['deferred', '暂缓']] as const : []), ['manual', '人工决定'], ['all', '全部']] as const).map(([value, label]) =>
-            <button type="button" key={value} className={candidateView === value ? 'active' : ''} aria-pressed={candidateView === value} onClick={() => { setCandidateView(value); setPage(0); }}>{step === 'rules' && value === 'included' ? '预计保留' : step === 'rules' && value === 'excluded' ? '预计排除' : value === 'included' ? '准备制卡' : value === 'excluded' ? '未纳入' : label}</button>)}
+          {(step === 'export' ? [['card_review','待核对'],['ready','可导出'],['deferred','暂缓'],['missing','未生成'],['all','全部已选词']]
+            : step === 'rules' ? [['included','规则保留'],['excluded','规则排除'],['all','全部候选']]
+            : [['included','已选词'],['excluded','未选词'],...(['ai','review'].includes(step) ? [['review','AI 不确定']] : []),['all','全部候选']]).map(([value, label]) =>
+            <button type="button" key={value} className={candidateView === value ? 'active' : ''} aria-pressed={candidateView === value} onClick={() => { setCandidateView(value as CandidateView); setPage(0); }}>
+              {label} <span>{list.candidates.filter(item => inCandidateView(item, value as CandidateView)).length}</span>
+            </button>)}
+
         </div>
         <input className="segment-search" type="search" placeholder="搜索词语或读音" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} />
         <select aria-label="仅调整列表显示的 JLPT 等级" value={level} onChange={(event) => { setLevel(event.target.value as LevelFilter); setPage(0); }}>
@@ -736,8 +810,9 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
             const reason = step === 'rules' ? directResult.reasons[item.id]?.join('；') : decision?.reason;
             const card = cardRun?.drafts.find(draft => draft.candidateId === item.id);
             const status = step === 'export' && card?.status === 'deferred' ? '暂缓'
-              : step === 'export' && card?.needsReview ? '词卡待审'
-              : step === 'export' && card && readyDraft(card, cardRun!.tier) ? '已通过'
+              : step === 'export' && card && readyDraft(card, cardRun!.tier) ? '可导出'
+              : step === 'export' && card ? '待核对'
+              : step === 'export' ? '未生成'
               : item.excluded ? '手动排除' : item.forceInclude ? '手动保留'
               : step === 'rules' ? included ? '预计保留' : '预计排除'
                 : !pending && decision?.decision === 'review' ? 'AI 待审'
@@ -799,18 +874,30 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
                 <button type="button" className="btn btn-sm" onClick={() => void saveDraft()}>保存词条修改</button>
               </fieldset>
             </details>}
+            {step === 'export' && currentCard && <details open className="study-card-evidence"><summary>原文、词典证据与卡片预览</summary>
+              {cardRun?.pipeline?.evidence[active!.id]?.map(evidence => <div key={evidence.id}><strong>{evidence.dictionary} · {evidence.reading}</strong><div dangerouslySetInnerHTML={{ __html: sanitizeGlossaryHtml(evidence.text) }} /></div>)}
+              {shownOccurrence && <div className="study-context">{highlightedContext(shownOccurrence)}</div>}
+              <div className="study-card-preview"><strong>当前卡片预览</strong><div>{cardEdit.expression}{cardEdit.reading ? `（${cardEdit.reading}）` : ''}</div><hr />
+                {(!currentCard.fields || currentCard.fields.includes('meaning')) && <div>{cardEdit.meaning || '词义待补充'}</div>}
+                {(!currentCard.fields || currentCard.fields.includes('sentence')) && <div>{cardEdit.sentence}</div>}
+                {(!currentCard.fields || currentCard.fields.includes('sentenceTranslation')) && <div>{cardEdit.sentenceTranslation}</div>}
+                {currentCard.fields?.includes('lemma') && <div>辞书形：{cardEdit.lemma}</div>}<small>{cardEdit.sourceLabel}</small></div>
+            </details>}
             {step === 'export' && currentCard && <div className="study-card-draft">
               <h4>{cardRun?.tier} 卡片草稿 {currentCard.needsReview && <span>· 待审核</span>}</h4>
-              {currentCard.reviewReason && <p>{currentCard.reviewReason}</p>}
+              {!currentCard.issues?.length && currentCard.reviewReason && <p className="study-issue">{currentCard.reviewReason}</p>}
               {currentCard.referenceOnly && <small>词典参考卡：词义保留原词典内容，尚未由 AI 核对本句义项。</small>}
+              {currentCard.readingSource === 'translation_romaji' && <small>假名由翻译返回的罗马音推导，请留意读音与拼写。</small>}
+              {currentCard.readingSource === 'external_ai' && <small>假名由外部 AI 提供。</small>}
               {!!currentCard.repairs && <small>系统已尝试 {currentCard.repairs} 次修复。</small>}
-              {currentCard.issues?.map((issue, index) => <p key={index}>需核对 {({ meaning: '词义', reading: '读音', sentence: '原句', sentenceTranslation: '句译', usage: '提示' })[issue.field]}：{issue.reason}</p>)}
+              {currentCard.issues?.map((issue, index) => <p className="study-issue" key={index}>需核对 {({ meaning: '词义', reading: '读音', sentence: '原句', sentenceTranslation: '句译', usage: '提示' })[issue.field]}：{issue.reason}</p>)}
               <fieldset disabled={workflowBusy}>
               <label>词语／正面<input value={cardEdit.expression} onChange={(event) => setCardEdit((old) => ({ ...old, expression: event.target.value }))} /></label>
-              <label>读音<input value={cardEdit.reading} onChange={(event) => setCardEdit((old) => ({ ...old, reading: event.target.value }))} /></label>
-              <label>原句／正面<textarea value={cardEdit.sentence} onChange={(event) => setCardEdit((old) => ({ ...old, sentence: event.target.value }))} /></label>
-              <label>本句词义<input value={cardEdit.meaning} onChange={(event) => setCardEdit((old) => ({ ...old, meaning: event.target.value }))} /></label>
-              <label>原句中文译文<textarea value={cardEdit.sentenceTranslation} onChange={(event) => setCardEdit((old) => ({ ...old, sentenceTranslation: event.target.value }))} /></label>
+              {currentCard.fields?.includes('lemma') && <label>辞书形<input value={cardEdit.lemma} onChange={(event) => setCardEdit((old) => ({ ...old, lemma: event.target.value }))} /></label>}
+              {(!currentCard.fields || currentCard.fields.includes('reading')) && <label data-card-field="reading" className={currentCard.issues?.some(issue => issue.field === 'reading') ? 'has-issue' : ''}>{currentCard.fields ? '读音（辞书形）' : '读音'}<input value={cardEdit.reading} onChange={(event) => setCardEdit((old) => ({ ...old, reading: event.target.value }))} /></label>}
+              {(!currentCard.fields || currentCard.fields.includes('sentence')) && <label>原句／正面<textarea value={cardEdit.sentence} onChange={(event) => setCardEdit((old) => ({ ...old, sentence: event.target.value }))} /></label>}
+              {(!currentCard.fields || currentCard.fields.includes('meaning')) && <label data-card-field="meaning" className={currentCard.issues?.some(issue => issue.field === 'meaning') ? 'has-issue' : ''}>本词含义<input value={cardEdit.meaning} onChange={(event) => setCardEdit((old) => ({ ...old, meaning: event.target.value }))} /></label>}
+              {(!currentCard.fields || currentCard.fields.includes('sentenceTranslation')) && <label data-card-field="sentenceTranslation" className={currentCard.issues?.some(issue => issue.field === 'sentenceTranslation') ? 'has-issue' : ''}>原句中文译文<textarea value={cardEdit.sentenceTranslation} onChange={(event) => setCardEdit((old) => ({ ...old, sentenceTranslation: event.target.value }))} /></label>}
               <label>用法提示<textarea value={cardEdit.usage} onChange={(event) => setCardEdit((old) => ({ ...old, usage: event.target.value }))} /></label>
               <label>语气／义项差别<textarea value={cardEdit.nuance} onChange={(event) => setCardEdit((old) => ({ ...old, nuance: event.target.value }))} /></label>
               <label>来源文字<input value={cardEdit.sourceLabel} onChange={(event) => setCardEdit((old) => ({ ...old, sourceLabel: event.target.value }))} /></label>
@@ -820,16 +907,13 @@ export function StudyPanel(props: { bookId: string; bookTitle: string; segmentGe
               }}>{active.occurrences.map((one) => <option key={one.id} value={one.id}>{one.label} · {one.start + 1}</option>)}</select></label>
               <div className="study-workflow-controls">
                 <button type="button" className="btn btn-sm" onClick={() => void saveCardDraft()}>保存卡片草稿</button>
-                {currentCard.needsReview && <button type="button" className="btn btn-sm btn-primary" onClick={() => void saveCardDraft(true)}>确认并通过审核</button>}
+                {currentCard.needsReview && <button type="button" className="btn btn-sm btn-primary" onClick={() => void saveCardDraft(true)}>确认通过，下一张</button>}
+                <button type="button" className="btn btn-sm" onClick={() => void deferCard()}>暂缓，下一张</button>
               </div>
               </fieldset>
               <small>改变原图出处会更新默认原句与来源文字；配图方式在左侧独立选择。</small>
             </div>}
-            {step === 'export' && currentCard && <details className="study-card-evidence"><summary>查看原文证据与卡片预览</summary>
-              {cardRun?.pipeline?.evidence[active!.id]?.map(evidence => <p key={evidence.id}><strong>{evidence.dictionary} · {evidence.reading}</strong><br />{evidence.text}</p>)}
-              {shownOccurrence && <div className="study-context">{highlightedContext(shownOccurrence)}</div>}
-              <div className="study-card-preview"><strong>当前卡片预览</strong><div>{cardEdit.expression}{cardEdit.reading ? `（${cardEdit.reading}）` : ''}</div><hr /><div>{cardEdit.meaning || '词义待补充'}</div><div>{cardEdit.sentence}</div><div>{cardEdit.sentenceTranslation}</div><small>{cardEdit.sourceLabel}</small></div>
-            </details>}
+
             {step === 'rules' && chosenOccurrence && <div className="study-phrase">
               <strong>从这一文字块添加短语</strong>
               <input value={phrase} onChange={(event) => setPhrase(event.target.value)} placeholder="输入原文中的连续短语" />

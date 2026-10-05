@@ -8,10 +8,10 @@ import { unzipSync } from 'fflate';
 import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type BookRecord, type StudyCandidate, type StudyList, type StudyRunProgress } from '../src/shared/types';
 import { HARNESS_TOOL_NAME } from '../src/core/study/harness-tool';
 import { CARD_TIERS, FILTER_TIERS, cardHarnessPrompt, defaultStudyWorkflow, directCandidates, estimatedLlmCalls, filterHarnessPrompt, parseCardBatchResponse, parseCardResponse, parseFilterResponse, parseVerifyBatchResponse } from '../src/core/study/harness';
-import { cropRect } from '../src/main/study/crop';
-import { StudyService } from '../src/main/study/service';
-import { setUserDataRootForTesting } from '../src/main/paths';
-import { LlmService } from '../src/main/llm/service';
+import { cropRect } from './support/study/crop';
+import { StudyService } from './support/study/service';
+import { setUserDataRootForTesting } from './support/paths';
+import { LlmService } from './support/llm/service';
 
 function candidate(id: string, jlpt: StudyCandidate['jlpt'], conflict = false): StudyCandidate {
   return {

@@ -17,7 +17,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { SpineItem, TocEntry } from '../../shared/types';
 import { naturalCompare } from '../util/natural-sort';
-import { findEntry, type ZipEntry } from './zip-reader';
+import { findEntry, type ZipEntry } from './zip-memory';
 
 export interface ParsedEpub {
   title: string | null;

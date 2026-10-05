@@ -3,7 +3,7 @@
  * 构建 macOS 系统 OCR 小工具（`native/arale-vision-ocr/main.swift`）。
  *
  * 产物落到 `native/arale-vision-ocr/arale-vision-ocr`，与 Rust 解包器同一套布局
- * （`native/<tool>/<tool>`），这样 `extraResources` 与 `nativeToolDir()` 只需要一条规则。
+ * （`native/<tool>/<tool>`），Tauri 将它放入安装包 Resources/tools/。
  *
  * ## 两个坑，改这个脚本前先读
  *
@@ -41,12 +41,16 @@ if (!fs.existsSync(source)) {
 
 const moduleCache = path.join(root, '.vision-build', 'modcache');
 fs.mkdirSync(moduleCache, { recursive: true });
+const architecture = process.env.ARALE_BUILD_TARGET === 'aarch64-apple-darwin' ? 'arm64'
+  : process.env.ARALE_BUILD_TARGET === 'x86_64-apple-darwin' ? 'x86_64'
+  : process.arch === 'arm64' ? 'arm64' : 'x86_64';
 
 const result = spawnSync(
   'swiftc',
   [
     '-O',
     '-warnings-as-errors',
+    '-target', `${architecture}-apple-macosx14.0`,
     '-framework', 'Vision',
     '-framework', 'ImageIO',
     source,

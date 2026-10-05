@@ -165,7 +165,7 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
         {profiles.map((profile) => {
           const builtin = profile.id === BUILTIN_BING_PROFILE_ID;
           if (builtin) return <div className="profile-builtin" key={profile.id}>
-            <div><strong>Bing 网页翻译</strong><span>内置 · 免 Key · 无需新建即可使用</span></div>
+            <div><strong>Bing 网页翻译</strong><span>内置 · 免 Key · 中文译文＋原文罗马音（可能缺失）</span></div>
           </div>;
           const provider = PROVIDERS.find((item) => item.id === profile.provider)!;
           return (
@@ -179,6 +179,7 @@ export function TranslationCard(props: TranslationCardProps): JSX.Element {
                 <div className="field">
                   <span className="field-label">提供商</span>
                   <span className="input profile-identity" title="提供商仅可在新建时选择">{provider.label}</span>
+                  <small>当前适配器返回译文{profile.capabilities?.sourceReading === 'romaji' ? '和输入原文罗马音（可能缺失）' : '；未接入原文读音'}</small>
                 </div>
 
                 {profile.provider === 'microsoft' && (

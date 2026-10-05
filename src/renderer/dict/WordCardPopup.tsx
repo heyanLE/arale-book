@@ -16,7 +16,7 @@
  *
  * 2. **释义 HTML 走 `dangerouslySetInnerHTML`** —— 信任边界在**主进程**（glossary 已经在
  *    那边 sanitize 过）。这里不再二次转义，否则 `<ul>/<li>/<ruby>` 会变成字面量。
- *    **LLM 返回的文本不走 innerHTML**，它是模型生成的，用纯文本渲染。
+ *    LLM 返回文本由 Markdown 解析，再经白名单清洗；原始 HTML 只按文本展示。
  *
  * 3. **顶部词与词典词是两个字段**。点击查词允许「猜」，划词是用户明确框住的，不许再猜。
  *    所以 `word` 是可编辑的卡片标题，`dictionaryExpression` 是词典里的辞书形，两者
@@ -39,6 +39,8 @@ import type {
 import { hasAnalysisFor } from '@core/cards/analyses';
 import { placePopup } from '@core/cards/popup-position';
 import { capturePointer } from '../lib/pointer';
+import { Markdown } from '../components/Markdown';
+import { getSettings, updateSettings, useSettings, type WordCardSections } from '../lib/reader-settings';
 
 export interface AnchorRect {
   x: number;
@@ -47,7 +49,7 @@ export interface AnchorRect {
   height: number;
 }
 
-/** 词典命中来源（用于切换）。 */
+/** 词典命中来源（用于分组及选择词卡保存来源）。 */
 interface DictionaryTab {
   id: string;
   title: string;
@@ -150,7 +152,9 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
   const [scale, setScale] = useState(1);
   const [wordDraft, setWordDraft] = useState(word);
   const [editingWord, setEditingWord] = useState(false);
-  const [sectionOpen, setSectionOpen] = useState({ dictionary: true, translation: true, llm: true });
+  const { wordCardSections } = useSettings();
+  const [emptyDictionaryOpen, setEmptyDictionaryOpen] = useState(false);
+  const [showMoreDictionaries, setShowMoreDictionaries] = useState(false);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
   /** 用户手动拖动过之后就别再自动定位了。 */
   const manualRef = useRef(false);
@@ -276,24 +280,22 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
     return [...seen].map(([id, title]) => ({ id, title }));
   }, [result]);
 
-  const activeDictionaryId = dictionaryId ?? dictionaries[0]?.id ?? null;
-  const entries = useMemo(
-    () =>
-      (result?.results ?? []).filter(
-        (entry) => activeDictionaryId === null || entry.term.dictionaryId === activeDictionaryId,
-      ),
-    [result, activeDictionaryId],
-  );
+  const activeDictionaryId = dictionaries.some(item => item.id === dictionaryId) ? dictionaryId : dictionaries[0]?.id ?? null;
+  const visibleDictionaries = showMoreDictionaries ? dictionaries : dictionaries.filter(item => item.id === activeDictionaryId);
 
   const noDictionary = result !== null && result.dictionaryCount === 0;
   const noResult = result !== null && result.results.length === 0;
+  const sectionOpen = { ...wordCardSections, dictionary: noResult ? emptyDictionaryOpen : wordCardSections.dictionary };
 
   useEffect(() => {
-    if (result !== null) setSectionOpen((current) => ({ ...current, dictionary: result.results.length > 0 }));
-  }, [result]);
+    setEmptyDictionaryOpen(false); setShowMoreDictionaries(false);
+  }, [result, word]);
 
-  const toggleSection = (section: keyof typeof sectionOpen) =>
-    setSectionOpen((current) => ({ ...current, [section]: !current[section] }));
+  const setSectionOpen = (section: keyof WordCardSections, value: boolean) => {
+    if (section === 'dictionary' && noResult) { setEmptyDictionaryOpen(value); return; }
+    updateSettings({ wordCardSections: { ...getSettings().wordCardSections, [section]: value } });
+  };
+  const toggleSection = (section: keyof WordCardSections) => setSectionOpen(section, !sectionOpen[section]);
 
   const selectedLlmId = llmProfileId ?? llmDefaultId ?? '';
   const selectedTranslationId = translationProfileId ?? translationDefaultId ?? translationProfiles[0]?.id ?? '';
@@ -424,30 +426,22 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
           </div>
         ) : (
           <>
-            {dictionaries.length > 1 && (
-              <div className="wordcard-dicts" role="tablist" aria-label="词典">
-                {dictionaries.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={tab.id === activeDictionaryId}
-                    className={`wordcard-dict-tab${tab.id === activeDictionaryId ? ' is-active' : ''}`}
-                    onClick={() => onSelectDictionary(tab.id)}
-                    title={tab.title}
-                  >
-                    {tab.title}
-                  </button>
-                ))}
-              </div>
-            )}
-            {entries.map((entry, index) => (
-              <TermSection
-                key={`${entry.term.dictionaryId}-${entry.term.sequence}-${index}`}
-                entry={entry}
-                showDictionary={dictionaries.length <= 1}
-              />
-            ))}
+            {visibleDictionaries.map(dictionary => <div key={dictionary.id} className="wordcard-dictionary-group" data-dictionary-id={dictionary.id}>
+              {dictionaries.length > 1 && <div className="wordcard-dictionary-heading">
+                <strong>{dictionary.title}</strong>
+                <button type="button" className="wordcard-dict-tab" aria-pressed={dictionary.id === activeDictionaryId}
+                  onClick={() => onSelectDictionary(dictionary.id)} title="保存词卡时采用这部词典的辞书形与来源">
+                  {dictionary.id === activeDictionaryId ? '已采用' : '采用此词典'}
+                </button>
+              </div>}
+              {(result?.results ?? []).filter(entry => entry.term.dictionaryId === dictionary.id).map((entry, index) =>
+                <TermSection key={`${entry.term.sequence}-${index}`} entry={entry} showDictionary={dictionaries.length <= 1} />)}
+            </div>)}
+            {dictionaries.length > 1 && <button type="button" className="btn btn-sm wordcard-dictionaries-more"
+              data-testid="wordcard-dictionaries-more" aria-expanded={showMoreDictionaries}
+              onClick={() => setShowMoreDictionaries(value => !value)}>
+              {showMoreDictionaries ? '收起更多词典' : `展开更多词典（另 ${dictionaries.length - 1} 部）`}
+            </button>}
           </>
         ))}
         </section>
@@ -480,7 +474,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
               type="button"
               className="btn btn-sm btn-primary"
               disabled={translating || translationProfiles.length === 0}
-              onClick={() => { setSectionOpen((current) => ({ ...current, translation: true })); onTranslate(); }}
+              onClick={() => { setSectionOpen('translation', true); onTranslate(); }}
               title={selectionLength > 0 ? '翻译选中的文字' : '翻译当前段落或整个漫画框'}
             >
               {translating ? '翻译中…' : translationText === null ? '翻译' : '重新翻译'}
@@ -558,8 +552,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
                   ×
                 </button>
               </div>
-              {/* 模型输出是纯文本，**不走 innerHTML**（它是生成内容，不是我们 sanitize 过的词典 HTML）。 */}
-              <div className="wordcard-llm-text">{analysis.text}</div>
+              <Markdown text={analysis.text} className="wordcard-llm-text" />
             </div>
           ))}
 
@@ -604,7 +597,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
           <span className="dict-popup-spacer" />
           <span className="wordcard-count mono">
             {result !== null && !noResult && !noDictionary
-              ? `${entries.length} 条 · ${dictionaries.length} 部词典`
+              ? `${result.results.filter(entry => visibleDictionaries.some(item => item.id === entry.term.dictionaryId)).length} 条 · ${dictionaries.length} 部词典`
               : ''}
           </span>
         </div>

@@ -7,9 +7,9 @@ import * as path from 'node:path';
 import type { BookRecord, BookSegments } from '../src/shared/types';
 import { ankiTsv, buildStudyCandidates } from '../src/core/study/candidates';
 import { createJlptIndex, lookupJlpt } from '../src/core/study/jlpt';
-import { StudyService, chooseMeaning } from '../src/main/study/service';
-import { tokenizeJapanese } from '../src/main/study/tokenizer';
-import { setUserDataRootForTesting } from '../src/main/paths';
+import { StudyService, chooseMeaning } from './support/study/service';
+import { tokenizeJapanese } from './support/study/tokenizer';
+import { setUserDataRootForTesting } from './support/paths';
 
 test('JLPT 按表记和读音匹配；动词变形可回退到唯一辞书形读音', () => {
   const index = createJlptIndex([['食べる', 'たべる', 5], ['食べる', 'たべる', 4], ['生', 'せい', 2], ['生', 'なま', 3]]);

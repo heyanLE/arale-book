@@ -7,6 +7,7 @@
  * 列表按最新在前排：刚存的卡应该在顶上，而不是要翻到底。
  */
 
+import { useState } from 'react';
 import type { WordCard } from '@shared/types';
 
 export interface WordCardPanelProps {
@@ -14,27 +15,36 @@ export interface WordCardPanelProps {
   onOpen: (card: WordCard) => void;
   onRemove: (id: string) => void;
   onClose: () => void;
+  embedded?: boolean;
 }
 
-export function WordCardPanel({ cards, onOpen, onRemove, onClose }: WordCardPanelProps): JSX.Element {
+export function WordCardPanel({ cards, onOpen, onRemove, onClose, embedded = false }: WordCardPanelProps): JSX.Element {
+  const [query, setQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const sources = [...new Set(cards.map(card => card.source ? card.source.kind === 'comic' ? `页 ${card.source.pageIndex + 1}` : `章 ${card.source.spineIndex + 1}` : '无位置'))];
+  const shown = cards.filter(card => (!query.trim() || `${card.word} ${card.dictionaryExpression} ${card.note}`.toLowerCase().includes(query.trim().toLowerCase())) &&
+    (sourceFilter === 'all' || sourceFilter === (card.source ? card.source.kind === 'comic' ? `页 ${card.source.pageIndex + 1}` : `章 ${card.source.spineIndex + 1}` : '无位置')));
   return (
-    <aside className="wordcard-panel">
-      <div className="wordcard-panel-head">
+    <div className={`wordcard-panel${embedded ? ' is-embedded' : ''}`}>
+      {!embedded && <div className="wordcard-panel-head">
         <span className="wordcard-panel-title">词卡夹</span>
         <span className="wordcard-panel-count mono">{cards.length}</span>
         <span className="dict-popup-spacer" />
         <button type="button" className="icon-btn" onClick={onClose} title="收起词卡夹">
           ×
         </button>
-      </div>
+      </div>}
 
+      <div className="wordcard-panel-filters"><input type="search" aria-label="搜索已保存词卡" placeholder="搜索词语、辞书形或备注" value={query} onChange={e => setQuery(e.target.value)} />
+        <select aria-label="词卡出处筛选" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}><option value="all">全部页／章</option>{sources.map(source => <option key={source}>{source}</option>)}</select>
+        <small>显示 {shown.length} / {cards.length} 张</small></div>
       <div className="wordcard-panel-list">
         {cards.length === 0 ? (
           <div className="detail-hint">
             还没有保存过词卡。查词后点词卡上的「保存到词卡」。
           </div>
         ) : (
-          cards.map((card) => (
+          shown.length ? shown.map((card) => (
             <div className="wordcard-item" key={card.id}>
               <button
                 type="button"
@@ -65,9 +75,9 @@ export function WordCardPanel({ cards, onOpen, onRemove, onClose }: WordCardPane
                 ×
               </button>
             </div>
-          ))
+          )) : <p className="detail-hint">没有匹配的词卡。</p>
         )}
       </div>
-    </aside>
+    </div>
   );
 }

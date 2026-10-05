@@ -168,14 +168,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         )}
       </div>
 
-      <div className="sidebar-footer">
-        <button type="button" className="btn btn-sm btn-block" onClick={props.onImportFiles}>
-          ＋ 导入文件…
-        </button>
-        <button type="button" className="btn btn-sm btn-block" onClick={props.onImportDirectory}>
-          ＋ 导入文件夹…
-        </button>
-      </div>
     </nav>
   );
 }

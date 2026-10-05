@@ -17,18 +17,21 @@ import { clampSpreadOffset } from '@core/comic/spread';
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type LibraryViewMode = 'grid' | 'list';
 export type ComicFitMode = 'width' | 'height' | 'actual';
+export type WordCardSections = { dictionary: boolean; translation: boolean; llm: boolean };
 
 export interface AppSettings {
   /** system = 跟随 prefers-color-scheme。 */
   theme: ThemeMode;
 
   /**
-   * 沉浸模式：阅读时只保留内容与右上角的退出按钮；Windows 同时隐藏系统标题栏。
+   * 沉浸模式：隐藏上下栏，保留右上角快捷工具及可展开侧栏；Windows 隐藏系统标题栏。
    *
    * 是**应用级**偏好而不是按书覆盖：它是「我怎么用这个阅读器」的习惯，
    * 不会因为换一本书就变（和字号/双页那种「这本书怎么排」不同）。
    */
   autoHideChrome: boolean;
+  /** 跨词卡、跨书及重启记忆的分栏展开偏好。 */
+  wordCardSections: WordCardSections;
 
   // --- 书库视图 ---
   libraryView: LibraryViewMode;
@@ -67,6 +70,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   autoHideChrome: false,
+  wordCardSections: { dictionary: true, translation: true, llm: true },
   libraryView: 'grid',
   sort: 'title',
   showSidebar: true,
@@ -198,9 +202,16 @@ function bool(value: unknown, fallback: boolean): boolean {
 function sanitize(raw: unknown): AppSettings {
   const source = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const d = DEFAULT_SETTINGS;
+  const sections = (typeof source['wordCardSections'] === 'object' && source['wordCardSections'] !== null
+    ? source['wordCardSections'] : {}) as Record<string, unknown>;
   return {
     theme: oneOf(source['theme'], ['system', 'light', 'dark'] as const, d.theme),
     autoHideChrome: bool(source['autoHideChrome'], d.autoHideChrome),
+    wordCardSections: {
+      dictionary: bool(sections['dictionary'], d.wordCardSections.dictionary),
+      translation: bool(sections['translation'], d.wordCardSections.translation),
+      llm: bool(sections['llm'], d.wordCardSections.llm),
+    },
     libraryView: oneOf(source['libraryView'], ['grid', 'list'] as const, d.libraryView),
     sort: oneOf(source['sort'], SORTS, d.sort),
     showSidebar: bool(source['showSidebar'], d.showSidebar),

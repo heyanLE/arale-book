@@ -1,8 +1,7 @@
 /**
- * IPC 通道名与预加载脚本暴露给渲染进程的 API 形状（冻结文件）。
+ * Tauri 原生调用/Worker 通道名与渲染进程 API 契约。
  *
- * 渲染进程**不允许**碰 Node/Electron 原生模块（`contextIsolation: true` +
- * `nodeIntegration: false` + `sandbox: true`）。它只能 `window.arale.*` 这一组方法。
+ * 渲染进程不访问 Node.js 或任意磁盘路径，通过 window.arale 调用受限的原生能力。
  */
 
 import type {
@@ -52,9 +51,13 @@ import type {
 } from './types';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from './extensions';
 import type { AppDefaults } from './defaults';
+import type { AppBuildInfo, AppUpdateResult } from './releases';
 
 /** 所有 invoke 通道名。渲染进程与主进程都从这里取，禁止写字面量。 */
 export const IPC = {
+  appBuildInfo: 'app:buildInfo',
+  appCheckUpdate: 'app:checkUpdate',
+  appOpenRelease: 'app:openRelease',
   libraryInfo: 'library:info',
   libraryList: 'library:list',
   /** 导入用户拖进来/命令行给出的具体路径。 */
@@ -72,6 +75,8 @@ export const IPC = {
 
   chapterContent: 'book:chapter',
   comicPageText: 'comic:pageText',
+  annotationsRead: 'annotations:read',
+  annotationsWrite: 'annotations:write',
 
   dictStatus: 'dict:status',
   dictImport: 'dict:import',
@@ -136,6 +141,11 @@ export const IPC = {
   studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
   studyPreviewCards: 'study:previewCards',
+  studyManualAiExport: 'study:manualAiExport',
+  studyManualAiImport: 'study:manualAiImport',
+  studyManualAiClear: 'study:manualAiClear',
+  studyManualAiReveal: 'study:manualAiReveal',
+  studyClearCardProgress: 'study:clearCardProgress',
   studyTaskQueue: 'study:taskQueue',
   studyTaskCancel: 'study:taskCancel',
   studyTaskDismiss: 'study:taskDismiss',
@@ -147,7 +157,7 @@ export const IPC = {
 export type ImportDialogKind = 'files' | 'directory';
 
 /**
- * Windows/Linux 不允许同一个 Electron 对话框同时选文件和目录。
+ * Windows/Linux 不允许同一个 系统对话框同时选文件和目录。
  * 集中在这里生成配置，防止以后又把 `openFile` / `openDirectory` 混回去。
  */
 export function importDialogProperties(
@@ -156,11 +166,16 @@ export function importDialogProperties(
   return kind === 'directory' ? ['openDirectory'] : ['openFile', 'multiSelections'];
 }
 
-/** 预加载脚本挂到 `window.arale` 上的完整 API。 */
+/** Tauri API bridge 挂到 `window.arale` 上的完整 API。 */
 export interface AraleApi {
+  app: {
+    buildInfo(): Promise<AppBuildInfo>;
+    checkUpdate(): Promise<AppUpdateResult>;
+    openRelease(tag?: string): Promise<void>;
+  };
   window: {
-    /** 返回切换后的原生全屏状态；非 Windows 始终为 false。 */
-    setImmersive(enabled: boolean): Promise<boolean>;
+    /** 返回应用沉浸状态；系统栏只改变覆盖关系，不改变阅读区尺寸。 */
+    setImmersive(enabled: boolean, systemBarsVisible?: boolean): Promise<boolean>;
   };
   library: {
     info(): Promise<LibraryInfo>;
@@ -184,15 +199,9 @@ export interface AraleApi {
     /** `arale://` 下某个资源的可显示 URL。 */
     assetUrl(bookId: string, rel: string): string;
   };
-  /**
-   * 把一个拖放进来的 `File` 换成它的绝对路径。
-   *
-   * 为什么需要它：**Electron ≥32 移除了非标准属性 `File.path`**，而渲染进程在
-   * `sandbox: true` 下又拿不到 `webUtils`。唯一能拿到真实路径的地方是预加载脚本，
-   * 所以只能由它转一手——否则拖放导入会退化成「只知道文件名，不知道在哪」。
-   */
-  paths: {
-    forFile(file: File): string;
+  annotations: {
+    read(bookId: string): Promise<import('./annotations').AnnotationSnapshot>;
+    write(bookId: string, document: import('./annotations').ComicAnnotations): Promise<import('./annotations').AnnotationSnapshot>;
   };
   dict: {
     status(): Promise<DictionaryStatus>;
@@ -203,16 +212,7 @@ export interface AraleApi {
     lookup(text: string, charOffset?: number): Promise<LookupResult>;
     segment(text: string): Promise<SegmentToken[]>;
   };
-  /**
-   * 订阅主进程推来的事件，返回一个**订阅号**（用完用 `off` 退订）。
-   *
-   * 为什么走 `contextBridge` 暴露函数 + 订阅号，而不是在预加载里
-   * `window.dispatchEvent(new CustomEvent(...))`：
-   * - `contextIsolation` 下预加载与页面是两个 JS 世界，`CustomEvent.detail` 里塞 JS
-   *   对象时跨世界读取行为不稳定（有时拿到 null）；
-   * - `contextBridge` **不支持**把函数当返回值传回主世界，所以不能返回退订闭包，
-   *   只能用可克隆的数字订阅号。React 的 `useEffect` 清理依赖这个。
-   */
+  /** Subscribe to native/Worker events; the subscription ID is released with off(). */
   on<K extends keyof AraleEvents>(event: K, handler: (payload: AraleEvents[K]) => void): number;
   /** 退订。订阅号无效时静默忽略（组件卸载时序竞态下会走到）。 */
   off(subscriptionId: number): void;
@@ -326,6 +326,7 @@ export interface AraleApi {
     clear(bookId: string): Promise<void>;
   };
   study: {
+    revealManualAi(bookId: string, kind: 'filter' | 'cards'): Promise<void>;
     read(bookId: string): Promise<StudyList | null>;
     generate(bookId: string): Promise<StudyList>;
     cancel(bookId: string): Promise<void>;
@@ -338,7 +339,11 @@ export interface AraleApi {
     applyCompletedFilter(bookId: string): Promise<StudyList>;
     clearFilterProgress(bookId: string): Promise<StudyList>;
     runCards(bookId: string, request: StudyCardRunRequest): Promise<StudyTaskEntry>;
-    previewCards(bookId: string, tier: string): Promise<StudyPipelinePreview>;
+    previewCards(bookId: string, tier: string, fields?: import('./types').StudyCardField[]): Promise<StudyPipelinePreview>;
+    exportManualAi(bookId: string, request: import('./types').StudyManualAiRequest): Promise<StudyList | null>;
+    importManualAi(bookId: string, kind: 'filter' | 'cards', text: string): Promise<StudyList>;
+    clearManualAi(bookId: string, kind: 'filter' | 'cards'): Promise<StudyList>;
+    clearCardProgress(bookId: string): Promise<StudyList>;
     taskQueue(): Promise<StudyTaskQueueState>;
     cancelTask(id: string): Promise<void>;
     dismissTask(id: string): Promise<void>;
@@ -381,13 +386,15 @@ export interface AraleEvents {
 export type ShellCommand =
   | 'import'
   | 'settings'
+  | 'searchLibrary'
   | 'toggleSidebar'
   | 'zoomIn'
   | 'zoomOut'
   | 'zoomReset'
   | 'nextPage'
   | 'prevPage'
-  | 'toggleDictionary';
+  | 'toggleDictionary'
+  | 'exitImmersive';
 
 /** 主进程 → 渲染进程事件的唯一 IPC 通道。载荷形如 `{ channel, payload }`。 */
 export const EVENT_CHANNEL = 'arale:event';
@@ -399,9 +406,7 @@ export const NOTIFY_CHANNEL = 'arale:notify';
  * 拼 `arale://` 资源 URL。
  *
  * 放在 shared 里（而不是主进程）是因为**渲染进程也要用**：漫画页图、封面缩略图都要
- * 直接写进 `<img src>`。而预加载脚本跑在 `sandbox: true` 下，只能用 `electron`/`events`/
- * `timers`/`url` 四个模块，`node:path` 拿不到——所以这里只用字符串操作实现，不依赖
- * 任何 Node 模块。主进程的协议处理器用同一份实现，避免「拼 URL 的规则有两套」。
+ * 直接写进 `<img src>`，由 Tauri 自定义协议安全提供书籍资源。
  */
 export function bookAssetUrl(bookId: string, rel: string): string {
   const segments = rel

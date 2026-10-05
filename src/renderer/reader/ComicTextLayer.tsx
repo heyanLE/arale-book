@@ -51,6 +51,8 @@ export interface ComicTextLookup {
  * 那是点击才允许的宽容度。
  */
 export interface ComicTextSelection {
+  /** 松手时的鼠标位置（视口坐标），用于划词操作按钮。 */
+  pointer?: { x: number; y: number };
   /** 方块全文。 */
   context: string;
   /** 选区起点（UTF-16，含）。 */
@@ -344,7 +346,7 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
       }
 
       setHeld({ text, ranges: heldRanges });
-      onSelect({ ...payload, anchor: anchorRectFor(start.hits, selection.ranges, event.currentTarget) });
+      onSelect({ ...payload, pointer: { x: event.clientX, y: event.clientY }, anchor: anchorRectFor(start.hits, selection.ranges, event.currentTarget) });
     },
     [onSelect, resolvePoint, text, toImage],
   );

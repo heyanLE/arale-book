@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { LlmService, renderPrompt } from '../src/main/llm/service';
+import { LlmService, renderPrompt } from './support/llm/service';
 import { HARNESS_TOOL_NAME, harnessSubmissionTool } from '../src/core/study/harness-tool';
 import { DEFAULT_LLM_PROMPT, LEGACY_LLM_PROMPTS, type LlmProfile } from '../src/shared/types';
 
@@ -111,6 +111,28 @@ test('官方 OpenAI 制卡请求使用 max_completion_tokens，usage 计入预�
   const result = await service.complete({ profileId: 'p1', user: 'JSON', tool: harnessSubmissionTool('card'), maxOutputTokens: 800, tokenAllowance: 10000 });
   assert.equal(result.ok, true); assert.equal(result.budgetTokens, 100);
   assert.equal(JSON.parse(String(captured.calls[0]?.init?.body)).max_completion_tokens, 800);
+});
+
+test('length 响应保留最终答案片段和实际用量，不把推理内容当作卡片', async () => {
+  const partial = '{"items":[{"id":"猫","meaning":"猫"},{"id":';
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ finish_reason: 'length', message: { content: partial, reasoning_content: 'private reasoning' } }],
+    usage: { prompt_tokens: 100, completion_tokens: 32768 } }));
+  const { service } = makeService(captured.fetchImpl); seed(service, { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }); service.setApiKey('p1', 'sk-test');
+  const result = await service.complete({ profileId: 'p1', system: '只输出 JSON', user: '[]', tool: harnessSubmissionTool('card'), maxOutputTokens: 32768 });
+  assert.equal(result.ok, false); assert.equal(result.truncatedText, partial); assert.equal(result.usage!.completionTokens, 32768);
+  const body = JSON.parse(String(captured.calls[0]!.init!.body));
+  assert.match(body.messages[0].content, /schema/); assert.match(body.messages[0].content, /"properties"/);
+});
+
+test('工具响应截断仅恢复指定工具参数，未知工具不泄漏成有效片段', async () => {
+  let name: string = HARNESS_TOOL_NAME;
+  const captured = captureFetch(async () => jsonResponse({ choices: [{ finish_reason: 'length', message: {
+    content: '{"items":[{"id":"伪造"}]}', tool_calls: [{ type: 'function', function: { name, arguments: '{"items":[' } }] } }] }));
+  const { service } = makeService(captured.fetchImpl); seed(service); service.setApiKey('p1', 'sk-test');
+  const request = { profileId: 'p1', system: 'JSON', user: '[]', tool: harnessSubmissionTool('card'), maxOutputTokens: 32768 };
+  assert.equal((await service.complete(request)).truncatedText, '{"items":[');
+  name = 'unknown' as typeof name;
+  assert.equal((await service.complete(request)).truncatedText, '');
 });
 
 test('settings: 读盘时去掉 baseUrl 末尾斜杠，空白 prompt 回退默认', () => {

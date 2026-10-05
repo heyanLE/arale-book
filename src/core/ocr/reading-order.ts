@@ -10,7 +10,7 @@
  * blocks         OcrBox[] → mokuro TextBlock[]
  * ```
  *
- * **引擎实现不在 core 里**：它们在 `main/ocr/providers/`，因为要 spawn 进程、访问文件
+ * **引擎实现不在 core 里**：它们在 `src-tauri/src/ocr.rs`，因为要 spawn 进程、访问文件
  * 系统、读扩展目录——core 只保留能在纯 Node 里测的部分。这里也**不再有桶文件**：
  * 各个使用者直接 import 具体模块（与 `core/comic/*`、`core/cards/*` 的写法一致），
  * 免得桶里堆一堆没人用的转出口。

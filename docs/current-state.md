@@ -1,12 +1,58 @@
 # 当前状态与接续任务
 
-核对日期：2026-10-02。应用版本 `0.1.0`，OCR 扩展版本 `0.2.0`。
+2026-10-05 每夜构建：新增 Windows x64/macOS arm64 日更 CI，日期版本 `YYYY.M.D`，源码与上次成功发布一致或当天已发布则跳过；冻结源码/引擎指针，两个平台通过后统一上传并公开 GitHub prerelease。设置显示原生版本/渠道/提交/批次时间，Nightly 可检查更新并打开对应下载页，开发版与正式版不检查。macOS Vision 工具新增 Resources 打包路径，前端兼容 Safari 17；本轮 Windows Node 413 通过/1 跳过、Rust 37/37、开发/Nightly 真实 WebView2 各 195/195、日期 NSIS 打包和 actionlint 通过。GitHub CI 首次运行、macOS 和下载后安装尚未验收，详见[每夜构建](nightly.md)。
+
+2026-10-05 最新沉浸/批注方案：替换“文字编辑自动切换全屏/最大化”的过渡方案。Windows 使用精确覆盖当前显示器的无边框窗口，关闭无标题栏阴影；系统栏按钮通过本窗口全屏标记控制任务栏覆盖，窗口与客户区不变。macOS 使用当前 Space 的 simple fullscreen 与 presentation options，尚未运行验收。批注统一阅读/选择/画笔/橡皮擦/文字，工具不建空层，首份内容与自动层一次撤销；鼠标图标提交草稿返回阅读并保留沉浸，支持直接选择移动，橡皮只作用于当前画笔层。右上角纯图标并修正悬停对比度。Windows renderer/test 类型检查、Tauri Vite/debug、Rust 34/34、WebView2 GUI 192/192 通过；实际中英/A／あ模式切换、多显示器及其他 DPI、macOS/Linux、release/NSIS 待验收。详见 [跨平台方案与验证](reader-annotations.md)。
+
+2026-10-05 最新阅读/制卡交互修正：设置按来源返回阅读器或词汇/制卡页，保留阅读位置与制卡表单；空详情栏按开启偏好保留，首次选书不再改变列表宽度。划词只显示鼠标旁的查词按钮，确认后查询，取消的异步结果不再弹卡；漫画与 EPUB 均支持。制卡重建候选回第 1 步，恢复时优先未完成任务，第 4 步区分续跑与全量重生成，第 5 步无草稿不可进入，待核对/暂缓统计已修正。Windows 外部 AI 直接打开任务目录，并转换 canonical 路径供 Shell 使用。renderer 类型检查/Vite、Node 405 通过/1 跳过、Rust 34/34、真实 WebView2 GUI 172/172、debug 构建通过；本轮未重打 release/NSIS。详情见 [制卡状态](anki-filter-ux.md#当前阶段恢复与重建2026-10-05)及[阅读交互](settings-wordcard-ux.md)。下方 UI 包大小对应此前产物。
+
+2026-10-05 最新界面反馈：首页顶部取消选中态底部横线、恢复旧按钮样式；漫画底部恢复直接可见的排版/OCR 控件，按钮及下拉统一 24px。设置导航移进标题栏，与“重置界面偏好”同行。词卡删除“词典仅命中”说明；明鏡原词典包含换行，修正展示层以保留换行；LLM 分栏支持安全的 Markdown 展示。界面文案为简体中文，字体顺序改为中文优先，本机实测微软雅黑 UI。Windows renderer 类型检查/Vite、Node 404 通过（1 跳过）、WebView2 GUI 161/161、release/NSIS 构建通过，最新安装包 21,428,398 字节（20.44 MiB）。详情与未验证范围见 [词卡与设置 UX](settings-wordcard-ux.md#验证与边界)。下方同日界面整理记录为先前验证范围。
+
+2026-10-05 当前版本：已删除旧 Electron 主进程、预加载、启动/打包脚本与依赖，应用唯一入口为 Tauri。共享业务测试改用 `tests/support/` 注入 Node 端口，测试端口不进入运行包；数据 identifier 保持稳定，本机现有书库继续使用原 Tauri 数据目录。书库/设置/词卡/阅读器布局已整理；Anki 列表按步骤显示状态与数量，支持暂缓及确认后跳到下一张；外部 AI 任务自动保存到 `temp/manual-ai/` 并提供打开文件夹、逐批复制提示词；图层默认只看当前页，展示页码/内容预览；沉浸文字草稿在失焦和输入法组合输入时保留。AnkiDroid 的 `note has 1 fields, expected 12` 已定位为旧 SQL.js 导出遇到候选 ID 的 NUL 字符截断，原桌面包 124 条笔记均只有 1 字段；当前 Tauri 原生 SQLite 包通过 Windows 官方 Anki 26.9.3 导入核心验证。本轮仅分析该导出错误，没有修改 ID、模板或导出规则。验证与边界见 [Tauri 状态](tauri-migration.md#仅保留-tauri-与界面整理2026-10-05)。
+
+2026-10-05 本机数据修正：首次复制受 Codex MSIX 的 AppData 重定向影响，普通路径看到的是物理目录与 `LocalCache\Roaming` 的混合视图，不能据此认定用户正常启动可读取。现已通过本机 UNC 物理视图复制并逐文件 SHA 校验，保留原书库、真实空目标备份与错误影子目录备份。正式版 WebView2/CDP 实测 15 本书、15 个封面、4 部词典载入（87,073 条）、93 张词卡可读，无错误横幅；应用路径安全检查与运行逻辑未改。详情见 [本机一次性迁移](tauri-migration.md#本机一次性迁移2026-10-05)。
+
+核对日期：2026-10-05。应用源码开发基础版本 `0.1.0`，Nightly 使用构建日期版本，OCR 扩展版本 `0.2.0`。
+
+2026-10-05 最新决定：项目尚未发布，删除旧书库迁入设置卡片、IPC/Worker/类型、Rust 迁入事务/启动恢复及专用测试/夹具。已按用户要求一次性迁移本机实际数据：15 本漫画、4 部词典、93 张词卡、3 本批注、2 本分词记录、制卡记录和 4 个阅读位置，以及现有翻译/LLM/默认设置。3064 个文件共 2,276,547,903 字节，复制 SHA 校验一致、源文件复核未变，旧目录保留并备份复制前目标目录；Rust 后台只读加载实际数据与配置通过，不调用外部服务。应用不再提供旧版迁入入口，后续用户直接使用 Tauri 数据根。类型/Vite/debug 构建通过，Rust 32/32，隔离 GUI/Node 对照 155/155；release/NSIS 重建通过，安装包 21,374,847 字节（20.38 MiB），未安装验收。详情见 [本机一次性迁移](tauri-migration.md#本机一次性迁移2026-10-05)。下方第八阶段和界面调整记录保留历史范围，其迁入功能已撤除。
+
+2026-10-05 界面调整：移除顶部常驻 Tauri 迁移提示；数据根保持独立，旧 Electron 书库仍在原目录，可通过设置页迁入。renderer 类型检查、Tauri Vite/debug 构建通过；未重跑整套 GUI，未覆盖正在运行的 release 或重打 NSIS，关闭旧窗口后用 `node scripts/tauri.mjs dev` 载入新页面。下方第八阶段包大小和全量测试记录对应调整前产物。
+
+2026-10-05 Tauri 第八阶段：设置页手动迁入旧书库已接入，保留书籍/阅读位置/词卡/批注/分词/制卡记录及词典；书 ID/图片和章节路径保留，目标 dir 重绑定，旧 EPUB 缓存清洗重建。源目录只读、复制 SHA 校验、重复 ID 跳过、事务回滚/启动恢复已验证；密钥/配置、OCR 扩展、浏览器偏好仍单独配置。Windows：Node 541 项（536 通过、5 跳过）、Rust 41/41、迁入/服务/制卡/OCR 适配器 4/6/5/3 全通过、真实 WebView2 GUI/Node 对照 168/168。release 28.14 MiB，NSIS 21,419,329 字节（20.43 MiB），7-Zip 检查和包内 EXE 内容对照通过。正式数据尚未复制，默认仍 Electron。安装/卸载及关联验收未完成，详情见 [第八阶段验证](tauri-migration.md#第八阶段验证2026-10-05)。下方历史各阶段保留当时范围。
+
+2026-10-05 Tauri 第七阶段：原生文件/编辑/视图/阅读/帮助菜单、书目录系统定位、专用 EPUB/漫画/Mokuro 文件关联配置已接入。第二实例按来源 cwd 解析相对路径，阅读/设置页也能导入，刷新期间暂存打开请求。Windows 原子 JSON 替换对临时占用有界重试，持续失败保留旧文件。Node 541 项（536 通过、5 跳过），Rust 32/32；真实 WebView2 GUI/Node 对照 155/155；服务/制卡/OCR 适配器 6/5/3 项全部通过。release EXE 约 28.00 MiB；NSIS 构建通过，最终 21,376,964 字节（20.39 MiB），包内 EXE SHA 与 release 一致；关联命令引号已通过 hook 修正。默认仍 Electron、预览独立书库；下一步为旧数据迁入、安装/卸载与安装后关联验收。命令、安装包结果与未验证范围见 [第七阶段验证](tauri-migration.md#第七阶段验证2026-10-05)。
+
+2026-10-05 Tauri 第六阶段：Anki 制卡后台已接入。候选、F1–F3、五字段/A0–A4、有限修复、预算、截断卡片恢复、队列和自行 AI 共用原 TypeScript；Rust 管理原子检查点、书/文字层/词典版本检查、文件选择授权、配图与原生 SQLite APKG。首次 MD 任务保存直接记录实际目录；导出失败不标记成功。切换页面继续，窗口刷新或应用退出中断队列并保留检查点，需手动续跑；旧 Worker 不能写回，刷新会取消已登记的旧制卡 HTTP。默认仍 Electron、预览独立书库。下一步是旧书库迁入、菜单/文件关联/系统定位和 NSIS 验收。本轮 Node 541 项（536 通过、5 跳过），Rust 29/29，制卡/服务/OCR 适配器 5/6/3 项全部通过；真实 WebView2 GUI/Node 对照 150/150。release EXE 29,318,656 字节（约 27.96 MiB），未运行 release、未生成 NSIS。计数、命令与边界见 [第六阶段验证](tauri-migration.md#第六阶段验证2026-10-05)。
+
+2026-10-05 Tauri 第五阶段：OCR/扩展已接入。Rust 保持书级 FIFO、NDJSON、原生进程树、进度/取消；Worker 复用原 TypeScript 成块、排序和 mokuro 序列化，取消保留已识别页及原有文字，提交前核对源数据。Windows 系统 OCR 与 submodule 的真实 Python/ORT 已运行，界面重载后任务可完成。JSONL 仓库、HTTPS 流式下载、大小/SHA/runner 校验、暂存发布、事务恢复和使用保护已接入；Windows 临时文件占用导致的目录发布失败改为有界重试，不删除目标以强行发布。引擎 submodule 未修改。默认仍 Electron、Tauri 独立书库，无运行时 Node；下一步是 Anki 存储/队列/自行 AI/导出。命令、最新计数、release 体积和未验证范围见 [第五阶段验证](tauri-migration.md#第五阶段验证2026-10-05)。
+
+本阶段 Windows 验证：Node 541 项（536 通过、5 跳过），Rust 25/25，服务适配器 5/5、OCR 适配器 3/3；真实 WebView2 GUI/Node 对照 118/118，6 份 OCR 产物一致。release EXE 26,479,616 字节（约 25.25 MiB）；未运行 release、未生成 NSIS、未在 Tauri 真实下载官方引擎，也未重新验收 Electron GUI。
+
+2026-10-04 Tauri 迁移第四阶段（Windows 11 x64）：翻译/LLM 已接入。六提供商协议与 Electron 共用，Rust 保存密钥、处理 HTTP/百度签名、端点校验、超时/取消；独立 Worker 保留提示词、结构化降级、能力缓存、token 预算/usage/cacheHit/cacheMiss 和截断文本。模型等待不持有书库存储锁，配置快照保留在途行为，双层 LLM 并发上限 4。Node 541 项中 536 通过、5 跳过；Rust 16/16；适配器 5/5；真实 WebView2 GUI/Node 对照 91/91，含词卡翻译/分析按钮；六供应商测试使用本地 HTTP 夹具，无真实付费调用。默认仍 Electron，Tauri 独立书库，无运行时 Node。OCR/扩展和完整 Anki 编排/截断卡片恢复/导出尚未迁移，下一步 OCR/扩展。release 结果与未验证范围见 [Tauri 迁移](tauri-migration.md)。
+
+2026-10-04 Tauri 迁移第三阶段（Windows 11 x64 / Node 24.19.0 / rustc 1.96.0）：在漫画/图片、书库/进度、词卡/批注、手动词典与 Kuromoji 基础上，接入 EPUB 导入、章节阅读/排版、相对图片/字体、点词/划词、目录/链接/键盘跳转及 EPUB 整书分词。复用现有 TypeScript 解析与规则，Rust 管理解压/暂存/发布/源文件 SHA，通过独立 arale-book 协议、脚本 hash CSP 和不透明来源 iframe 服务章节；ZIP/TOC 路径避免重复解码。图片型 EPUB 保持小说格式，使用漫画阅读器与 ASCII 页图。默认仍是 Electron，预览独立书库，运行时无 Node。本轮 Node 541 项中 536 通过、5 跳过；Rust 13/13；真实 WebView2 GUI/Node 对照 69/69，三本 EPUB 的解析及测试 EPUB 完整分词/词表对照通过；最终 release 结果见 [Tauri 迁移](tauri-migration.md)。翻译/LLM、OCR/扩展、Anki 后台、完整安装包及旧数据迁入仍待接续；未重新验收 Electron GUI 或其他平台。下一步为翻译/LLM 后台，保留现有提示词、A0–A4 分流、缓存统计与截断恢复。
+
+2026-10-03 词卡分栏偏好与多词典（Windows 11 / Node 24.19.0）：词典/翻译/LLM 三栏记忆应用级展开状态，跨词卡/书籍及重载沿用；空结果临时收起不覆盖偏好。多词典默认首部/已选来源，“展开更多”显示全部词典的完整结果，并可选择保存来源。`node node_modules/typescript/bin/tsc -p tsconfig.renderer.json --noEmit`、`node node_modules/vite/bin/vite.js build` 通过；`node scripts/smoke.mjs` 291/291，退出码 0，新增真实 IPC 导入三部词典、展开/收起、独立偏好及渲染重载验证，截图已检查。本轮只改 renderer/GUI，核心单测未重跑；未验证 macOS/Linux、正式安装包、窄窗口/多 DPI 及大量真实词典长释义的人工验收。详见[词卡 UX](settings-wordcard-ux.md)。
+
+2026-10-03 沉浸侧栏与批注工具（Windows 11 / Node 24.19.0）：沉浸右上角提供画笔/橡皮擦/文字、完成编辑、侧栏和退出入口；可查看已保存词卡并打开弹窗，侧栏仍占独立空间。普通底部与沉浸工具复用逻辑及 SVG 图标。`node node_modules/typescript/bin/tsc -p tsconfig.renderer.json --noEmit`、`node node_modules/vite/bin/vite.js build` 通过；`node scripts/smoke.mjs` 280/280，退出码 0，普通/沉浸截图已检查。本轮仅改 renderer 与 GUI 脚本，核心单测未重跑；未验证其他平台、正式安装包、窄窗口/多 DPI 人工验收及文本 EPUB 沉浸侧栏的专项 GUI 操作。详见[批注图层](reader-annotations.md)。
+
+2026-10-03 批注快捷工具（Windows 11 / Node 24.19.0）：底部常驻画笔/橡皮擦/文字，无需打开侧栏；画笔每次点击新建层，橡皮擦只擦当前/最近画笔层，文字点击工具后再点页图建层，放置前取消不留空层。`node node_modules/typescript/bin/tsc -p tsconfig.renderer.json --noEmit`、`node node_modules/vite/bin/vite.js build` 通过；`node scripts/smoke.mjs` 270/270，退出码 0，截图已检查。本轮仅改 renderer，核心测试沿用下面的同日图层验证；未验证其他平台、正式安装包及窄窗口/多 DPI 人工验收。详见[批注图层](reader-annotations.md)。
+
+2026-10-03 阅读侧栏调整（Windows 11 / Node 24.19.0）：右上角改为“沉浸 → 侧边栏”，侧栏提供词卡夹/图层管理标签，词卡数量移到标签；图层管理从底部移到右侧，右键可直达，底部保留显示开关/编辑工具。renderer 类型检查及 Vite 生产构建通过，`node scripts/smoke.mjs` 263/263，退出码 0，含标签切换、批注保留和侧栏不覆盖阅读区；截图已检查。该轮仅改 UI，核心单测结果沿用下面的图层验证；未验证其他平台、正式安装包及窄窗口/多 DPI 人工验收。详见[批注图层](reader-annotations.md)。
+
+2026-10-03 漫画/图片批注图层（Windows 11 / Node 24.19.0）：右键新建画笔与纯文字图层，底部显示开关与本书管理区，支持锁定/排序、原图坐标、整笔橡皮、多行/竖排/背景、文字移动/文本框调整、撤销重做及明确当前操作页。批注独立保存，不修改 OCR/原图/Anki；串行 revision 保存、错误保留草稿、原图失配隐藏及清空入口。main/renderer/test 类型检查与生产构建通过；`node --test --test-concurrency=1 "dist-test/tests/*.test.js"` 539 项、534 通过、5 跳过；`node scripts/smoke.mjs` 258/258，退出码 0。GUI 含真实指针/键盘、双页、界面重载及保存冲突；范围确认与关闭检查使用替身/合成事件，未验证系统关闭按钮、其他平台及正式安装包。使用方式、代码入口及验证边界见[批注图层](reader-annotations.md)。
+
+2026-10-02 自行 AI 模式最新验证（Windows 11 / Node 24.19.0）：第 2/4 步可按每份 1–100 词导出 MD 和简短提示词，外部处理后逐份粘贴 JSON；校验批次/快照并持久进度，不调用应用内 LLM/翻译。类型检查及生产构建通过；`node --test --test-concurrency=1 "dist-test/tests/*.test.js"` 527 项、522 通过、5 跳过；`node scripts/smoke.mjs` 227/227，退出码 0。GUI 已验证模式切换、临时任务恢复/输入框导入及原文变更后的清除入口；原生目录窗口、真实外部模型语义质量和 Anki 客户端导入未验证，详见[自行 AI 模式](anki-harness.md#自行-ai-模式)。
+
+2026-10-02 五字段制卡方案最新验证（Windows 11 / Node 24.19.0）：main/renderer/test 类型检查与生产构建通过；`node --test --test-concurrency=1 "dist-test/tests/*.test.js"` 520 项、515 通过、5 跳过；`node scripts/smoke.mjs` 222/222，退出码 0。字段、档位和罗马音试验范围见[Anki Harness](anki-harness.md)，本轮未验证真实供应商质量及 Anki 客户端导入。
 功能基线：应用提交 `91fc064`、文档整理前提交 `1b57c64`；引擎功能提交 `59eed53`。这些是定位历史的基线，当前 HEAD 用 `git log` 查看。
 
 ## 现在是什么
 
-ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语学习阅读器。当前主流程包括导入、书库、漫画/小说阅读、点词/划词查询、词卡、词典分词、可选 OCR、多提供商翻译与 OpenAI 兼容 LLM 分析。
-纯逻辑在 `src/core/`，Electron 服务在 `src/main/`，UI 在 `src/renderer/`。源码导航见[架构](architecture.md)。
+2026-10-04：Tauri 第四阶段 debug/release 构建通过，release EXE 26,059,776 字节（约 24.85 MiB，含 Kuromoji 辞书与翻译/LLM HTTP 后台，功能未迁完）；命令与范围见 [迁移验证](tauri-migration.md)。运行验证覆盖 debug WebView2；release 运行、NSIS 与完整迁移安装包体积未验证。
+
+ARaLeBook 是 Tauri + Rust + React/TypeScript 的本地漫画/EPUB 管理与日语学习阅读器。当前主流程包括导入、书库、漫画/小说阅读、点词/划词查询、词卡、词典分词、可选 OCR、多提供商翻译与 OpenAI 兼容 LLM 分析。
+纯逻辑在 `src/core/`，原生后台在 `src-tauri/src/`，UI 在 `src/renderer/`。源码导航见[架构](architecture.md)。
 
 ## 已确定并实现的方向
 
@@ -23,8 +69,9 @@ ARaLeBook 是 Electron + React/TypeScript 的本地漫画/EPUB 管理与日语�
 | 发布 | 引擎仓库 `v0.2.0` 已公开，macOS/Windows 两个资产的 GitHub digest 与本地构建记录一致。Windows 已通过真实网络下载、应用安装和下载后单页 OCR；本地 JSONL 已补 Windows SHA，尚需提交/推送索引及应用改动。干净 Windows 的 VC++ 条件依赖仍未验收 |
 | 翻译 | 词卡内支持整段/整框或选区翻译；提供 Bing 网页翻译（免 Key）、Microsoft、DeepL、Google、百度和 LibreTranslate，配置与密钥留在主进程；Bing 直接复刻网页 `translate()` 协议，不额外引入 npm 依赖，并显示后台返回的日文原文罗马音 |
 | 词卡定位 | 弹窗在选区的下、上、右、左等候选位置中按遮挡面积选择位置；翻译/LLM 内容展开和窗口缩放时自动重新定位，用户手动拖动后保留手动位置 |
+| 漫画/图片批注 | 画笔/文字图层按书管理、内容按页图保存，位于 OCR 文字层下面；底部常驻画笔建层/当前画笔层橡皮/文字点击放置工具及总开关，右键新建、右侧图层管理，支持锁定/排序、撤销、整笔橡皮、多行文字、几何缩放同步。`comic-annotations.json` 独立存储并校验 revision 与原图 SHA；文本 EPUB 暂不支持。详见[批注图层](reader-annotations.md) |
 | 漫画学习候选 | 在现有分词页增加 Anki 制卡标签：Kuromoji 形态分析、社区 JLPT 参考等级、候选审核与短语补录；每书 `study-list.json` 保存人工选择，导出 UTF-8 Anki 文本。实现细节见[方案与状态](manga-vocabulary-anki-plan.md) |
-| Anki Harness | 五步：规则筛词 → 可选 AI 筛选 → 手动筛词 → A0–A4 证据生成/修复 → 制卡。新增全部出处优选、用户词典多条证据、字段级问题与有限换句修复；A0 本地、A1 翻译、A2 疑难 AI、A3 标准、A4 全量复核。可设置生成 token 预算和新增卡数；已通过卡可先导出，其余待审/暂缓保留。A3/A4 无需翻译配置，旧 F/R 保留兼容；后台队列、实际 HTTP/缓存 token 统计与配图独立设置沿用。详见[Anki Harness](anki-harness.md)及[LLM 协议](llm-output-protocol.md)。 |
+| Anki Harness | 五步保留，第 4 步先选假名、本词含义、原句、句子含义、辞书形，再选 A0–A4：A0 本地，A1 词典多义＋翻译，A2 仅缺词调用 AI，A3 单义本地/多义及缺词语境选义，A4 全量语境分析。A1/A2 多义不强制待审，无词典的 AI 补全可通过并标来源；A3/A4 提供邻句、词典、辞书形及预先取得的句译，不额外复核，问题修复上限三次（A2 一次）。翻译配置显示能力，Bing 罗马音保守回退为假名，记录来源。未选字段不要求生成或审核，原句＋辞书形可零外部请求；新字段卡为 Anki v2，旧 R 为 v1。旧 A 检查点需显式重建，后台、预算、配图、1–3 并发沿用。详见[Anki Harness](anki-harness.md)及[LLM 协议](llm-output-protocol.md)。 |
 | 整书原始词表 | 漫画文字块和 EPUB 章节统一由 Kuromoji 按日语词形切分；Yomitan 词典只标记是否收录。助词、助动词、标点和未收录的单个假名不进入学习词表，但词位置信息仍保存在 `segments.json`。打开旧版逐字产物会自动重建；阅读时点词查询仍走词典扫描。 |
 | 设置与词卡 UX | 设置按功能卡片排列，小说与漫画阅读器配置置于末尾；“词卡弹窗”卡片分翻译栏与 LLM 分析栏管理各自默认项及提示词。弹窗引擎下拉只列实际配置，顶部词语与编辑图标共用按钮。LLM/翻译仅新建时可设置名称及翻译提供商，Bing 免 Key 项常驻。词卡持久记录来源页/章，支持跳转与返回，三栏可收起。详见[交互说明](settings-wordcard-ux.md) |
 
@@ -169,6 +216,8 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 
 ## 下一步：Windows 兼容与修复
 
+2026-10-02 后续 Anki 修复：A 生成/复核提高输出额度，单卡截断有界扩额；临时恢复已闭合且校验完整的条目，保留已通过卡，只对剩余项缩批，JSON 回退补完整 schema。Windows 类型/生产构建通过；针对测试 63/63，串行全量 507 项中 502 通过、5 跳过；GUI 219 个断言通过但退出清理仍报 `EPERM`。规则、并行回归的下载器失败记录与未验证范围见 [Harness](anki-harness.md#输出额度与临时截断恢复2026-10-02)。
+
 优先顺序及具体命令见 [Windows 交接](windows-handoff.md)。
 
 1. 提交/推送引擎索引及应用下载器改动；ZIP 已公开，不需重新上传。
@@ -182,7 +231,7 @@ macOS 应用打包配置下限为 11；当前 ONNX Runtime wheel 要求 macOS 14
 
 2026-10-02 文档核对：主 README、引擎库/引擎目录 README 与开发命令页已同步 Windows 运行及构建记录；本轮仅改文档，未重新运行测试。上方按日期记录的 macOS“本轮 Windows 未验证”保留其历史含义，当前 Windows 覆盖范围以最新验证节和 README 为准。
 
-- 新增仓库能发现扩展条目，但 `src/main/index.ts` 目前只注册 `system` 和 `arale_onnx_v1` 两个 OCR provider；任意第三方 provider 的动态注册尚未实现。
+- Electron 的 `src/main/index.ts` 目前只注册 `system` 和 `arale_onnx_v1` 两个 OCR provider；Tauri 根据已安装 manifest 的 `provides` 动态接入协议兼容 runner，本轮使用额外测试 provider 验证，未验收任意第三方真实引擎。
 - `.zip/.cbz` 整包读内存且超过 2 GB 拒绝；`.rar/.7z` 依赖 Rust 解包器。
 - 词典支持 Yomitan；没有 MDX/StarDict/DSL、云同步和联网元数据抓取。
 - 两张缓存解码图包含重复权重，当前包体积增加约 95 MiB；未做图合并或 int8 量化验收。

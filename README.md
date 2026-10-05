@@ -4,13 +4,14 @@
 
 # あられブック [App](#)
 
+
 ### 漫画与小说的日语阅读器
 把漫画和小说管起来，读得舒服 —— 点一下就能查词，啃生肉不再卡壳。
 
 [![License: GPL-3.0](https://img.shields.io/github/license/heyanLE/arale-book?labelColor=27303D&color=0877d2)](/LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20Windows%20x64-27303D)](https://github.com/heyanLE/arale-book/releases)
 
-[![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=FFFFFF)](https://www.electronjs.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri&logoColor=FFFFFF)](https://tauri.app/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=FFFFFF)](https://www.typescriptlang.org/)
 [![OCR engine: arale-book-ocr-manga](https://img.shields.io/badge/OCR%20engine-arale--book--ocr--manga-27303D?logo=github&logoColor=FFFFFF)](https://github.com/heyanLE/arale-book-ocr-manga)
 
@@ -22,9 +23,8 @@
 git clone --recurse-submodules git@github.com:heyanLE/arale-book.git
 cd arale-book
 npm ci
-npm run build:native          # Rust 解包器，.rar / .7z 支持靠它
 npm run build:vision-ocr      # 可选：macOS 系统 OCR 小工具
-npm start
+npm start                   # 构建并启动 Tauri
 ```
 
 需要 Node.js 和 Rust 工具链；Windows 构建解包器还需 MSVC 构建工具。submodule 使用 SSH，需配置两个仓库的访问权限；HTTPS 克隆方式见[开发文档](docs/development.md)。Windows 不需要运行 `build:vision-ocr`，系统 OCR 使用随源码提供的 Windows.Media.Ocr PowerShell 脚本。
@@ -33,34 +33,26 @@ npm start
 
 | 平台 | 支持 | 已实测 | 说明 |
 |---|:---:|:---:|---|
-| macOS Apple Silicon（arm64） | ✅ | ✅ | 已有阅读、制卡、OCR 与目录包验证；应用配置下限 macOS 11，ONNX 扩展需 macOS 14；新版 A0–A4 尚未复测 |
-| macOS Intel（x64） | ⚠️ | ❌ | Electron 本身支持，但打包配置默认只出 arm64 |
-| Windows（x64） | ✅ | ✅ | Windows 11 build 26200 已验证阅读、查词、分词、制卡、系统/ONNX OCR、扩展真实下载与安装；目录包和 NSIS 构建通过，干净机器安装/卸载待测 |
-| Linux（x64） | ⚠️ | ❌ | 有 AppImage 打包配置，运行时依赖未经验证 |
-| 其他平台（含 Linux ARM） | ❌ | — | 没有任何构建目标配置 |
+| macOS Apple Silicon（arm64） | ⚠️ | ❌ | Tauri 支持；当前版本尚未在 macOS 运行验收，ONNX 扩展需 macOS 14 |
+| macOS Intel（x64） | ⚠️ | ❌ | Tauri 支持；当前未配置或验收安装包 |
+| Windows（x64） | ✅ | ✅ | Windows 11 已验证 Tauri/WebView2 阅读、查词、制卡、OCR 与扩展；NSIS 构建通过，干净机器安装/卸载待测 |
+| Linux（x64） | ⚠️ | ❌ | Tauri 支持；当前未配置或验收安装包 |
 
-*✅ 表示已有目标机运行记录，具体覆盖范围见[当前状态](docs/current-state.md)；⚠️ 表示该组合未运行验收；❌ 表示没有构建目标。核对日期：2026-10-02。*
+
+*✅ 表示已有目标机运行记录，具体覆盖范围见[当前状态](docs/current-state.md)；⚠️ 表示该组合未运行验收；❌ 表示没有构建目标。核对日期：2026-10-05。*
 
 </div>
 
-自己打包使用 `npm run pack:release`：macOS 产出 `.app` 与 `.zip`，另可用 `node scripts/make-dmg.mjs` 生成 `.dmg`；Windows 产出 `release/ARaLeBook-0.1.0-setup.exe`。`-- --dir` 只生成目录包。当前安装包未签名，macOS 首次打开需右键 →「打开」；Windows NSIS 尚未完成干净机器安装/卸载验收。
-
-数据保存在本机：macOS 默认 `~/Library/Application Support/ARaLeBook/`，Windows 默认 `%APPDATA%\ARaLeBook\`（开发/测试可覆盖目录）。其中包含书库、词典、配置与扩展，备份时应保留整个数据目录。
-
-### Windows 已验证范围
-
-Windows 11 已运行导入/阅读/查词、Kuromoji 分词、词卡配置与来源跳转、Anki 筛选/后台任务/生成/导出，以及 Windows.Media.Ocr 队列与取消。ONNX 引擎已完成包内自检、30 页 OCR 和正式 Release 下载、SHA 校验、安装及下载后识别。
-
-2026-10-02 / Node 24.19.0：类型检查和生产构建通过；499 项单元测试中 494 通过、5 跳过；GUI 219 个断言通过，最后一次退出清理临时目录遇到 Windows `EPERM`。真实 RAR/7Z 夹具、干净系统 VC++ 依赖、NSIS 安装/卸载、Anki 客户端导入及真实模型质量仍待验收。命令和各次记录见[开发文档](docs/development.md)、[当前状态](docs/current-state.md)与[Windows 交接](docs/windows-handoff.md)。
 
 ## 功能
 
 <div align="left">
 
 * 本地书库：漫画（`.cbz` `.zip` `.cbr` `.rar` `.7z` `.cb7` `.cbt`、图片文件夹、`.mokuro`）与小说（`.epub`），包括整本都是插画扫页的「图片型小说」。
-* 可配置的阅读器：单页与双页跨页（配对偏移 0–4）、阅读方向左到右 / 右到左、缩放平移、沉浸模式。
+* 可配置的阅读器：单页与双页跨页（配对偏移 0–4）、阅读方向左到右 / 右到左、缩放平移、沉浸模式；沉浸右上角可打开词卡侧栏并使用漫画批注工具。
+* 漫画/图片批注：底部快捷画笔建层、当前画笔层橡皮与文字点击放置，右键也可新建；按书管理、按页保存，支持显示、锁定、排序、撤销与缩放同步；位于 OCR 文字层下方，阅读时仍可查词。详见[批注图层](docs/reader-annotations.md)。
 * 小说阅读：目录树与章节导航、阅读位置记忆、字号 / 字体 / 行高 / 边距，支持竖排（縦書き）。
-* 点词或划词查词典，支持 Yomitan 格式词典；随包内嵌三部小词典，开箱即用。
+* 点词或划词查词典，支持 Yomitan 格式词典；词典由用户手动导入。
 * 设置可管理 LLM、翻译配置及词卡弹窗的默认选择；内置免 Key 的 Bing 翻译，漫画识别时可按书选择 OCR 引擎。
 * 词卡：可固定多张、可改标题、可存进这本书的词卡夹，含上下文里的子句分析；新词卡记住来源页/章，可跳转并返回。
 * 文字识别（OCR）：系统 OCR（零下载）或漫画专用的 ONNX 扩展，把漫画页变成可点查的文字层。
@@ -81,21 +73,13 @@ Windows 11 已运行导入/阅读/查词、Kuromoji 分词、词卡配置与来�
 
 [![heyanLE/arale-book-ocr-manga - GitHub](https://github-stats-extended.vercel.app/api/pin/?username=heyanLE&repo=arale-book-ocr-manga&bg_color=161B22&text_color=c9d1d9&title_color=0877d2&icon_color=0877d2&border_radius=8&hide_border=true&description_lines_count=2)](https://github.com/heyanLE/arale-book-ocr-manga/)
 
-### 已知限制
-
-* 可下载的 ONNX OCR 扩展支持 macOS arm64（14+）和 Windows x64；macOS 11–13 仍可使用系统 OCR。Windows 干净环境的 VC++ v14 x64 条件依赖尚未验收；系统 OCR 需要对应识别语言支持。
-* 词典只支持 Yomitan 格式，MDX / StarDict / DSL 未实现。
-* `.zip` / `.cbz` 会整体读进内存，单个超过 2 GB 的包会被拒绝（`.rar` / `.7z` 走流式解包，无此限制）。
-* 系统 OCR 为屏幕文字与文档优化；ONNX 扩展使用漫画专用模型，但竖排、拟声词、手写体仍可能误识别。
-* `.apkg` 生成与包内容已测试，Anki 桌面客户端的实际导入/更新仍未验收；自动校验不保证词义正确，缺词典证据或存在核心问题的卡仍需审核。
-* 没有云同步、没有联网元数据刮削、单窗口。
 
 ### 致谢
 
 * 流程设计参考 [Fushi](https://github.com/hajisensai/Fushi)（GPL-3.0），早期阅读笔记已收入[历史文档归档](docs/archive/2026-09-26/README.md)。
 * 日语去屈折数据来自 [Yomitan](https://github.com/yomitan/yomitan)（BSD-3-Clause）。
 * 异体字表由 [kanji-processor](https://github.com/yomidevs/kanji-processor)（MIT）生成。
-* 随包内嵌的词典来自 [MarvNC/yomitan-dictionaries](https://github.com/MarvNC/yomitan-dictionaries)。
+* 测试使用的词典来自 [MarvNC/yomitan-dictionaries](https://github.com/MarvNC/yomitan-dictionaries)。
 * 漫画制卡使用的社区 JLPT 参考数据来自 [stephenmk/yomitan-jlpt-vocab](https://github.com/stephenmk/yomitan-jlpt-vocab)，来源和许可见 [数据署名](data/JLPT-ATTRIBUTION.md)。
 
 ### 免责声明

@@ -1,3 +1,4 @@
+import { bookDisplay } from '@core/books/display';
 /**
  * 中央书列表。同一个组件承担两种模式：
  * - `grid`：封面缩略图（默认，Calibre 的封面墙）；
@@ -234,10 +235,10 @@ export function BookGrid(props: BookGridProps): JSX.Element {
             >
               <span className="col col-title">
                 {book.coverRel !== null && <RowThumb book={book} />}
-                <span className="cell-ellipsis">{book.title}</span>
-                {book.volume !== null && <span className="vol-chip">第 {book.volume} 卷</span>}
+                <span className="cell-ellipsis">{bookDisplay(book).title}</span>
+                {bookDisplay(book).volume !== null && <span className="vol-chip">第 {bookDisplay(book).volume} 卷</span>}
               </span>
-              <span className="col col-author cell-ellipsis">{book.author}</span>
+              <span className="col col-author cell-ellipsis">{bookDisplay(book).author || '—'}</span>
               <span className="col col-series cell-ellipsis">{book.series ?? '—'}</span>
               <span className="col col-format">
                 <span className={`format-chip format-${book.format}`}>{formatLabel(book)}</span>
@@ -266,10 +267,10 @@ export function BookGrid(props: BookGridProps): JSX.Element {
               <div className="book-tile-cover">
                 <Cover book={book} />
               </div>
-              <div className="book-tile-title cell-ellipsis">{book.title}</div>
+              <div className="book-tile-title" title={book.title}>{bookDisplay(book).title}</div>
               <div className="book-tile-sub cell-ellipsis">
-                {book.author || '未知作者'}
-                {book.volume !== null ? ` · 第 ${book.volume} 卷` : ''}
+                {bookDisplay(book).author || '作者未录入'}
+                {bookDisplay(book).volume !== null && <span className="vol-chip">第 {bookDisplay(book).volume} 卷</span>}
               </div>
             </div>
           ))}

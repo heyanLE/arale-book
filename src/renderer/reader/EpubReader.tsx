@@ -6,7 +6,7 @@
  *
  * 为什么是 iframe 而不是把 HTML 注进当前文档：章节里的相对资源、CSS、字体必须相对章节
  * URL 解析，而且书的 origin（`arale://<id>`）与外壳隔离 —— 即使 sanitize 漏了一个脚本，
- * 它也碰不到 Node/Electron（见 shared/types.ts 中 ChapterContent 的注释）。
+ * 它也碰不到 Node.js（见 shared/types.ts 中 ChapterContent 的注释）。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -24,6 +24,8 @@ import { WordCardPopup } from '../dict/WordCardPopup';
 import type { UseWordCardsResult } from '../dict/word-cards';
 import type { AnchorRect } from '../dict/WordCardPopup';
 import { ReaderEdgeTurns } from './ReaderEdgeTurns';
+import { isTauri } from '../lib/tauri-bridge';
+import { SelectionLookupButton, useSelectionAction } from './SelectionLookupButton';
 
 export interface EpubReaderProps {
   book: BookRecord;
@@ -85,6 +87,7 @@ export function EpubReader({
    * 只用来决定页面上那份持久高亮该不该继续留着，见 `holdSelection`。
    */
   const [heldSelectionPopupId, setHeldSelectionPopupId] = useState<string | null>(null);
+  const selectionAction = useSelectionAction<SelectionMessage>(spineIndex);
   /** 词卡弹窗 + 词卡夹（与漫画阅读器共用同一套状态中枢）。 */
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -130,8 +133,8 @@ export function EpubReader({
    * `popups`，所以这里只需要"卡片没了 → 清高亮"这一条规则。
    */
   const holdSelection =
-    heldSelectionPopupId !== null &&
-    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId);
+    selectionAction.pending !== null || (heldSelectionPopupId !== null &&
+    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId));
   const holdRef = useRef(false);
   useEffect(() => {
     // 只在**由真变假**时清（也就是卡片关掉那一刻）。写成 `if (!holdSelection)` 会在
@@ -323,8 +326,7 @@ export function EpubReader({
    * 与点击的唯一区别：卡片标题直接用选区原文，并且记下选区长度。查询链路完全一样，
    * 所以「卡片上的词」和「词典里的辞书形」可以不一样——那是正确行为，不是 bug。
    */
-  const handleSelection = useCallback(
-    async (message: SelectionMessage) => {
+  const openSelection = async (message: SelectionMessage, isCurrent: () => boolean) => {
       const iframeRect = iframeRef.current?.getBoundingClientRect();
       const anchor: AnchorRect = {
         x: (iframeRect?.left ?? 0) + message.rect.x,
@@ -333,14 +335,14 @@ export function EpubReader({
         height: message.rect.height,
       };
       const result = await call('查词', () => api.dict.lookup(message.context, message.offset));
-      if (!result) return;
+      if (!result || !isCurrent()) return;
       // 记下这次划词开出来的卡片：**卡片还开着**就是页面上高亮该留着的全部理由。
       setHeldSelectionPopupId(
         wordCards.openPopup({
           word: message.text,
           context: message.context,
           offset: message.offset,
-          length: Array.from(message.text).length,
+          length: message.text.length,
           anchor,
           result,
           source: { kind: 'epub', spineIndex: spineIndexRef.current },
@@ -354,9 +356,13 @@ export function EpubReader({
         end: absoluteStart + message.text.length,
         persistent: true,
       });
-    },
-    [post, wordCards],
-  );
+  };
+  const handleSelection = useCallback((message: SelectionMessage) => {
+    const rect = iframeRef.current?.getBoundingClientRect();
+    const point = message.pointer ?? { x: message.rect.x + message.rect.width, y: message.rect.y + message.rect.height };
+    selectionAction.show(message, { x: (rect?.left ?? 0) + point.x, y: (rect?.top ?? 0) + point.y });
+    post({ type: 'highlight', start: message.absoluteOffset, end: message.absoluteOffset + message.text.length, persistent: true });
+  }, [selectionAction.show, post]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -380,10 +386,14 @@ export function EpubReader({
           break;
         }
         case 'click':
+          selectionAction.dismiss();
           void handleClick(data);
           break;
         case 'selection':
           void handleSelection(data);
+          break;
+        case 'selectionClear':
+          selectionAction.dismiss();
           break;
         case 'position':
           offsetRef.current = data.absoluteOffset;
@@ -406,7 +416,7 @@ export function EpubReader({
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [handleClick, handleLink, post, scheduleSave, total]);
+  }, [handleClick, handleSelection, handleLink, post, scheduleSave, total, selectionAction.dismiss]);
 
   // 外观变化实时透传。桥接协议有 `appearance` 一条消息承载全部字段
   // （fontScale / fontFamily / lineHeight / margin / vertical），不要再拆成多条。
@@ -504,7 +514,7 @@ export function EpubReader({
             className="epub-frame"
             title={`章节 ${spineIndex + 1}`}
             src={chapter.url}
-            sandbox="allow-scripts allow-same-origin"
+            sandbox={isTauri ? 'allow-scripts' : 'allow-scripts allow-same-origin'}
             onLoad={() => closeUnpinned()}
           />
         )}
@@ -589,7 +599,7 @@ export function EpubReader({
         </button>
         {onOpenSegments && (
           <button type="button" className="btn btn-sm" onClick={onOpenSegments} title="看这本书的词表，或生成/重新生成分词">
-            分词
+            词汇与制卡
           </button>
         )}
         <span className="epub-chapter-label cell-ellipsis" title={spine[spineIndex]?.href ?? ''}>
@@ -635,6 +645,8 @@ export function EpubReader({
       </div>
 
       {/* 弹窗可同时开多张：pin 住的不会被后来者顶掉。 */}
+      {selectionAction.pending && <SelectionLookupButton point={selectionAction.pending.point} busy={selectionAction.busy}
+        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss} />}
       {wordCards.popups.map((popup, index) => (
         <WordCardPopup
           key={popup.id}
@@ -704,6 +716,11 @@ function isBridgeToHost(data: unknown): data is BridgeToHost {
  */
 function resolveSpineIndex(href: string, spine: SpineItem[], currentHref: string): number {
   if (href === '' || href.startsWith('#')) return -1;
+
+  // TOC paths are already decoded by the EPUB parser; check them before decoding raw chapter links.
+  const direct = href.split(/[?#]/)[0];
+  const directIndex = spine.findIndex(item => item.href === direct);
+  if (directIndex >= 0) return directIndex;
 
   let path = href.split('#')[0] ?? '';
   try {

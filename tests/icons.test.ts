@@ -78,9 +78,7 @@ test('工具栏用的是素材头像，而不是「あ」字占位块', () => {
   assert.match(toolbar, /<img[^>]*className="brand-mark"/, '品牌标记必须是 img（以前的「あ」是 span）');
 });
 
-test('打包配置指向的是这三张（mac icns / win ico / linux png）', () => {
-  const yml = fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8');
-  assert.match(yml, /mac:\r?\n[\s\S]*?icon: build\/icon\.icns/, 'mac.icon');
-  assert.match(yml, /win:\r?\n[\s\S]*?icon: build\/icon\.ico/, 'win.icon（多尺寸 ico，比现场转 png 清楚）');
-  assert.match(yml, /linux:\r?\n[\s\S]*?icon: build\/icon\.png/, 'linux.icon');
+test('Tauri uses the exported application icons', () => {
+ const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8'));
+ assert.deepEqual(config.bundle.icon, ['../build/icon.ico', '../build/icon.png']);
 });

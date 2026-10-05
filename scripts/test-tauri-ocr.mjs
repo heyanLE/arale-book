@@ -1,0 +1,23 @@
+/** Browser bundle must stay free of Node; verify empty/failure merge and reload coordination. */
+import { build } from 'esbuild';
+import { resolve } from 'node:path';
+import { strict as assert } from 'node:assert';
+const bundle=await build({entryPoints:['src/renderer/lib/tauri-ocr.ts'],bundle:true,write:false,format:'esm',platform:'browser',target:'chrome130',alias:{'@core':resolve('src/core'),'@shared':resolve('src/shared')}});
+const {convertOcr,TauriOcr}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+const page=(url)=>({url,width:100,height:200});
+const oldBlock={box:[1,2,3,4],vertical:true,font_size:2,lines:['旧文字'],single_line:true};
+const input={token:'one',provider:'arale_onnx_v1',book:{pages:[page('0.png'),page('1.png'),page('2.png')],direction:'rtl'},old:{pages:[{...page('1.png'),blocks:[oldBlock]},{...page('2.png'),blocks:[oldBlock]}]},raw:[JSON.stringify({kind:'page',file:'0.png',ok:true,lines:[{text:'猫',box:[10,20,30,100],confidence:1,vertical:true}]}),JSON.stringify({kind:'page',file:'1.png',ok:false,error:'failed'}),null]};
+const output=convertOcr(input);
+assert.equal(output.freshPages,1);assert.equal(output.freshBlocks,1);
+assert.equal(output.layer.pages[1].blocks[0].lines[0],'旧文字');assert.equal(output.layer.pages[2].blocks[0].lines[0],'旧文字');
+assert.deepEqual(output.layer.ocr,{engine:'arale_onnx_v1',engine_signature:'arale_onnx_v1:v2',schema_version:1});
+console.log('ok browser OCR merge keeps old failed/unrecognized pages and versioned metadata');
+let commits=0;let release;
+const worker=new TauriOcr(async(channel,...args)=>{if(channel==='ocr:pending')return input;assert.equal(channel,'ocr:commit');commits++;assert.equal(args[0],'one');assert.deepEqual(args[1],output);await new Promise(resolve=>{release=resolve;});});
+const a=worker.finalize(),b=worker.finalize();await new Promise(resolve=>setTimeout(resolve,0));assert.equal(commits,1);release();await Promise.all([a,b]);
+console.log('ok event and reload recovery commit the same pending token once');
+let captured;
+await new TauriOcr(async(channel,...args)=>channel==='ocr:pending'?{...input,old:[]}:(captured=args[1])).finalize();
+assert.match(captured.error,/顶层必须是 JSON 对象/);
+console.log('ok malformed prior layer reports conversion failure without overwriting it');
+console.log('Tauri OCR adapter: 3/3 passed');

@@ -19,7 +19,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' arale: data:; font-src 'self' data:; connect-src 'self' arale:; frame-src arale:; media-src arale: data:; base-uri 'none'; form-action 'none'; object-src 'none'"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' arale: http://arale.localhost https://arale.localhost data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost arale: http://arale.localhost https://arale.localhost; frame-src arale: http://arale.localhost https://arale.localhost arale-book: http://arale-book.localhost https://arale-book.localhost; media-src arale: http://arale.localhost https://arale.localhost data:; base-uri 'none'; form-action 'none'; object-src 'none'"
     />
     <title>あられブック (ARaLeBook)</title>
   </head>

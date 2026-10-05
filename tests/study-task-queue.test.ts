@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { BookRecord, StudyList } from '../src/shared/types';
-import type { StudyService } from '../src/main/study/service';
-import { StudyTaskQueue } from '../src/main/study/task-queue';
+import type { StudyService } from './support/study/service';
+import { StudyTaskQueue } from '../src/core/study/task-queue';
 
 function studyList(bookId: string): StudyList {
   return {

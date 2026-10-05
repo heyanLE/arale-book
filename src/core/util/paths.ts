@@ -8,10 +8,8 @@
 import * as path from 'node:path';
 
 /** 把任意外来路径串归一成「相对、正斜杠、无前导斜杠」的形式。 */
-export function normalizeRel(raw: string): string {
-  const forward = raw.replace(/\\/g, '/');
-  return forward.startsWith('/') ? forward.slice(1) : forward;
-}
+export { normalizeRel } from './relative-path';
+import { normalizeRel } from './relative-path';
 
 /**
  * 去掉 `rel` 里的路径穿越段（`.`、`..`）与前导 `/`，得到安全的相对路径段。

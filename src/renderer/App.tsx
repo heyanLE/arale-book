@@ -54,6 +54,7 @@ export function App(): JSX.Element {
   useApplyTheme(settings.theme);
 
   const [view, setView] = useState<ViewName>('library');
+  const [settingsReturnView, setSettingsReturnView] = useState<Exclude<ViewName, 'settings'>>('library');
   const [reloadToken, setReloadToken] = useState(0);
   const [query, setQuery] = useState<LibraryQuery>(() => ({ sort: settings.sort }));
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -61,6 +62,7 @@ export function App(): JSX.Element {
   const [banner, setBanner] = useState<string | null>(null);
   const [status, setStatus] = useState('就绪');
   const [busy, setBusy] = useState(false);
+  const [searchRequest, setSearchRequest] = useState(0);
   const [shown, setShown] = useState({ shown: 0, total: 0 });
 
   /**
@@ -105,12 +107,16 @@ export function App(): JSX.Element {
   /** 主进程侧默认值（新书阅读方向）。 */
   const [appDefaults, setAppDefaults] = useState<AppDefaults>(DEFAULT_APP_DEFAULTS);
 
-  /** 沉浸只在阅读器生效；Windows 同步进原生全屏以隐藏系统标题栏。 */
+  /** 沉浸、系统栏和批注工具独立；串行窗口操作避免快速点击时乱序。 */
   const immersiveActive = settings.autoHideChrome && view === 'reader';
+  const [systemBarsVisible, setSystemBarsVisible] = useState(false);
+  const immersiveOperations = useRef(Promise.resolve<unknown>(undefined));
 
   useEffect(() => {
-    run('切换沉浸窗口', () => api.window.setImmersive(immersiveActive));
-  }, [immersiveActive]);
+    immersiveOperations.current = immersiveOperations.current.then(() =>
+      call('切换沉浸窗口', () => api.window.setImmersive(immersiveActive, systemBarsVisible)));
+    if (!immersiveActive) setSystemBarsVisible(false);
+  }, [immersiveActive, systemBarsVisible]);
 
   /**
    * 分词状态。
@@ -459,7 +465,38 @@ export function App(): JSX.Element {
     bumpLibrary();
   }, [bumpLibrary]);
 
-  const openSettings = useCallback(() => setView('settings'), []);
+  const openSettings = useCallback(() => {
+    if (view !== 'settings') setSettingsReturnView(view);
+    setView('settings');
+  }, [view]);
+  const closeSettings = useCallback(async () => {
+    // Reader unmount flushes its position; reload that position rather than the old opening snapshot.
+    if (settingsReturnView === 'reader' && open) {
+      const refreshed = await call('恢复阅读位置', () => api.library.open(open.book.id));
+      if (!refreshed) return;
+      setOpen(refreshed);
+    }
+    setView(settingsReturnView);
+  }, [settingsReturnView, open]);
+
+  useIpcEvent('shell:openFiles', (payload) => {
+    if (!payload || !Array.isArray(payload.paths) || payload.paths.length === 0) return;
+    const paths = payload.paths.filter((path): path is string => typeof path === 'string');
+    if (!paths.length) return;
+    setStatus(`正在导入 ${paths.length} 个路径…`);
+    void call('导入', () => api.library.importPaths(paths)).then(outcomes => {
+      if (!outcomes) return;
+      setStatus(summarizeImportOutcome(outcomes));
+      if (outcomes.some(outcome => outcome.ok)) bumpLibrary();
+    });
+  });
+
+  useEffect(() => {
+    if (searchRequest > 0 && view === 'library') {
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    }
+  }, [searchRequest, view]);
 
   const cycleTheme = useCallback(() => {
     const next = settings.theme === 'system' ? 'light' : settings.theme === 'light' ? 'dark' : 'system';
@@ -486,8 +523,15 @@ export function App(): JSX.Element {
       case 'settings':
         openSettings();
         break;
+      case 'searchLibrary':
+        setView('library');
+        setSearchRequest(request => request + 1);
+        break;
       case 'toggleSidebar':
         updateSettings({ showSidebar: !settings.showSidebar });
+        break;
+      case 'exitImmersive':
+        updateSettings({ autoHideChrome: false });
         break;
       case 'nextPage':
       case 'prevPage':
@@ -511,6 +555,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (mod && key === 'f') {
@@ -525,7 +570,7 @@ export function App(): JSX.Element {
       } else if (event.key === 'Escape') {
         if (view === 'settings') {
           event.preventDefault();
-          setView('library');
+          void closeSettings();
         } else if (view === 'reader') {
           // 词典弹窗在**捕获阶段**处理 Esc 并 stopPropagation，所以走到这里说明
           // 没有弹窗——退到书库才是此时用户的意思。
@@ -541,7 +586,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [view, openSettings, leaveReader, settings.showDetail, selectedIds.length]);
+  }, [view, openSettings, closeSettings, leaveReader, settings.showDetail, selectedIds.length]);
 
   // ------------------------------------------------------------------
 
@@ -606,20 +651,6 @@ export function App(): JSX.Element {
         onLeaveReader={leaveReader}
       />
 
-      {immersiveActive && (
-        <div className="immersive-exit-zone">
-          <button
-            type="button"
-            className="btn immersive-exit"
-            onClick={() => updateSettings({ autoHideChrome: false })}
-            title="退出沉浸模式"
-            data-testid="immersive-exit"
-          >
-            退出沉浸
-          </button>
-        </div>
-      )}
-
       <div className="app-main">
         {view === 'library' && (
           <LibraryView
@@ -641,6 +672,8 @@ export function App(): JSX.Element {
           (open ? (
             <ReaderView
               open={open}
+              systemBarsVisible={systemBarsVisible}
+              onSystemBarsChange={setSystemBarsVisible}
               onBack={leaveReader}
               onStatus={setStatus}
               ocrProgress={ocrProgress[open.book.id] ?? null}
@@ -660,7 +693,8 @@ export function App(): JSX.Element {
         {view === 'settings' && (
           <SettingsPanel
             info={info.data}
-            onClose={() => setView('library')}
+            onClose={() => void closeSettings()}
+            returnLabel={settingsReturnView === 'reader' ? '返回阅读' : settingsReturnView === 'segments' ? '返回词汇与制卡' : '返回书库'}
             onStatus={setStatus}
             ocrCapability={ocrCapability}
             onRefreshOcrCapability={() => void loadOcrCapability()}
@@ -696,7 +730,8 @@ export function App(): JSX.Element {
           />
         )}
 
-        {view === 'segments' && segmentBookId !== null && (
+        {(view === 'segments' || (view === 'settings' && settingsReturnView === 'segments')) && segmentBookId !== null && (
+          <div style={{ display: view === 'settings' ? 'none' : 'flex', flex: 1, minWidth: 0, minHeight: 0 }}>
           <SegmentView
             bookId={segmentBookId}
             bookTitle={segmentBookTitle}
@@ -716,6 +751,7 @@ export function App(): JSX.Element {
             onClear={() => void clearSegment()}
             onReload={() => void reloadSegments(segmentBookId)}
           />
+          </div>
         )}
       </div>
 
@@ -737,7 +773,7 @@ export function App(): JSX.Element {
             onOpenStudy={(bookId, title) => void openSegments(bookId, title, 'study', true)}
           />
         }
-        statusMessage={status}
+        statusMessage={view === 'settings' ? '设置' : view === 'library' && status.startsWith('第 ') ? '就绪' : status}
         busy={busy || info.loading}
         theme={settings.theme}
         readerLabel={view === 'reader' ? (open?.book.title ?? null) : null}

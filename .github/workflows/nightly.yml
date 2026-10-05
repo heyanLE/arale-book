@@ -1,0 +1,133 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:17 Asia/Hong_Kong. GitHub scheduling may be delayed.
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aralebook-nightly
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # GitHub exposes draft releases only to callers with push access.
+    # This job only reads them, so interrupted uploads can resume the same snapshot.
+    permissions:
+      contents: write
+    outputs:
+      should_build: ${{ steps.plan.outputs.should_build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      built_at: ${{ steps.plan.outputs.built_at }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Compare source with last published nightly
+        id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { prepareNightly } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/nightly.mjs`);
+            const sha = require('node:child_process').execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+            const plan = await prepareNightly({github, ...context.repo, sha});
+            core.info(plan.reason);
+            core.setOutput('should_build', String(plan.shouldBuild));
+            if (plan.shouldBuild) {
+              core.setOutput('sha', plan.sha);
+              core.setOutput('version', plan.version);
+              core.setOutput('built_at', plan.builtAt);
+            }
+            await core.summary.addHeading('Nightly').addRaw(plan.reason).write();
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: windows-x64
+            triple: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: macos-arm64
+            triple: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: '1.96.0'
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      ARALE_BUILD_CHANNEL: nightly
+      ARALE_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      ARALE_BUILD_COMMIT: ${{ needs.prepare.outputs.sha }}
+      ARALE_BUILD_TIME: ${{ needs.prepare.outputs.built_at }}
+      ARALE_BUILD_TARGET: ${{ matrix.triple }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - name: Verify runner architecture
+        env:
+          NIGHTLY_TARGET: ${{ matrix.target }}
+        run: node -e "const expected=process.env.NIGHTLY_TARGET==='macos-arm64'?'arm64':'x64'; if(process.arch!==expected) throw new Error('Wrong runner architecture '+process.arch);"
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.96.0 --profile minimal --target ${{ matrix.triple }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: nightly-${{ matrix.target }}
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run tauri:test
+      - run: npm run tauri:pack
+      - name: Validate and collect installer
+        run: node scripts/nightly.mjs collect ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: .tmp/nightly/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: .tmp/nightly/publish
+      - name: Publish only after both installers are uploaded
+        uses: actions/github-script@v7
+        env:
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.version }}
+          NIGHTLY_SHA: ${{ needs.prepare.outputs.sha }}
+          NIGHTLY_BUILT_AT: ${{ needs.prepare.outputs.built_at }}
+        with:
+          script: |
+            const { publishNightly } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/nightly.mjs`);
+            const release = await publishNightly({github, ...context.repo,
+              directory: `${process.env.GITHUB_WORKSPACE}/.tmp/nightly/publish`,
+              version: process.env.NIGHTLY_VERSION, sha: process.env.NIGHTLY_SHA, builtAt: process.env.NIGHTLY_BUILT_AT});
+            await core.summary.addHeading('Nightly published').addLink(release.name, release.html_url).write();

@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { TranslationService } from '../src/main/translation/service';
+import { TranslationService } from './support/translation/service';
 import type { TranslationProfile, TranslationProviderId } from '../src/shared/types';
 import { BUILTIN_BING_PROFILE_ID } from '../src/shared/types';
 

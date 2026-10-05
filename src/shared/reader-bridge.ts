@@ -17,6 +17,7 @@ export const FUSHI_BRIDGE_TAG = 'arale-bridge-v1';
 
 /** iframe → 父窗口。 */
 export type BridgeToHost =
+  | { tag: typeof FUSHI_BRIDGE_TAG; type: 'selectionClear' }
   | {
       tag: typeof FUSHI_BRIDGE_TAG;
       type: 'ready';
@@ -40,6 +41,8 @@ export type BridgeToHost =
   | {
       tag: typeof FUSHI_BRIDGE_TAG;
       type: 'selection';
+      /** 松手位置，相对 iframe 视口；旧消息缺失时回退到选区。 */
+      pointer?: { x: number; y: number };
       /**
        * 用户**明确框住**的原文。上层必须按它精确查词，不许再做最长匹配去猜——
        * 这是划词与点击的全部区别所在。
@@ -231,7 +234,15 @@ export const READER_BRIDGE_JS = String.raw`
   // 另外要跟 click 去重：**拖选结束也会派发 click**（浏览器认为整段拖选是一次点击），
   // 所以先记下是不是刚汇报过选区，是就让紧接着的那个 click 不再重复汇报。
   var lastSelectionAt = 0;
-  document.addEventListener('mouseup', function () {
+  document.addEventListener('mousedown', function () { post({ type: 'selectionClear' }); }, true);
+  document.addEventListener('scroll', function () { post({ type: 'selectionClear' }); }, true);
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    var selection = window.getSelection();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+    post({ type: 'selectionClear' });
+  }, true);
+  document.addEventListener('mouseup', function (event) {
     var selection = window.getSelection();
     if (!selection || selection.isCollapsed) return;
     var text = String(selection.toString() || '').trim();
@@ -250,6 +261,7 @@ export const READER_BRIDGE_JS = String.raw`
     lastSelectionAt = Date.now();
     post({
       type: 'selection',
+      pointer: { x: event.clientX, y: event.clientY },
       text: text,
       context: context,
       offset: offset,

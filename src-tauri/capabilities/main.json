@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Only the bundled application shell can invoke the backend and subscribe to events; book frames have no remote capability.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-arale-invoke", "allow-arale-notify", "allow-arale-smoke-fixture", "allow-arale-smoke-finish"]
+}

@@ -6,9 +6,9 @@ import * as path from 'node:path';
 
 import type { BookRecord, StudyCandidate, StudyList } from '../src/shared/types';
 import { defaultDirectOptions, directFilterStages, normalizeDirectOptions, studyPriorityScore } from '../src/core/study/harness';
-import { StudyService } from '../src/main/study/service';
-import { wordfreqSource, zipfForCandidate } from '../src/main/study/wordfreq';
-import { setUserDataRootForTesting } from '../src/main/paths';
+import { StudyService } from './support/study/service';
+import { wordfreqSource, zipfForCandidate } from './support/study/wordfreq';
+import { setUserDataRootForTesting } from './support/paths';
 
 function item(id: string, overrides: Partial<StudyCandidate> = {}): StudyCandidate {
   return {

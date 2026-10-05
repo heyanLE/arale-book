@@ -11,9 +11,21 @@
    1. 设计令牌
    -------------------------------------------------------------------------- */
 
+.btn.selection-lookup-button {
+  position: fixed;
+  z-index: 1100;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 7px;
+  background: var(--bg-elevated);
+  box-shadow: 0 2px 8px #0003;
+}
+
 :root {
-  --ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN',
-    'Noto Sans CJK SC', 'Noto Sans JP', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --ui-font: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC',
+    'Noto Sans CJK SC', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
   --mono-font: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* 表面 */
@@ -32,7 +44,7 @@
   /* 文字 */
   --text: #1b1b1b;
   --text-dim: #575757;
-  --text-faint: #8b8b8b;
+  --text-faint: #6b6b6b;
   --text-inverse: #ffffff;
 
   /* 线条 */
@@ -55,12 +67,12 @@
   --overlay: rgba(255, 255, 255, 0.74);
 
   /* 尺寸 */
-  --row-h: 24px;
-  --row-h-list: 24px;
-  --toolbar-h: 34px;
+  --row-h: 28px;
+  --row-h-list: 30px;
+  --toolbar-h: 40px;
   --statusbar-h: 22px;
-  --ui-size: 12px;
-  --ui-size-sm: 11px;
+  --ui-size: 13px;
+  --ui-size-sm: 12px;
   --radius: 2px;
 
   --shadow-popup: 0 6px 18px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.18);
@@ -1245,7 +1257,7 @@ button[aria-disabled='true'] {
 }
 
 /* --------------------------------------------------------------------------
-   12. 右键菜单（自绘，不用 Electron 原生菜单）
+   12. 右键菜单（自绘，不用 原生菜单）
    -------------------------------------------------------------------------- */
 
 .ctxmenu {
@@ -1351,6 +1363,19 @@ button[aria-disabled='true'] {
   min-height: 0;
   display: flex;
 }
+
+.reader-sidebar { display: flex; flex-direction: column; flex: 0 0 auto; width: min(340px, 40vw); min-height: 0; background: var(--bg-panel); border-left: 1px solid var(--border); }
+.reader-sidebar-head { display: flex; align-items: center; flex: none; gap: 6px; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.reader-sidebar-tabs { display: flex; flex: 1; gap: 4px; }
+.reader-sidebar-tabs button { padding: 6px 9px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-dim); cursor: pointer; }
+.reader-sidebar-tabs button[aria-selected="true"] { color: var(--accent); background: var(--bg-hover); border-color: var(--border); }
+.reader-sidebar-content { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; }
+.reader-sidebar .wordcard-panel.is-embedded { flex: 1; width: 100%; border-left: 0; }
+.reader-sidebar .annotation-manager { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 0; }
+.reader-sidebar .annotation-layer-list { flex: 1; max-height: none; }
+.reader-sidebar .annotation-layer-row { padding: 8px; gap: 6px; }
+.reader-sidebar .annotation-layer-row input { flex: 1; width: 130px; }
+.reader-sidebar .annotation-layer-row > span { width: 100%; color: var(--text-dim); }
 
 .reader-overlay {
   position: absolute;
@@ -1616,8 +1641,9 @@ button[aria-disabled='true'] {
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 28px;
-  padding: 0 6px;
+  min-height: 30px;
+  padding: 3px 6px;
+  flex-wrap: wrap;
   background: var(--bg-panel);
   border-top: 1px solid var(--border);
   flex: none;
@@ -1640,11 +1666,47 @@ button[aria-disabled='true'] {
   font-size: 10px;
 }
 
+/* ---- 用户批注：原图上方，OCR 命中层下方 ---- */
+.comic-annotations { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; overflow: hidden; pointer-events: none; }
+.comic-annotations.is-editing { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.comic-annotations.is-placing-text { cursor: text; }
+.comic-annotations.is-editing .annotation-text-hit { pointer-events: auto; cursor: move; }
+.comic-annotations [data-object-id] { pointer-events: none; }
+.comic-annotations.is-editing .annotation-text-hit,
+.comic-annotations.is-editing .annotation-stroke-hit { pointer-events: auto; cursor: move; }
+.comic-annotations.is-panning, .comic-annotations.is-panning .annotation-text-hit { pointer-events: none; }
+.comic-page-slot.is-annotating .comic-text-block { pointer-events: none; }
+.annotation-text { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.25; user-select: none; }
+.annotation-selection { fill: none; stroke: #1976d2; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.annotation-resize { fill: #1976d2; cursor: nwse-resize; }
+.annotation-text-editor { display: block; width: 100%; height: 100%; box-sizing: border-box; border: 2px solid #1976d2; border-radius: 0; padding: 0; margin: 0; resize: none; line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto; }
+.annotation-controls { flex: none; background: var(--bg-panel); border-top: 1px solid var(--border); font-size: 11px; }
+.annotation-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 5px 8px; }
+.annotation-toolbar label { display: inline-flex; gap: 4px; align-items: center; }
+.annotation-quick-tools { display: inline-flex; gap: 4px; padding-right: 7px; border-right: 1px solid var(--border); }
+.annotation-quick-tools .btn, .immersive-reader-actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.reader-tool-icon { width: 16px; height: 16px; flex: none; }
+.annotation-toolbar input[type="number"] { width: 54px; }
+.annotation-toolbar input[type="color"] { width: 28px; height: 23px; padding: 1px; }
+.annotation-save { margin-left: auto; color: var(--text-dim); overflow-wrap: anywhere; }
+.annotation-save.is-error, .annotation-stale { color: var(--danger); }
+.annotation-stale { padding: 4px 8px; }
+.annotation-manager { border-top: 1px solid var(--border); }
+.annotation-layer-list { max-height: 180px; overflow: auto; }
+.annotation-layer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 8px; border-top: 1px solid var(--border); }
+.annotation-layer-row.is-active { box-shadow: inset 3px 0 var(--accent); }
+.annotation-layer-row input { width: 160px; min-width: 70px; }
+.annotation-context-menu { position: fixed; z-index: 450; width: 204px; padding: 5px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 16px #0005; }
+.annotation-context-menu button { display: block; width: 100%; text-align: left; padding: 8px; border: 0; background: transparent; color: var(--text); cursor: pointer; }
+.annotation-context-menu button:hover { background: var(--bg-hover); }
+.annotation-context-menu button:disabled { opacity: .5; cursor: default; }
+
 /* ---- OCR 文字层 ---- */
 /* 父层 pointer-events:none + 子块 auto：块与块之间的缝不会吃掉图片上的操作。 */
 .comic-text-layer {
   position: absolute;
   inset: 0;
+  z-index: 2;
   pointer-events: none;
   overflow: hidden;
 }
@@ -1809,6 +1871,7 @@ button[aria-disabled='true'] {
   margin-top: 4px;
   line-height: 1.55;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .dict-glossary ul,
@@ -1876,8 +1939,9 @@ button[aria-disabled='true'] {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  padding: 0 8px;
+  min-height: 34px;
+  padding: 5px 8px;
+  flex-wrap: wrap;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex: none;
@@ -2280,7 +2344,7 @@ button[aria-disabled='true'] {
 .segment-tabs { display: flex; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--border-soft); background: var(--bg-panel); }
 .segment-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); padding: 9px 12px; cursor: pointer; }
 .segment-tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-.study-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; font-size: 12px; }
+.study-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; font-size: 13px; }
 .study-head, .study-filters { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
 .study-head { justify-content: space-between; }
 .study-head small { display: block; margin-top: 3px; color: var(--text-faint); }
@@ -2349,7 +2413,7 @@ button[aria-disabled='true'] {
 .study-workflow-progress { position: sticky; bottom: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--border-soft); background: var(--bg-panel); line-height: 1.5; }
 .study-card-draft { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: 4px; }
 .study-card-draft h4 { margin: 0 0 8px; font-size: 14px; }
-.study-card-draft fieldset { margin: 0; padding: 0; border: 0; }
+.study-card-draft fieldset { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; }
 .study-card-draft h4 span, .study-card-draft p { color: var(--text-dim); }
 .study-card-draft label { display: flex; flex-direction: column; gap: 4px; margin: 9px 0; }
 .study-card-draft input, .study-card-draft textarea { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-input); color: var(--text); }
@@ -2894,15 +2958,11 @@ button[aria-disabled='true'] {
   color: var(--text-inverse);
 }
 
-/* 多部词典命中时的切换标签。 */
-.wordcard-dicts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding: 5px 0 6px;
-  border-bottom: 1px solid var(--border-soft);
-  margin-bottom: 4px;
-}
+/* 默认一部词典，展开后按来源展示全部释义。 */
+.wordcard-dictionary-group + .wordcard-dictionary-group { border-top: 1px solid var(--border-soft); margin-top: 8px; padding-top: 8px; }
+.wordcard-dictionary-heading { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.wordcard-dictionary-heading strong { flex: 1; overflow-wrap: anywhere; font-size: var(--ui-size-sm); }
+.wordcard-dictionaries-more { margin-top: 8px; }
 
 .wordcard-dict-tab {
   max-width: 170px;
@@ -2921,7 +2981,7 @@ button[aria-disabled='true'] {
   background: var(--bg-hover);
 }
 
-.wordcard-dict-tab.is-active {
+.wordcard-dict-tab[aria-pressed='true'] {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-inverse);
@@ -2953,10 +3013,10 @@ button[aria-disabled='true'] {
   font-size: var(--ui-size-sm);
 }
 
-/* 模型输出按纯文本渲染（不 innerHTML），所以换行要靠 pre-wrap 保住。 */
+/* Model output is sanitized Markdown; plain newlines become line breaks. */
 .wordcard-llm-text {
   margin-top: 4px;
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
   line-height: 1.6;
   /* **不**各自滚动：一栏一个小滚动条会让人以为「到底了」，而下面其实还有别的分析。
@@ -3200,7 +3260,7 @@ button[aria-disabled='true'] {
 }
 
 /* --------------------------------------------------------------------------
-   6.4 沉浸模式：只保留阅读内容与右上角退出按钮
+   6.4 沉浸模式：阅读内容、可展开侧栏与右上角快捷工具
    -------------------------------------------------------------------------- */
 
 .app.is-immersive .app-main {
@@ -3211,6 +3271,7 @@ button[aria-disabled='true'] {
 .app.is-immersive .statusbar,
 .app.is-immersive .reader-header,
 .app.is-immersive .comic-footer,
+.app.is-immersive .annotation-controls,
 .app.is-immersive .epub-footer {
   display: none;
 }
@@ -3220,15 +3281,19 @@ button[aria-disabled='true'] {
   top: 0;
   right: 0;
   z-index: 80;
-  width: 120px;
-  height: 76px;
+  max-width: 100vw;
+  min-height: 64px;
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
   padding: 10px;
 }
 
-.immersive-exit {
+.immersive-reader-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
+.immersive-reader-actions .annotation-quick-tools { border-color: rgba(255, 255, 255, 0.28); }
+.app.is-immersive .reader-sidebar { padding-top: 48px; }
+
+.immersive-reader-actions .btn {
   height: 28px;
   padding: 0 10px;
   border-color: rgba(255, 255, 255, 0.28);
@@ -3240,14 +3305,22 @@ button[aria-disabled='true'] {
   transition: opacity 120ms ease, transform 120ms ease;
 }
 
-.immersive-exit-zone:hover .immersive-exit,
-.immersive-exit:focus-visible {
+.immersive-reader-actions .btn-primary { background: var(--accent); }
+.immersive-reader-actions .btn.immersive-icon-button { width: 32px; height: 32px; padding: 0; }
+.immersive-reader-actions .btn:hover:not(:disabled),
+.immersive-reader-actions .btn:focus-visible { background: #424b57; color: #fff; border-color: #b9c6d5; }
+.immersive-reader-actions .btn-primary:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: #fff; }
+.immersive-reader-actions .btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.immersive-exit-zone:hover .btn,
+.immersive-exit-zone:focus-within .btn,
+.immersive-exit-zone.is-sidebar-open .btn,
+.immersive-exit-zone:has(.annotation-quick-tools[data-editing="true"]) .btn {
   opacity: 1;
   transform: translateY(0);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .immersive-exit {
+  .immersive-reader-actions .btn {
     transition: none;
   }
 }
@@ -3273,3 +3346,69 @@ button[aria-disabled='true'] {
 .reader-header .btn + .btn {
   margin-left: 4px;
 }
+
+/* Use the same compact bordered controls throughout the desktop shell. */
+.tool-btn, .seg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover { background: var(--danger-soft); }
+.book-tile-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; min-height: 2.7em; line-height: 1.35; }
+.book-tile-sub { display: flex; align-items: center; gap: 5px; white-space: normal; }
+.book-tile-sub .vol-chip, .col-title .vol-chip { flex-shrink: 0; white-space: nowrap; }
+.detail-primary-actions { padding: 10px 12px; display: grid; gap: 6px; border-bottom: 1px solid var(--border-soft); }
+.detail-metadata summary, .detail-more summary { cursor: pointer; padding: 8px 0; color: var(--text-dim); }
+.detail-cover { max-height: 180px; object-fit: contain; }
+.settings-navigation { display: flex; flex: 1 1 640px; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.settings-navigation input { min-width: 110px; width: 130px; height: 24px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); padding: 0 5px; }
+.settings-card, [id^='settings-'] { scroll-margin-top: 8px; }
+.settings-save-hint { margin: 10px 0; color: var(--text-dim); }
+.wordcard-panel-filters { display: grid; gap: 7px; padding: 10px; border-bottom: 1px solid var(--border-soft); }
+.wordcard-panel-filters input, .wordcard-panel-filters select { width: 100%; padding: 6px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); }
+.wordcard-item-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.manual-ai-instructions { padding-left: 20px; line-height: 1.7; }
+.manual-ai-batches { display: grid; gap: 6px; max-height: 270px; overflow: auto; margin: 12px 0; }
+.manual-ai-batches > div { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; padding: 8px; border: 1px solid var(--border-soft); }
+.manual-ai-batches > .is-active { border-color: var(--accent); background: var(--bg-active); }
+.manual-ai-batches span { color: var(--text-dim); font-size: 12px; }
+.annotation-layer-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; }
+.annotation-layer-row > input { flex: 1 1 150px; min-width: 0; }
+.annotation-layer-row > span, .annotation-page-previews, .annotation-layer-more { flex: 1 1 100%; }
+.annotation-page-previews { display: flex; gap: 6px; flex-wrap: wrap; }
+.annotation-page-preview { width: 100px; display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid var(--border-soft); background: var(--bg-content); color: var(--text); text-align: left; cursor: pointer; }
+.annotation-page-preview.is-current { border-color: var(--accent); }
+.annotation-page-preview svg { width: 88px; height: 56px; background: #f8f8f4; border: 1px solid #ddd; }
+.annotation-text-preview { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; line-height: 1.4; }
+.annotation-layer-more summary { cursor: pointer; color: var(--text-dim); padding: 4px 0; }
+.annotation-layer-more .btn { margin: 4px 5px 0 0; }
+.study-card-draft .has-issue { border-left: 3px solid var(--warn); padding-left: 8px; }
+.study-card-draft .study-issue { color: var(--text); background: var(--bg-panel); border-left: 3px solid var(--warn); padding: 7px; }
+.study-detail { font-size: 14px; line-height: 1.5; }
+.study-card-evidence { padding: 10px; background: var(--bg-panel); border: 1px solid var(--border-soft); }
+.study-card-evidence p { max-height: 190px; overflow: auto; }
+.study-view-tabs button { min-height: 30px; white-space: nowrap; }
+.study-filters span { margin-left: 0; color: var(--text-dim); }
+.study-filters > small { flex-basis: 100%; }
+.study-token-details { line-height: 1.6; margin: 10px 0; }
+@media (max-width: 1150px) { .study-content { grid-template-columns: minmax(180px, 37%) minmax(280px, 63%); } .reader-header-sub { display: none; } .toolbar-title { max-width: 180px; } }
+
+.study-card-draft .has-issue { order: -1; }
+
+.comic-footer .btn, .comic-footer .select, .comic-footer .seg-btn { height: 24px; min-height: 24px; }
+.markdown-body { overflow-wrap: anywhere; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: 6px 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { margin: 10px 0 5px; font-weight: 600; line-height: 1.4; }
+.markdown-body h1 { font-size: 1.35em; }
+.markdown-body h2 { font-size: 1.2em; }
+.markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1.08em; }
+.markdown-body ul, .markdown-body ol { margin: 6px 0; padding-left: 1.6em; }
+.markdown-body li > p { margin: 2px 0; }
+.markdown-body blockquote { margin: 8px 0; padding-left: 10px; border-left: 3px solid var(--border-strong); color: var(--text-dim); }
+.markdown-body code { font-family: var(--mono-font); font-size: .92em; background: var(--bg-code); padding: 1px 3px; }
+.markdown-body pre { margin: 8px 0; padding: 8px; background: var(--bg-code); border: 1px solid var(--border-soft); overflow-x: auto; white-space: pre; }
+.markdown-body pre code { padding: 0; background: none; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 8px 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 4px 7px; }
+.markdown-body th { background: var(--bg-panel); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.markdown-link { color: var(--accent); text-decoration: underline; }

@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type * as React from 'react';
 import type {
   BookRecord,
@@ -44,11 +45,16 @@ import {
 import { api, assetUrl, call, run, useShellCommand } from '../lib/api';
 import { useBookSettings } from '../lib/reader-settings';
 import { WordCardPopup } from '../dict/WordCardPopup';
+import { SelectionLookupButton, useSelectionAction } from './SelectionLookupButton';
 import type { UseWordCardsResult } from '../dict/word-cards';
 import { ComicTextLayer, type ComicTextLookup, type ComicTextSelection } from './ComicTextLayer';
 import { ReaderEdgeTurns } from './ReaderEdgeTurns';
 import { ocrControlState } from './ocr-controls';
 import { capturePointer } from '../lib/pointer';
+import { imagePoint } from '@core/comic/annotations';
+import { useAnnotations } from './use-annotations';
+import { ComicAnnotationCanvas, type NewAnnotationText } from './ComicAnnotationCanvas';
+import { ComicAnnotationControls, ComicAnnotationManager, ComicAnnotationQuickTools } from './ComicAnnotationControls';
 
 export interface ComicReaderProps {
   book: BookRecord;
@@ -72,6 +78,9 @@ export interface ComicReaderProps {
    * 词卡夹的开关在阅读器顶栏上、而顶栏属于 ReaderView；状态放两处必然不同步。
    */
   wordCards: UseWordCardsResult;
+  annotationManagerHost: HTMLDivElement | null;
+  immersiveToolsHost: HTMLDivElement | null;
+  onOpenAnnotationManager: () => void;
 }
 
 /** 翻页滑动动画时长（ms）。够短，连按方向键不会排出一条动画队列。 */
@@ -95,6 +104,9 @@ export function ComicReader({
   ocrQueue = null,
   onOpenSegments,
   wordCards,
+  annotationManagerHost,
+  immersiveToolsHost,
+  onOpenAnnotationManager,
 }: ComicReaderProps): JSX.Element {
   // 设置页里的是**默认值**；阅读器里改的写进本书的覆盖值，不影响下一本新书。
   const { settings, overrides: bookSettings, patch: patchBook } = useBookSettings(book.id);
@@ -175,6 +187,22 @@ export function ComicReader({
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [textVersion, setTextVersion] = useState(0);
   const [textLayerOn, setTextLayerOn] = useState(true);
+  const annotations = useAnnotations(book.id);
+  const [annotationPage, setAnnotationPage] = useState(pageIndex);
+  const [annotationMenu, setAnnotationMenu] = useState<{ x: number; y: number; index: number; point: { x: number; y: number } } | null>(null);
+  const [newAnnotationText, setNewAnnotationText] = useState<NewAnnotationText | null>(null);
+  useEffect(() => {
+    annotations.setEditing(false); annotations.setSelectedId(null);
+    setAnnotationPage(pageIndex); setAnnotationMenu(null); setNewAnnotationText(null);
+  }, [pageIndex, spread, spreadOffset]);
+  useEffect(() => {
+    if (!annotationMenu) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement | null)?.closest('.annotation-context-menu')) setAnnotationMenu(null);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [annotationMenu]);
   /**
    * 上一次**划词**开出来的那张卡的 id。
    *
@@ -182,6 +210,7 @@ export function ComicReader({
    * 不写它：点击本来就没有选区可留。
    */
   const [heldSelectionPopupId, setHeldSelectionPopupId] = useState<string | null>(null);
+  const selectionAction = useSelectionAction<{ selection: ComicTextSelection; pageIndex: number }>(pageIndex);
   /** 词卡弹窗 + 词卡夹的状态（点击、划词、pin、保存、LLM 分析都走它）。 */
 
   const cacheRef = useRef(new Map<number, PageText>());
@@ -492,7 +521,7 @@ export function ComicReader({
       if (event.code !== 'Space' || event.repeat) return;
       const target = event.target as HTMLElement | null;
       // 输入框里敲空格是打字，不是「按住空格要移动画面」。
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
       setSpaceHeld(true);
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -589,6 +618,7 @@ export function ComicReader({
 
   const handleLookup = useCallback(
     async (payload: ComicTextLookup, sourcePageIndex: number) => {
+      selectionAction.dismiss();
       if (suppressClickRef.current) {
         // 这一次「点击」其实是拖动平移的收尾，别弹词卡。
         suppressClickRef.current = false;
@@ -617,10 +647,9 @@ export function ComicReader({
    * 词典那一栏该怎么查还是怎么查（同一条链路），所以「查询用的词」和「词典里的词」
    * 允许不一样——用户框「食べました」，词典里给「食べる」，这是对的。
    */
-  const handleSelect = useCallback(
-    async (payload: ComicTextSelection, sourcePageIndex: number) => {
+  const openSelection = async ({ selection: payload, pageIndex: sourcePageIndex }: { selection: ComicTextSelection; pageIndex: number }, isCurrent: () => boolean) => {
       const result = await call('查词', () => api.dict.lookup(payload.context, payload.start));
-      if (!result) return;
+      if (!result || !isCurrent()) return;
       // 记下这次划词开出来的卡片：**卡片还开着**就是页面高亮该留着的全部理由。
       setHeldSelectionPopupId(
         wordCards.openPopup({
@@ -633,9 +662,10 @@ export function ComicReader({
           source: { kind: 'comic', pageIndex: sourcePageIndex, pageUrl: pages[sourcePageIndex]?.url ?? '' },
         }),
       );
-    },
-    [wordCards, pages],
-  );
+  };
+  const handleSelect = (payload: ComicTextSelection, sourcePageIndex: number) => {
+    selectionAction.show({ selection: payload, pageIndex: sourcePageIndex }, payload.pointer ?? { x: payload.anchor.x + payload.anchor.width, y: payload.anchor.y + payload.anchor.height });
+  };
 
   /**
    * 划词高亮是否继续留在页面上：那次划词的卡片还开着。
@@ -645,12 +675,24 @@ export function ComicReader({
    * `popups`）。所以这里只把结论传下去，文字层不自己去猜。
    */
   const holdSelection =
-    heldSelectionPopupId !== null &&
-    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId);
+    selectionAction.pending !== null || (heldSelectionPopupId !== null &&
+    wordCards.popups.some((popup) => popup.id === heldSelectionPopupId));
 
   // ------------------------------------------------------------------
   // 键盘 / 菜单命令
   // ------------------------------------------------------------------
+
+  useEffect(() => {
+    const escapeAnnotation = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || (!annotationMenu && !annotations.editing)) return;
+      // 文本编辑框自己的 Esc 取消本次编辑；其他 Esc 先退出批注，再由 App 返回书库。
+      if ((event.target as HTMLElement | null)?.closest('.annotation-text-editor')) return;
+      event.preventDefault(); event.stopPropagation();
+      setAnnotationMenu(null); annotations.setEditing(false); annotations.setSelectedId(null);
+    };
+    window.addEventListener('keydown', escapeAnnotation, true);
+    return () => window.removeEventListener('keydown', escapeAnnotation, true);
+  }, [annotationMenu, annotations.editing]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -661,6 +703,19 @@ export function ComicReader({
       }
       const forwardKey = rtl ? 'ArrowLeft' : 'ArrowRight';
       const backKey = rtl ? 'ArrowRight' : 'ArrowLeft';
+
+      if (annotations.editing && event.key === ' ') { event.preventDefault(); return; }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault(); if (event.shiftKey) annotations.redo(); else annotations.undo(); return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); annotations.redo(); return; }
+      if (annotations.editing && event.key === 'Delete' && annotations.activeId && annotations.selectedId) {
+        event.preventDefault(); const page = pages[annotationPage];
+        if (page) annotations.removeObject(annotations.activeId, page.url, annotations.selectedId); return;
+      }
+      if (event.key === 'Escape' && (annotationMenu || annotations.editing)) {
+        event.preventDefault(); setAnnotationMenu(null); annotations.setEditing(false); annotations.setSelectedId(null); return;
+      }
 
       if (event.key === forwardKey || event.key === 'PageDown' || event.key === ' ') {
         event.preventDefault();
@@ -695,7 +750,7 @@ export function ComicReader({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total]);
+  }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total, annotations, annotationPage, annotationMenu, pages]);
 
   useShellCommand((command) => {
     switch (command) {
@@ -822,7 +877,14 @@ export function ComicReader({
             const height = slot.page.height * scale;
             const src = assetUrl(book.id, slot.page.url);
             return (
-              <div key={`${slot.index}-${slot.page.url}`} className="comic-page-slot" style={{ width, height }}>
+              <div key={`${slot.index}-${slot.page.url}`} className={`comic-page-slot${annotations.editing ? ' is-annotating' : ''}`} style={{ width, height }}
+                onPointerDownCapture={event => { if (event.button === 0) setAnnotationPage(slot.index); }}
+                onContextMenu={event => {
+                  if ((event.target as HTMLElement).closest('input,textarea,[contenteditable="true"]')) return;
+                  event.preventDefault(); event.stopPropagation(); setAnnotationPage(slot.index);
+                  setAnnotationMenu({ x: event.clientX, y: event.clientY, index: slot.index,
+                    point: imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), slot.page.width, slot.page.height) });
+                }}>
                 {src !== null && (
                   <img
                     className="comic-page-img"
@@ -833,6 +895,8 @@ export function ComicReader({
                     style={{ width, height }}
                   />
                 )}
+                <ComicAnnotationCanvas page={slot.page} controller={annotations} spaceHeld={spaceHeld} newText={newAnnotationText}
+                  onActivate={() => setAnnotationPage(slot.index)} />
                 {textLayerOn && (
                   <ComicTextLayer
                     text={texts.get(slot.index) ?? null}
@@ -840,8 +904,8 @@ export function ComicReader({
                     pageHeight={slot.page.height}
                     displayedWidth={width}
                     displayedHeight={height}
-                    onLookup={(payload) => void handleLookup(payload, slot.index)}
-                    onSelect={(payload) => void handleSelect(payload, slot.index)}
+                    onLookup={(payload) => { if (!annotations.editing) void handleLookup(payload, slot.index); }}
+                    onSelect={(payload) => { if (!annotations.editing) void handleSelect(payload, slot.index); }}
                     // 只在真的按着空格时让路——否则拖动永远是划词。
                     deferDragToPan={canPan && spaceHeld}
                     // 划词后高亮留到卡片被关掉为止（点别处/换页/重划都会让位）。
@@ -854,13 +918,13 @@ export function ComicReader({
           </div>
         </div>
 
-        <ReaderEdgeTurns
+        {!annotations.editing && <ReaderEdgeTurns
           direction={direction}
           onBack={prev}
           onForward={next}
           backDisabled={atStart}
           forwardDisabled={atEnd}
-        />
+        />}
       </div>
 
       <div className="comic-footer">
@@ -964,7 +1028,7 @@ export function ComicReader({
 
         <span className="toolbar-sep" />
 
-        {usableProviders.length > 1 && (
+        {(ocrCapability?.providers.length ?? 0) > 0 && (
           <select
             // `is-frozen` 把「锁定」这件事画出来：只 disabled 的话，用户看到的只是
             // 「点了没反应」，不知道是为什么。
@@ -980,9 +1044,9 @@ export function ComicReader({
               patchBook({ ocrProvider: next });
             }}
           >
-            {usableProviders.map((item) => (
+            {(ocrCapability?.providers ?? []).map((item) => (
               <option key={item.id} value={item.id}>
-                {item.label}
+                {item.label}{!item.available ? '（不可用）' : ''}
               </option>
             ))}
           </select>
@@ -996,8 +1060,8 @@ export function ComicReader({
         <button
           type="button"
           className={`btn btn-sm${ocrControls.isCancel ? ' btn-danger' : ''}`}
-          disabled={ocrControls.disabled}
-          title={ocrControls.title}
+          disabled={ocrControls.disabled || !ocrControls.isCancel && !usableProviders.some(item => item.id === effectiveProvider)}
+          title={!ocrControls.isCancel && !usableProviders.some(item => item.id === effectiveProvider) ? '当前引擎不可用，请选择可用引擎，或到设置安装 OCR 扩展。' : ocrControls.title}
           data-testid="comic-ocr-action"
           data-ocr-action={ocrControls.isCancel ? 'cancel' : 'start'}
           onClick={() => {
@@ -1005,7 +1069,7 @@ export function ComicReader({
             else onStartOcr?.(book.id, ocrResult?.ok === true, effectiveProvider);
           }}
         >
-          {ocrControls.label}
+          {!ocrControls.isCancel && !usableProviders.some(item => item.id === effectiveProvider) ? '引擎不可用' : ocrControls.label}
         </button>
 
         {onOpenSegments && (
@@ -1015,7 +1079,7 @@ export function ComicReader({
             onClick={onOpenSegments}
             title="看这本书的词表，或生成/重新生成分词"
           >
-            分词
+            词汇与制卡
           </button>
         )}
 
@@ -1031,7 +1095,25 @@ export function ComicReader({
         {textLayerOn && noOcrData && <span className="comic-text-hint">本页无 OCR 数据</span>}
       </div>
 
+      <ComicAnnotationControls controller={annotations} page={pages[annotationPage]} />
+      {immersiveToolsHost && createPortal(<ComicAnnotationQuickTools controller={annotations} page={pages[annotationPage]} immersive />, immersiveToolsHost)}
+      {annotationManagerHost && createPortal(<ComicAnnotationManager controller={annotations} page={pages[annotationPage]}
+        pageNumber={annotationPage + 1} pages={pages} onGoToPage={index => { setAnnotationPage(index); setPageIndex(index); }} />, annotationManagerHost)}
+      {annotationMenu && <div className="annotation-context-menu" role="menu" data-testid="annotation-context-menu"
+        style={{ left: Math.max(0, Math.min(annotationMenu.x, window.innerWidth - 210)),
+          top: Math.max(0, Math.min(annotationMenu.y, window.innerHeight - 140)) }}>
+        <button role="menuitem" disabled={!annotations.loaded || annotations.document.layers.length >= 100 || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => { annotations.create('pen', pages[annotationMenu.index]); setAnnotationMenu(null); }}>新建画笔图层</button>
+        <button role="menuitem" disabled={!annotations.loaded || annotations.document.layers.length >= 100 || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => {
+          annotations.armText();
+          setNewAnnotationText({ id: crypto.randomUUID(), pageUrl: pages[annotationMenu.index]!.url, point: annotationMenu.point });
+          setAnnotationMenu(null);
+        }}>新建文字图层</button>
+        <button role="menuitem" onClick={() => { onOpenAnnotationManager(); setAnnotationMenu(null); }}>管理图层</button>
+      </div>}
+
       {/* 弹窗可以同时开多张：pin 住的不会被后来者顶掉。 */}
+      {selectionAction.pending && <SelectionLookupButton point={selectionAction.pending.point} busy={selectionAction.busy}
+        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss} />}
       {wordCards.popups.map((popup, index) => (
         <WordCardPopup
           key={popup.id}

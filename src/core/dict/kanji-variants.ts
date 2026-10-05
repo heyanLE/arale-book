@@ -21,41 +21,16 @@
  * 常用字形），我们只是把查询也折过去。
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { loadVariants } from './data-source';
 
 /** 变体码点 → 常用字形码点。 */
 let table: Map<number, number> | null = null;
 
-/**
- * 找到随包分发的 `data/kanji-variants.json`。
- *
- * 与 `deinflect.ts` 的 `resolveTransformsPath` 同一套逐级向上查找：编译产物可能在
- * `dist/core/dict/` 或 `dist-test/src/core/dict/`，到仓库根的层数不同。
- * 找不到**不抛**——异体字折叠是锦上添花，缺了它只是少一层兜底，不该让整个查词挂掉。
- */
-function resolveVariantsPath(): string | null {
-  const override = process.env.ARALE_KANJI_VARIANTS;
-  if (override && fs.existsSync(override)) return override;
-  let dir = __dirname;
-  for (let i = 0; i < 6; i += 1) {
-    const candidate = path.join(dir, 'data', 'kanji-variants.json');
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  const fromCwd = path.join(process.cwd(), 'data', 'kanji-variants.json');
-  return fs.existsSync(fromCwd) ? fromCwd : null;
-}
-
 function load(): Map<number, number> {
   if (table !== null) return table;
   table = new Map();
-  const file = resolveVariantsPath();
-  if (file === null) return table;
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, string>;
+    const raw = loadVariants() as Record<string, string>;
     for (const [variant, parent] of Object.entries(raw)) {
       const v = Number.parseInt(variant, 16);
       const p = Number.parseInt(parent, 16);

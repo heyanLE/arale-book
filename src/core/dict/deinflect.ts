@@ -20,8 +20,7 @@
  * 「没有可用条件」，链在此终止（ja.json 里只有 kansai-ben 的 30 条空 conditionsOut 规则受影响）。
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+import { loadTransforms } from './data-source';
 
 import type { DeinflectionStep } from '../../shared/types';
 
@@ -169,33 +168,8 @@ export function parseTransformFile(data: unknown): TransformFile {
   return { language, conditions, transforms };
 }
 
-/**
- * 找到随包分发的 `data/ja-transforms.json`。
- *
- * 编译产物可能在 `<root>/dist/core/dict/`（主进程）或 `<root>/dist-test/src/core/dict/`
- * （测试），两者到仓库根的层数不同，所以逐级向上找，而不是写死 `../../`。
- * 打包/换布局时可用 `ARALE_JA_TRANSFORMS` 指定绝对路径覆盖。
- */
-function resolveTransformsPath(): string {
-  const override = process.env.ARALE_JA_TRANSFORMS;
-  if (override && fs.existsSync(override)) return override;
-  let dir = __dirname;
-  for (let i = 0; i < 6; i += 1) {
-    const candidate = path.join(dir, 'data', 'ja-transforms.json');
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  const fromCwd = path.join(process.cwd(), 'data', 'ja-transforms.json');
-  if (fs.existsSync(fromCwd)) return fromCwd;
-  throw new Error('找不到 data/ja-transforms.json；可用 ARALE_JA_TRANSFORMS 指定绝对路径');
-}
-
-/** 随包分发的日语变形数据（54 transforms / 22 conditions / 834 rules）。 */
-export const jaTransforms: TransformFile = parseTransformFile(
-  JSON.parse(fs.readFileSync(resolveTransformsPath(), 'utf8')) as unknown,
-);
+/** 随包分发的日语变形数据；文件来源由桌面/浏览器构建适配器提供。 */
+export const jaTransforms: TransformFile = parseTransformFile(loadTransforms());
 
 // ---------------------------------------------------------------------------
 // 编译：条件闭包 + 扁平规则表（按 TransformFile 缓存）

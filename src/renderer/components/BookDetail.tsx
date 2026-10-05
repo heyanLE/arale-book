@@ -1,3 +1,4 @@
+import { bookDisplay } from '@core/books/display';
 /**
  * 右侧书籍详情面板（可开关）。
  *
@@ -110,6 +111,8 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
     <aside className="detail">
       <DetailHeader title={book.title} onClose={onClose} />
 
+      <div className="detail-primary-actions"><button type="button" className="btn btn-primary btn-block" onClick={() => onOpen(book.id)}>{book.lastOpenedAt ? '继续阅读' : '开始阅读'}</button>
+        <button type="button" className="btn btn-block" onClick={beginEdit}>编辑元数据</button></div>
       <div className="detail-body">
         <div className="detail-cover-wrap">
           {cover ? (
@@ -177,9 +180,10 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
         ) : (
           <>
             <div className="detail-title">{book.title}</div>
-            <div className="detail-sub">{book.author || '未知作者'}</div>
+            <div className="detail-sub">{bookDisplay(book).author || '作者未录入'}</div>
 
-            <dl className="detail-fields">
+            {bookDisplay(book).needsMetadata && <p className="detail-hint">部分元数据未录入，作者和卷号可能来自文件名。可点击上方“编辑元数据”补充或修正乱码。</p>}
+            <details className="detail-metadata"><summary>书籍信息与文件位置</summary><dl className="detail-fields">
               <Field label="格式" value={book.format === 'epub' ? 'EPUB 小说' : '漫画'} />
               <Field
                 label="阅读方式"
@@ -221,7 +225,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
                 mono
               />
               <Field label="书籍 ID" value={book.id} mono />
-            </dl>
+            </dl></details>
 
             <div className="detail-block">
               <div className="detail-block-title">标签</div>
@@ -258,13 +262,10 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
               </div>
             </div>
 
-            <div className="detail-actions detail-actions-stack">
-              <button type="button" className="btn btn-primary btn-block" onClick={() => onOpen(book.id)}>
-                打开阅读
-              </button>
-              <button type="button" className="btn btn-block" onClick={beginEdit}>
-                编辑元数据
-              </button>
+
+            <details className="detail-more"><summary>更多书籍操作</summary>            <div className="detail-actions detail-actions-stack">
+
+
               <button
                 type="button"
                 className="btn btn-block"
@@ -284,7 +285,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
               >
                 从书库移除…
               </button>
-            </div>
+            </div></details>
           </>
         )}
       </div>

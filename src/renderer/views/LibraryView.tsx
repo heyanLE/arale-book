@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
 import type { BookFormat, BookRecord, LibraryInfo, LibraryPage, LibraryQuery, LibrarySort } from '@shared/types';
-import { api, call, run, summarizeImportOutcome, useAsync, useIpcEvent } from '../lib/api';
+import { api, call, run, summarizeImportOutcome, useAsync } from '../lib/api';
 import { updateSettings, useSettings } from '../lib/reader-settings';
 import { Sidebar } from '../components/Sidebar';
 import { BookGrid } from '../components/BookGrid';
@@ -118,19 +118,8 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
     [onLibraryChanged, onStatus],
   );
 
-  /**
-   * 拖放导入的两条路径：
-   *
-   * 1. **HTML5 dnd（主路径）**：`onDrop` 拿到 `File` 对象，经 `api.paths.forFile`
-   *    （预加载里的 `webUtils.getPathForFile`）换成绝对路径。这是必须的——Electron ≥32
-   *    移除了 `File.path`，而渲染进程在 sandbox 下拿不到 webUtils。
-   * 2. **`shell:openFiles`（旁路）**：主进程在「用本应用打开文件」（macOS `open-file`、
-   *    命令行参数）时派发，路径本来就是绝对的，不需要转换。
-   */
-  useIpcEvent('shell:openFiles', (payload) => {
-    if (!payload || !Array.isArray(payload.paths)) return;
-    void importPaths(payload.paths);
-  });
+  // Native Tauri drag/drop and open-file events deliver filesystem paths.
+  // Native open-file events are handled by App, including while this view is unmounted.
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     if (!event.dataTransfer) return;
@@ -138,34 +127,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
     event.dataTransfer.dropEffect = 'copy';
   }, []);
 
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-      const files = Array.from(event.dataTransfer?.files ?? []);
-      const paths: string[] = [];
-      for (const file of files) {
-        let resolved = '';
-        try {
-          resolved = api.paths.forFile(file) ?? '';
-        } catch {
-          resolved = '';
-        }
-        // 兜底：更老的 Electron 上 `File.path` 还在（forFile 返回空串时用它）。
-        if (resolved === '') {
-          const legacy = (file as File & { path?: unknown }).path;
-          if (typeof legacy === 'string') resolved = legacy;
-        }
-        if (resolved !== '') paths.push(resolved);
-      }
-      if (paths.length === 0) {
-        // 连一个路径都解不出来（例如从浏览器拖来的虚拟文件）——给明确出路，别静默吞。
-        onStatus('拖进来的不是本地文件（拿不到路径），请用「＋ 文件」按钮选择');
-        return;
-      }
-      void importPaths(paths);
-    },
-    [importPaths, onStatus],
-  );
+  const onDrop = useCallback((event: React.DragEvent) => { event.preventDefault(); }, []);
 
   const importViaDialog = useCallback(async (kind: 'files' | 'directory') => {
     const outcomes = await call('导入', () => api.library.importViaDialog(kind));
@@ -328,7 +290,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
             }}
           />
 
-          <select
+          {!settings.showSidebar && <select
             className="select"
             value={query.format ?? ''}
             onChange={(e) =>
@@ -339,7 +301,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
             <option value="">全部格式</option>
             <option value="epub">EPUB 小说</option>
             <option value="comic">漫画</option>
-          </select>
+          </select>}
 
           <select
             className="select"
@@ -484,7 +446,7 @@ interface MenuItem {
 }
 
 /**
- * 自己画的右键菜单（**不用** Electron 原生 Menu）。
+ * 自己画的右键菜单（通过 Tauri WebView 渲染）。
  * 原因：原生菜单要跨进程往返、拿不到渲染进程的实时选择状态、也无法做主题适配；
  * 而这里需要的只是「几个按钮 + 键盘可用」。
  */

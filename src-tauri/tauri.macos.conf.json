@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "targets": ["dmg"],
+    "icon": ["../build/icon.icns", "../build/icon.png"],
+    "resources": {
+      "../native/arale-vision-ocr/arale-vision-ocr": "tools/arale-vision-ocr"
+    },
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": "-"
+    }
+  }
+}

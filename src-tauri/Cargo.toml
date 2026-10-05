@@ -1,0 +1,47 @@
+[package]
+name = "aralebook-tauri"
+version = "0.1.0"
+edition = "2021"
+default-run = "aralebook-tauri"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+base64 = "0.22"
+percent-encoding = "2"
+mime_guess = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+arale-native = { path = "../native/arale-native" }
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "system-proxy", "socks"] }
+tokio = { version = "1", features = ["sync", "time", "macros", "process", "io-util", "fs"] }
+md5 = "0.7"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "s"

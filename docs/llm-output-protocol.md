@@ -1,8 +1,10 @@
 # LLM Harness 结构化返回协议
 
-核对日期：2026-10-02。本文描述 Anki F1–F3、旧 R1–R3 和新 A2–A4 的 Chat Completions 返回协议；A0/A1/R0 不调用 LLM。旧 schema 由 `harness-tool.ts` 定义，新 `submit_anki_pipeline` / `verify_anki_pipeline` schema 与严格字段、问题类型和证据 ID 校验由 `core/study/pipeline.ts` 定义；未通过的批次不会被当成完成结果。
+核对日期：2026-10-04。本文描述 Anki F1–F3、旧 R1–R3 和新 A2–A4 的 Chat Completions 返回协议；A0/A1/R0 不调用 LLM。旧 schema 由 `harness-tool.ts` 定义，新 `submit_anki_pipeline` / `verify_anki_pipeline` schema 与严格字段、问题类型和证据 ID 校验由 `core/study/pipeline.ts` 定义；未通过的批次不会被当成完成结果。
 
 新 A 档位复用以下供应商协议协商。生成请求带输出 token 上限：OpenAI 官方地址用 `max_completion_tokens`，其他端点用 `max_tokens`。预算模式在每次 HTTP/协议重试前检查保守估算；返回 usage 时用供应商数字记账，未报告时用估算。`budgetTokens` 是实际/估算合并的预算记账，不能显示成已确认计费 token；正常输入/输出 token 与估算分开展示。单次实际用量仍可能超过估算；真实供应商和推理模型兼容性尚未验收。A 阶段预算不包含用户单独启动的 F 筛词，详情见 [Anki Harness](anki-harness.md)。
+
+2026-10-04：协议实现移动到 `src/core/services/llm.ts`，Electron 原 `src/main/llm/service.ts` 为 Node 平台适配器，公共入口保持兼容。Tauri 服务 Worker 共用该实现，Rust 保存密钥并发送 HTTP；本轮验证覆盖协议适配、真实词卡分析和截断返回，完整 Tauri Anki 流水线/缩批与卡片恢复尚待迁移，见[迁移范围](tauri-migration.md)。
 
 ## 默认选择与降级
 
@@ -14,7 +16,9 @@
 
 工具只是模型提交结果的参数容器，不执行外部副作用，也不额外发一次模型回执。`json_object` 保证 JSON 语法，不保证词条 ID 或业务字段正确。DeepSeek 标准地址的严格工具模式需要 `/beta`，而默认 thinking 的 Chat Completions 不接受强制指定工具名，因此默认直接使用其正式可用的 JSON Output。[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)、[工具模式](https://api-docs.deepseek.com/guides/tool_calls/)、[Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)；OpenAI 的 `json_schema` 见[官方结构化输出文档](https://developers.openai.com/api/docs/guides/structured-outputs)。
 
-只有格式参数被端点明确拒绝（HTTP 400/422/501 且错误指出对应参数）才降级；401/403、429、超时和网络错误原样报错。工具请求被忽略但返回正文时，本次仍交给 Harness 校验，下次尝试 JSON Output。JSON 模式偶发空内容或非法 JSON 最多在同模式重试一次，仍不合格则由 Harness 缩小批次或停止。模型以 `finish_reason=length` 截断时按输出 token 限制处理，不保存残缺结果。
+只有格式参数被端点明确拒绝（HTTP 400/422/501 且错误指出对应参数）才降级；401/403、429、超时和网络错误原样报错。工具请求被忽略但返回正文时，本次仍交给 Harness 校验，下次尝试 JSON Output。JSON 模式偶发空内容或非法 JSON 最多在同模式重试一次，仍不合格则由 Harness 缩小批次或停止。JSON Object/纯文本回退时将提交 schema 附加到 system 消息，业务校验仍由程序完成。
+
+模型以 `finish_reason=length` 截断时仍返回失败，额外提供临时 `truncatedText`（最终正文或指定工具参数）；不采用思维链，不把截断响应整体当作成功。新 A 档位仅恢复根 `items` 中已闭合且通过完整业务校验的条目，继续复核/修复并仅对剩余项缩批。旧 F/R 仍按失败处理。输出额度、单卡有界扩额与验证记录见 [Anki Harness](anki-harness.md#输出额度与临时截断恢复2026-10-02)。截断调用的实际 usage 仍计入用量和预算，恢复不是退费。
 
 可用模式保存在 `<userData>/llm-output-capabilities.json`：键是配置 ID、地址、模型和结果 schema 的 SHA-256 指纹，只保存模式与校验时间，不保存 API key、提示词或回答。有效期 7 天；修改 LLM 配置后清除记录。后台任务入队与运行时比对 LLM 配置签名，防止排队/运行中更换模型或 Key 后混写结果。第一次不兼容时会逐级协商，成功模式供后续批次和重开应用复用。
 

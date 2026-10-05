@@ -419,7 +419,7 @@ export interface OpenBookResult {
  * - 阅读样式与桥接脚本由 `arale://` 协议处理器在**服务端**注入，sanitize（剥 `<script>`、
  *   `on*` 属性）也发生在那里——渲染进程拿到的东西已经是安全的；
  * - iframe 的 origin 是 `arale://<id>`，和 `file://` 外壳隔离，书里的恶意脚本即使漏网
- *   也碰不到 Node/Electron（Fushi 同样是「拦截虚拟 host」而不是起本地服务器，
+ *   也碰不到 Node.js（Fushi 同样是「拦截虚拟 host」而不是起本地服务器，
  *   见 analysis 02 §5）。
  */
 export interface ChapterContent {
@@ -775,6 +775,7 @@ export interface StudyRunStats {
 }
 
 export interface StudyWorkflow {
+  manualAi?: Partial<Record<'filter' | 'cards', StudyManualAiSession>>;
   /** JLPT 为社区参考等级；null 单独由 includeUnknown 控制。 */
   levels: Array<1 | 2 | 3 | 4 | 5>;
   includeUnknown: boolean;
@@ -829,6 +830,37 @@ export interface StudyWorkflow {
   };
 }
 
+/** 自行 AI 使用固定快照；只有整批验证成功才记入进度。 */
+export interface StudyManualAiRequest {
+  kind: 'filter' | 'cards';
+  tasksPerFile: number;
+  fields?: StudyCardField[];
+}
+export interface StudyManualAiTask {
+  candidate: StudyCandidate;
+  occurrence: StudyOccurrence;
+  evidence: StudyDictionaryEvidence[];
+  context?: { previous: string; next: string; order: string };
+  fields?: StudyCardField[];
+  tier?: StudyPipelineTier;
+  sentenceTranslation?: string;
+  readingSource?: StudyCardDraft['readingSource'];
+}
+export interface StudyManualAiSession {
+  id: string;
+  kind: 'filter' | 'cards';
+  sourceHash: string;
+  createdAt: number;
+  completedAt?: number;
+  tasksPerFile: number;
+  fields?: StudyCardField[];
+  directory: string;
+  tasks: StudyManualAiTask[];
+  batches: Array<{ id: string; taskIds: string[]; fileName: string; prompt: string; completed: boolean }>;
+  decisions: Record<string, { decision: StudyFilterDecision; reason: string }>;
+  drafts: StudyCardDraft[];
+}
+
 /** 持久化生成计划与证据，避免修改同名配置或词典后混用结果。 */
 export interface StudyPipelineCheckpoint {
   version: 1;
@@ -838,12 +870,20 @@ export interface StudyPipelineCheckpoint {
   evidence: Record<string, StudyDictionaryEvidence[]>;
   sentenceTranslations: Record<string, string>;
   newCardLimit?: number | null;
+  fields?: StudyCardField[];
+  sourceReadings?: Record<string, string>;
 }
+
+export type StudyCardField = 'reading' | 'meaning' | 'sentence' | 'sentenceTranslation' | 'lemma';
 
 export interface StudyCardDraft {
   candidateId: string;
   /** 可编辑的卡面字段；未设置时使用候选词与原文出处。 */
   expression?: string;
+  lemma?: string;
+  fields?: StudyCardField[];
+  readingSource?: 'dictionary' | 'tokenizer' | 'translation_romaji' | 'manual' | 'external_ai';
+  meaningSource?: 'dictionary' | 'ai';
   reading?: string;
   sentence?: string;
   sourceLabel?: string;
@@ -865,8 +905,8 @@ export interface StudyCardDraft {
 }
 
 export type StudyCardPatch = Partial<Pick<StudyCardDraft,
-  'expression' | 'reading' | 'sentence' | 'sourceLabel' | 'contextRef' |
-  'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview'>>;
+  'expression' | 'lemma' | 'reading' | 'sentence' | 'sourceLabel' | 'contextRef' |
+  'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview' | 'status'>>;
 
 export interface StudyRunProgress {
   bookId: string;
@@ -932,6 +972,7 @@ export interface StudyCardRunRequest {
   restart?: boolean;
   /** 本次最多新增处理的卡数；已完成卡保留，其余暂缓，按阅读优先度选择。 */
   newCardLimit?: number | null;
+  fields?: StudyCardField[];
 }
 
 export interface StudyCandidatePatch {
@@ -1069,6 +1110,8 @@ export interface TranslationProfile {
   appId: string;
   /** 主进程是否已经保存密钥；密钥明文永不经过 IPC 返回。 */
   hasSecret: boolean;
+  /** 已接入适配器的能力，不保证每次响应均返回读音。 */
+  capabilities?: { translation: boolean; sourceReading: 'romaji' | 'kana' | 'none'; readingScope: 'input' | 'none' };
 }
 
 export interface TranslationSettings {
@@ -1160,6 +1203,8 @@ export interface LlmAnalyzeResult {
   model: string;
   /** 失败原因（含 HTTP 状态与响应片段）。 */
   error?: string;
+  /** 输出截断时的传输片段，仅供 Harness 严格恢复完整条目；不是成功答案。 */
+  truncatedText?: string;
   /** Harness 请求的实际返回协议；单词弹窗普通分析不一定有值。 */
   responseMode?: 'tool' | 'json_schema' | 'json_object' | 'plain';
   httpAttempts?: number;

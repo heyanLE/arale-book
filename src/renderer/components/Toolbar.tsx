@@ -1,9 +1,9 @@
+import { Icon } from './Icon';
 /**
  * 顶部工具栏。
  *
  * 桌面应用的工具链应该**永远在场**（不像网页那样跟着内容滚动），所以它是 `.app` 的
- * 固定一行，而不是视图内部的一部分。图标全部用文字/符号，不引图标库 —— 一是「不加依赖」
- * 的硬约束，二是 Calibre/Qt 那一挂本来就是这种朴素观感。
+ * 固定一行，而不是视图内部的一部分。图标复用本地 SVG 组件，不引入图标库。
  *
  * 唯一的例外是品牌标记：应用图标/头像是**画出来的素材**（`assets/arale-icons-v2`），
  * 用文字拼不出来。它由 `scripts/make-icon.mjs` 从素材包同步成这里的 `brand-mark.png`
@@ -78,7 +78,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
       <div className="toolbar-group">
         {!inLibrary && (
           <button type="button" className="tool-btn" onClick={onLeaveReader} title="返回书库 (Esc)">
-            ← 书库
+            <Icon kind="back" />书库
           </button>
         )}
 
@@ -89,16 +89,16 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
             onClick={onToggleSidebar}
             title="显示/隐藏左侧栏"
           >
-            ▤ 侧栏
+            <Icon kind="sidebar" />侧栏
           </button>
         )}
 
         <span className="toolbar-title" title={libraryDir ?? undefined}>
           {view === 'reader'
-            ? (bookTitle ?? '阅读器')
+            ? '阅读器'
             : view === 'settings'
               ? '设置'
-              : (libraryDir ?? '书库')}
+              : view === 'segments' ? '词汇与制卡' : '书库'}
         </span>
 
         {busy && <span className="toolbar-spinner" title="处理中" />}
@@ -116,7 +116,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
                 onClick={() => onViewMode('grid')}
                 title="封面网格"
               >
-                ▦ 网格
+                <Icon kind="grid" />网格
               </button>
               <button
                 type="button"
@@ -124,7 +124,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
                 onClick={() => onViewMode('list')}
                 title="详细列表"
               >
-                ☰ 列表
+                <Icon kind="list" />列表
               </button>
             </div>
 
@@ -136,7 +136,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
               onClick={onToggleDetail}
               title="显示/隐藏右侧详情"
             >
-              ▥ 详情
+              <Icon kind="sidebar" />详情
             </button>
 
             <button
@@ -146,7 +146,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
               title="导入书籍文件（可多选，也可拖放）"
               data-testid="toolbar-import-files"
             >
-              ＋ 文件
+              <Icon kind="plus" />导入书籍
             </button>
             <button
               type="button"
@@ -155,7 +155,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
               title="把页图文件夹导入为漫画"
               data-testid="toolbar-import-directory"
             >
-              ＋ 文件夹
+              <Icon kind="folder" />导入文件夹
             </button>
           </>
         )}
@@ -163,7 +163,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
         <span className="toolbar-sep" />
 
         <button type="button" className="tool-btn" onClick={onCycleTheme} title={THEME_LABEL[theme]}>
-          {theme === 'dark' ? '☾' : theme === 'light' ? '☀' : '◐'}
+          <Icon kind="theme" />
         </button>
 
         <button
@@ -172,7 +172,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           onClick={onOpenSettings}
           title="设置与词典管理 (Cmd/Ctrl+,)"
         >
-          ⚙ 设置
+          <Icon kind="settings" />设置
         </button>
       </div>
     </header>

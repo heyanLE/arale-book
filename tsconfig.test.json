@@ -5,17 +5,22 @@
     "moduleResolution": "Node",
     "outDir": "dist-test",
     "rootDir": ".",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["src/shared/*"],
-      "@core/*": ["src/core/*"]
+      "@shared/*": [
+        "src/shared/*"
+      ],
+      "@core/*": [
+        "src/core/*"
+      ]
     }
   },
   "include": [
     "src/core/**/*.ts",
     "src/shared/**/*.ts",
-    "src/main/**/*.ts",
     "tests/**/*.ts"
   ]
 }

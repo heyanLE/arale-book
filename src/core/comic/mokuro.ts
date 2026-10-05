@@ -14,7 +14,7 @@
  *     同样不看 zIndex），两者都用不上，硬塞进冻结契约只会制造无人消费的字段。
  */
 import type { Box, PageText, TextBlock, TextRegion } from '../../shared/types';
-import { normalizeRel } from '../util/paths';
+import { normalizeRel } from '../util/relative-path';
 
 /**
  * 顶层不是 JSON 对象、或 JSON 语法错误时抛这个。

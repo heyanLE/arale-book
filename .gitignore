@@ -2,7 +2,6 @@ node_modules/
 dist/
 dist-test/
 .npm-cache/
-.electron-cache/
 .home/
 .probe/
 # 隔离下载/安装验收目录，包含约 1 GiB 的 OCR 引擎
@@ -14,6 +13,8 @@ dist-test/
 #   的具体版本，安全相关的东西不能漂）
 .rust/
 native/*/target/
+src-tauri/target/
+src-tauri/gen/
 *.log
 .DS_Store
 .workbuddy/
@@ -22,7 +23,6 @@ native/*/target/
 release/
 release-debug/
 .models-probe/
-.electron-builder-cache/
 .arale-demo/
 
 # OCR 扩展归档：1.5 GB 级可重建产物，由 vendor/ocr-manga-anki/build.mjs 现场生成
@@ -37,6 +37,7 @@ build/*
 
 # Swift 模块缓存（实测 961 MB）与一次性探针脚本（PP-OCR 时代留下的 onnx 探针）
 .vision-build/
+native/arale-vision-ocr/arale-vision-ocr
 .probe-det*.mjs
 *.ses
 

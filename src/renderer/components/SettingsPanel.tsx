@@ -13,6 +13,7 @@ import type { LlmProfileInput, LlmSettings, TranslationProfile, TranslationSetti
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
 import { ExtensionsCard } from './ExtensionsCard';
+import { AppVersionCard } from './AppVersionCard';
 import { LlmCard } from './LlmCard';
 import { TranslationCard } from './TranslationCard';
 import { WordCardSettingsCard } from './WordCardSettingsCard';
@@ -32,6 +33,7 @@ import {
 export interface SettingsPanelProps {
   info: LibraryInfo | null;
   onClose: () => void;
+  returnLabel?: string;
   onStatus: (message: string) => void;
   /** 各 OCR 引擎的可用性与就绪状态（App 启动时探过一次）。 */
   ocrCapability?: OcrCapability | null;
@@ -81,6 +83,7 @@ export interface SettingsPanelProps {
 export function SettingsPanel({
   info,
   onClose,
+  returnLabel = '返回书库',
   onStatus,
   ocrCapability = null,
   onRefreshOcrCapability,
@@ -91,6 +94,8 @@ export function SettingsPanel({
   defaults,
 }: SettingsPanelProps): JSX.Element {
   const settings = useSettings();
+  const [settingsQuery, setSettingsQuery] = useState('');
+  const groups = [['version','版本与更新'],['library','书库'],['dictionary','词典'],['appearance','外观与布局'],['llm','LLM 配置与提示词'],['translation','翻译'],['wordcards','词卡弹窗'],['ocr','OCR 与扩展'],['epub','小说阅读器'],['comic','漫画阅读器']];
   const [dict, setDict] = useState<DictionaryStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -131,7 +136,7 @@ export function SettingsPanel({
 
   const removeDictionary = useCallback(
     async (dictId: string, title: string) => {
-      // 用 window.confirm：它是同步阻塞的原生弹窗，在 Electron 里语义正确、零依赖。
+      // 用 window.confirm：它是同步阻塞的原生弹窗，在 WebView 里语义正确、零依赖。
       // 缺点是不能定制文案样式；对「卸载词典」这种低频破坏性操作够用了。
       if (!window.confirm(`确定卸载词典「${title}」？\n\n词典文件会从词典目录中删除，此操作不可撤销。`)) {
         return;
@@ -163,6 +168,10 @@ export function SettingsPanel({
     <div className="settings">
       <div className="settings-header">
         <span className="settings-title">设置</span>
+        <nav className="settings-navigation" aria-label="设置分组">
+        <input type="search" aria-label="查找设置分组" placeholder="查找设置分组" value={settingsQuery} onChange={e => setSettingsQuery(e.target.value)} />
+        {groups.filter(([,label]) => label!.toLowerCase().includes(settingsQuery.toLowerCase())).map(([id,label]) => <button type="button" key={id} className="btn btn-sm" onClick={() => document.getElementById('settings-'+id)?.scrollIntoView({block:'start'})}>{label}</button>)}
+      </nav>
         <div className="settings-header-actions">
           <button
             type="button"
@@ -177,14 +186,15 @@ export function SettingsPanel({
             重置界面偏好
           </button>
           <button type="button" className="btn btn-sm" onClick={onClose}>
-            返回书库
+            {returnLabel}
           </button>
         </div>
       </div>
 
-      <div className="settings-body">
+      <div className="settings-body"><p className="settings-save-hint">界面和阅读偏好即时生效并自动保存；LLM 配置和提示词请点击对应的保存按钮。</p>
+        <AppVersionCard />
         {/* ---------------- 书库 ---------------- */}
-        <section className="settings-card">
+        <section className="settings-card" id="settings-library">
           <div className="settings-card-head">
             <h2 className="settings-card-title">书库</h2>
           </div>
@@ -202,8 +212,9 @@ export function SettingsPanel({
           </div>
         </section>
 
+
         {/* ---------------- 词典 ---------------- */}
-        <section className="settings-card">
+        <section className="settings-card" id="settings-dictionary">
           <div className="settings-card-head">
             <h2 className="settings-card-title">词典</h2>
             <div className="settings-card-actions">
@@ -282,7 +293,7 @@ export function SettingsPanel({
         </section>
 
         {/* ---------------- 外观与布局 ---------------- */}
-        <section className="settings-card">
+        <section className="settings-card" id="settings-appearance">
           <div className="settings-card-head">
             <h2 className="settings-card-title">外观与布局</h2>
           </div>
@@ -345,7 +356,7 @@ export function SettingsPanel({
           </div>
         </section>
 
-        {llm ? (
+        <div id="settings-llm" />{llm ? (
           <LlmCard
             settings={llm.settings}
             loading={llm.loading}
@@ -358,7 +369,7 @@ export function SettingsPanel({
           </section>
         )}
 
-        {translation ? (
+        <div id="settings-translation" />{translation ? (
           <TranslationCard
             settings={translation.settings}
             loading={translation.loading}
@@ -370,10 +381,10 @@ export function SettingsPanel({
           <section className="settings-card"><div className="detail-hint">翻译配置还没载入。</div></section>
         )}
 
-        <WordCardSettingsCard llm={llm ?? null} translation={translation ?? null} />
+        <div id="settings-wordcards" /><WordCardSettingsCard llm={llm ?? null} translation={translation ?? null} />
 
         {/* ---------------- OCR 引擎（可选能力） ---------------- */}
-        <section className="settings-card">
+        <section className="settings-card" id="settings-ocr">
           <div className="settings-card-head">
             <h2 className="settings-card-title">OCR 默认引擎</h2>
             <div className="settings-card-actions">
@@ -449,7 +460,7 @@ export function SettingsPanel({
           </section>
         )}
 
-        <section className="settings-card">
+        <section className="settings-card" id="settings-epub">
           <div className="settings-card-head">
             <h2 className="settings-card-title">小说阅读器配置</h2>
           </div>
@@ -526,7 +537,7 @@ export function SettingsPanel({
           <p className="settings-hint">只调整阅读器注入的排版，不覆盖书自带的 CSS。</p>
         </section>
         {/* ---------------- 漫画阅读器 ---------------- */}
-        <section className="settings-card">
+        <section className="settings-card" id="settings-comic">
           <div className="settings-card-head">
             <h2 className="settings-card-title">漫画阅读器配置</h2>
           </div>

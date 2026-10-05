@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { HARNESS_TOOL_NAME, harnessSubmissionTool } from '../src/core/study/harness-tool';
-import { normalizeHarnessConcurrency, runConcurrentBatches } from '../src/main/study/concurrency';
+import { normalizeHarnessConcurrency, runConcurrentBatches } from '../src/core/study/concurrency';
 
 test('三个 Harness 阶段共用一个提交工具名，参数字段按阶段分开且要求严格结构', () => {
   const filter = harnessSubmissionTool('filter');

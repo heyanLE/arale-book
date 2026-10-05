@@ -5,7 +5,7 @@
  * 用到（新书的默认阅读方向），而导入跑在主进程里。字号/主题/双页这些只在界面里用得到，
  * 没必要多一次 IPC。
  *
- * 与 `main/ocr/service.ts` 的 `ocrProvider` 共用同一个 `settings.json`——都是「默认值」，
+ * 与 Rust OCR 后台的 `ocrProvider` 共用同一个 `settings.json`——都是「默认值」，
  * 分两个文件只会让「重置设置」变成半个操作。
  */
 

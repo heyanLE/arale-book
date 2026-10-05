@@ -11,10 +11,10 @@
  * 所以现在的职责固定成三步，顺序不可颠倒：
  *
  *   1. （可选，`--export`）macOS 上用 `sips` / `iconutil` 从两张母图重新导出各尺寸 + icns + ico；
- *   2. 把导出件拷进 `build/`（electron-builder 认的就是这里）；
+ *   2. 把导出件拷进 `build/`（Tauri 认的就是这里）；
  *   3. 把头像版 64px 拷成渲染进程的品牌标记 `src/renderer/assets/brand-mark.png`。
  *
- * 每一步都**校验魔数与像素尺寸**：宁可在这里炸，也不要让 electron-builder 拿一个
+ * 每一步都**校验魔数与像素尺寸**：宁可在这里炸，也不要让 Tauri 拿一个
  * 坏图去打包——那种失败发生在打包流程最末尾，报错信息也指不到图标上。
  *
  * 用法：

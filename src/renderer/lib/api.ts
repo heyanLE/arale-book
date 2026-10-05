@@ -2,16 +2,17 @@
  * 渲染进程访问主进程的**唯一**入口。
  *
  * 为什么要 `call` / `run` 这层包装：`ipcRenderer.invoke` 返回的 Promise 一旦被拒绝而没人
- * catch，就变成 unhandledrejection —— Electron 里它既不弹窗也不写状态栏，用户只看到
+ * catch，就变成 unhandledrejection —— WebView 里它既不弹窗也不写状态栏，用户只看到
  * 「点了没反应」。所以本文件立一条规矩：**任何** `window.arale.*` 调用都必须经过
  * `call`（拿结果或 null）或 `run`（fire-and-forget），失败统一进错误横幅总线。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import './tauri-bridge';
 import type { AraleApi, AraleEvents, ShellCommand } from '@shared/ipc';
 import type { ImportOutcome } from '@shared/types';
 
-/** `window.arale` 的直接别名。preload 没跑起来时它会是 undefined —— 所有调用点都写成
+/** `window.arale` 的直接别名。API bridge 没跑起来时它会是 undefined —— 所有调用点都写成
  *  `() => api.x.y()` 的惰性形式，`call`/`run` 里同步抛出的 TypeError 一样会被 catch 住。 */
 export const api: AraleApi = window.arale;
 
@@ -72,7 +73,7 @@ export function notifyMain(
 }
 
 /**
- * `arale://` 资源 URL。它是**同步**的纯字符串拼接，正常不会失败，但 preload 缺失时会抛
+ * `arale://` 资源 URL。它是**同步**的纯字符串拼接，正常不会失败，但 API bridge 缺失时会抛
  * TypeError，所以照样兜住，返回 null 让调用方走占位图。
  */
 export function assetUrl(bookId: string, rel: string | null | undefined): string | null {
@@ -105,7 +106,7 @@ export function summarizeImportOutcome(outcomes: ImportOutcome[]): string {
  *
  * **协议**：`window.arale.on(event, handler)` 返回一个数字订阅号，`off(id)` 退订
  * （见 `shared/ipc.ts` 的 `AraleApi.on`）。**不是** CustomEvent —— 早期版本这里监听的是
- * `window` 上的 `arale:<event>` DOM 事件，而 preload 从来没派发过它们，结果是
+ * `window` 上的 `arale:<event>` DOM 事件，而 API bridge 从来没派发过它们，结果是
  * `library:changed` 永远到不了，导入完书架不刷新。
  *
  * handler 存在 ref 里，所以调用方不必 memo 化回调，重复订阅也不会因为闭包变化而重建。
@@ -118,14 +119,14 @@ export function useIpcEvent<K extends keyof AraleEvents>(
   handlerRef.current = handler;
 
   useEffect(() => {
-    // preload 没挂上时（开发期配错）静默跳过，让 UI 能起来而不是整页崩。
+    // API bridge 没挂上时（开发期配错）静默跳过，让 UI 能起来而不是整页崩。
     if (typeof window.arale?.on !== 'function') return;
     const subscriptionId = window.arale.on(event, (payload) => handlerRef.current(payload));
     return () => {
       try {
         window.arale.off(subscriptionId);
       } catch {
-        /* 卸载竞态：preload 已经没了 */
+        /* 卸载竞态：API bridge 已经没了 */
       }
     };
   }, [event]);
@@ -176,7 +177,7 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): AsyncState<T
     try {
       pending = fnRef.current();
     } catch (error) {
-      // fn 里同步抛（例如 preload 缺失）也要走同一条错误路径。
+      // fn 里同步抛（例如 API bridge 缺失）也要走同一条错误路径。
       const err = error instanceof Error ? error : new Error(String(error));
       reportApiError('加载', err);
       setState((prev) => ({ ...prev, loading: false, error: err }));

@@ -18,7 +18,7 @@ import type {
 import { deinflect } from './deinflect';
 import { normalizeQuery } from './normalize';
 import { DEFAULT_SCAN_LENGTH, codePoints, scanCandidates } from './scanner';
-import { frequencyKey, type TermIndex } from './yomitan';
+import { frequencyKey, type TermIndex } from './model';
 
 export interface LookupOptions {
   /** 返回的词条上限，默认 16（= Fushi 的 defaultMaxResults）。 */

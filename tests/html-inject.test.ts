@@ -16,7 +16,7 @@ import {
   CHAPTER_CSP,
   mimeFor,
   sanitizeChapterHtml,
-} from '../src/main/reader/html-inject';
+} from '../src/core/epub/html-inject';
 
 const OPTS = { bridgeSource: 'window.__bridge = 1;' };
 
