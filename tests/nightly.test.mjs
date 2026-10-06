@@ -5,12 +5,20 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { collectInstaller, dateVersion, installerName, parseDateVersion, planNightly, publishNightly, validateArtifacts } from '../scripts/nightly.mjs';
 
 const sha = 'a'.repeat(40), other = 'b'.repeat(40), version = '2026.10.5';
 const now = new Date('2026-10-04T19:17:00Z'), builtAt = now.toISOString();
 const body = `<!-- aralebook-nightly-source:${sha} -->\n<!-- aralebook-nightly-built-at:${builtAt} -->`;
 function release(v, commit = sha) { return { tag_name:`nightly-${v}`, draft:false, prerelease:true, body:`<!-- aralebook-nightly-source:${commit} -->`, assets:['windows-x64','macos-arm64'].map(t => ({name:installerName(v,t),size:10})) }; }
+
+test('the repository does not track ignored build products', () => {
+  const ignored = execFileSync('git', ['ls-files', '--cached', '--ignored', '--exclude-from=.gitignore'], {
+    cwd: fileURLToPath(new URL('../', import.meta.url)), encoding: 'utf8',
+  }).trim();
+  assert.equal(ignored, '', `Ignored files are still tracked:\n${ignored}`);
+});
 
 test('nightly uses the Hong Kong calendar date without leading zeroes', () => {
   assert.equal(dateVersion(now), version);

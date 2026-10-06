@@ -1,5 +1,7 @@
 # 当前状态与接续任务
 
+2026-10-06 Nightly 生成产物跟踪已补齐：macOS 后续运行已生成 DMG，但收集被仍在索引中的 Swift OCR 二进制拦截。已移除其跟踪并完成全仓库已忽略/仍跟踪文件审计，保留源码编译与能力策略；新增索引回归检查，Rust 缓存在失败后也保存以加快重试。完整 CI/发布仍在验收，运行与安装边界见[每夜构建](nightly.md)。
+
 2026-10-06 Nightly 后续修复：GitHub Windows/macOS 均已通过 Rust 测试和安装包构建，第二次运行在收集阶段被源码变化检查拦截。诊断确认 Windows 变化来自四个 Tauri 自动生成权限文件，已忽略生成目录并移出版本控制，能力配置/命令声明/业务源码仍严格校验，错误会列出具体文件。macOS 诊断运行另在 DMG 脚本失败，CI 改为先编译成功，再独立封装（最多两次），输出详细日志。Windows 发布事务/收集回归 11/11；修复后的托管 CI 尚待完成，macOS 运行和安装未验收，详见[运行记录](nightly.md#首次-ci-失败与修复2026-10-06)。
 
 2026-10-06 Nightly 首次定时运行已触发：两平台类型检查/Node 测试通过，在 Rust 测试失败，未进入打包/发布。Windows 移走 `dist/` 后复现 `generate_context!` 缺少 `frontendDist`；Tauri 入口已改为所有模式都先构建前端，含检查/测试。Windows 11 x64 / Node 24.19.0 / Rust 1.96.0：无 `dist/` 状态执行 Nightly 环境 `node scripts/tauri.mjs test`，前端构建与 Rust 37/37 通过。修复后的托管 CI、macOS 与发布尚未验收，见[首次运行记录](nightly.md#首次-ci-失败与修复2026-10-06)。

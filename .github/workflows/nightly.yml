@@ -89,6 +89,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: nightly-${{ matrix.target }}
+          cache-on-failure: true
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
