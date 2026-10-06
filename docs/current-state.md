@@ -1,10 +1,6 @@
 # 当前状态与接续任务
 
-2026-10-06 Nightly 生成产物跟踪已补齐：macOS 后续运行已生成 DMG，但收集被仍在索引中的 Swift OCR 二进制拦截。已移除其跟踪并完成全仓库已忽略/仍跟踪文件审计，保留源码编译与能力策略；新增索引回归检查，Rust 缓存在失败后也保存以加快重试。完整 CI/发布仍在验收，运行与安装边界见[每夜构建](nightly.md)。
-
-2026-10-06 Nightly 后续修复：GitHub Windows/macOS 均已通过 Rust 测试和安装包构建，第二次运行在收集阶段被源码变化检查拦截。诊断确认 Windows 变化来自四个 Tauri 自动生成权限文件，已忽略生成目录并移出版本控制，能力配置/命令声明/业务源码仍严格校验，错误会列出具体文件。macOS 诊断运行另在 DMG 脚本失败，CI 改为先编译成功，再独立封装（最多两次），输出详细日志。Windows 发布事务/收集回归 11/11；修复后的托管 CI 尚待完成，macOS 运行和安装未验收，详见[运行记录](nightly.md#首次-ci-失败与修复2026-10-06)。
-
-2026-10-06 Nightly 首次定时运行已触发：两平台类型检查/Node 测试通过，在 Rust 测试失败，未进入打包/发布。Windows 移走 `dist/` 后复现 `generate_context!` 缺少 `frontendDist`；Tauri 入口已改为所有模式都先构建前端，含检查/测试。Windows 11 x64 / Node 24.19.0 / Rust 1.96.0：无 `dist/` 状态执行 Nightly 环境 `node scripts/tauri.mjs test`，前端构建与 Rust 37/37 通过。修复后的托管 CI、macOS 与发布尚未验收，见[首次运行记录](nightly.md#首次-ci-失败与修复2026-10-06)。
+2026-10-06 首次 Nightly 已公开发布：[Nightly 2026.10.6](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.6)。[完整 CI](https://github.com/heyanLE/arale-book/actions/runs/37424997509) 在 Windows Server 2022 x64/macOS 15 arm64 上通过类型检查、Node 测试（各 405 通过/13 跳过）、Rust 测试（37/37、33/33）、安装包构建、严格源码与元数据校验、上传和发布；Windows NSIS 20.46 MiB、macOS DMG 27.52 MiB，公开清单与 GitHub 文件大小/SHA256 一致。已修复测试前缺少前端构建、误跟踪生成权限/Swift 二进制，补充封装有界重试、错误路径和索引回归检查。来源固定为 `d32daec2`，下载后安装/卸载和 macOS 实际运行未验收，命令与验证边界见[发布记录](nightly.md#首次发布通过2026-10-06)。
 
 2026-10-05 每夜构建：新增 Windows x64/macOS arm64 日更 CI，日期版本 `YYYY.M.D`，源码与上次成功发布一致或当天已发布则跳过；冻结源码/引擎指针，两个平台通过后统一上传并公开 GitHub prerelease。设置显示原生版本/渠道/提交/批次时间，Nightly 可检查更新并打开对应下载页，开发版与正式版不检查。macOS Vision 工具新增 Resources 打包路径，前端兼容 Safari 17；本轮 Windows Node 413 通过/1 跳过、Rust 37/37、开发/Nightly 真实 WebView2 各 195/195、日期 NSIS 打包和 actionlint 通过。GitHub CI 首次运行、macOS 和下载后安装尚未验收，详见[每夜构建](nightly.md)。
 
