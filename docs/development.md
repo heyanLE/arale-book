@@ -43,7 +43,8 @@ Windows 已使用 Node 22.19.0 和 24.19.0 验证。Rust 解包器需要 Rust/MS
 | `npm start` / `node scripts/tauri.mjs dev` | 构建前端与 Kuromoji 资源，运行 Tauri debug 程序 |
 | `npm run build` / `node scripts/tauri.mjs build` | 构建 Tauri release 程序，运行时无 Node.js |
 | `npm run pack` / `node scripts/tauri.mjs pack` | Tauri CLI 生成 NSIS 安装包；不等于安装验收 |
-| `npm run tauri:test` | Rust 后台测试 |
+| `npm run tauri:check` | 先构建前端资源，再执行 Rust 编译检查 |
+| `npm run tauri:test` | 先构建前端资源，再执行 Rust 后台测试；可直接从干净 clone 运行 |
 | `npm run smoke` | Windows 隔离 WebView2 GUI smoke，先构建前端/debug 和 Node 测试端口 |
 | `npm run tauri:services:test` | 服务适配器协议、缓存、预算、截断、并发、取消测试 |
 | `npm run tauri:ocr:test` | OCR 成块、旧页保留、转换错误、重载协调测试 |

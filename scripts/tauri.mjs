@@ -23,9 +23,9 @@ function run(command, args, env = buildEnv) {
 if (process.platform === 'darwin') await run(process.execPath, [resolve(root, 'scripts/build-vision-ocr.mjs')]);
 if (mode === 'pack') await run(process.execPath, [resolve(root, 'scripts/make-icon.mjs')]);
 
-if (mode === 'dev' || mode === 'build' || mode === 'pack') {
-  await run(process.execPath, [resolve(root, 'node_modules/vite/bin/vite.js'), 'build'], { ...buildEnv, ARALE_TAURI_BUILD: '1' });
-}
+// generate_context! embeds frontendDist even during cargo check/test.
+// Build it for every entry so a clean checkout never relies on previous output.
+await run(process.execPath, [resolve(root, 'node_modules/vite/bin/vite.js'), 'build'], { ...buildEnv, ARALE_TAURI_BUILD: '1' });
 const manifest = ['--manifest-path', resolve(root, 'src-tauri/Cargo.toml'), '--locked'];
 if (mode === 'dev') await run('cargo', ['run', ...manifest]);
 else if (mode === 'build') await run('cargo', ['build', ...manifest, '--release']);

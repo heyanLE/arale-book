@@ -1,5 +1,7 @@
 # 当前状态与接续任务
 
+2026-10-06 Nightly 首次定时运行已触发：两平台类型检查/Node 测试通过，在 Rust 测试失败，未进入打包/发布。Windows 移走 `dist/` 后复现 `generate_context!` 缺少 `frontendDist`；Tauri 入口已改为所有模式都先构建前端，含检查/测试。Windows 11 x64 / Node 24.19.0 / Rust 1.96.0：无 `dist/` 状态执行 Nightly 环境 `node scripts/tauri.mjs test`，前端构建与 Rust 37/37 通过。修复后的托管 CI、macOS 与发布尚未验收，见[首次运行记录](nightly.md#首次-ci-失败与修复2026-10-06)。
+
 2026-10-05 每夜构建：新增 Windows x64/macOS arm64 日更 CI，日期版本 `YYYY.M.D`，源码与上次成功发布一致或当天已发布则跳过；冻结源码/引擎指针，两个平台通过后统一上传并公开 GitHub prerelease。设置显示原生版本/渠道/提交/批次时间，Nightly 可检查更新并打开对应下载页，开发版与正式版不检查。macOS Vision 工具新增 Resources 打包路径，前端兼容 Safari 17；本轮 Windows Node 413 通过/1 跳过、Rust 37/37、开发/Nightly 真实 WebView2 各 195/195、日期 NSIS 打包和 actionlint 通过。GitHub CI 首次运行、macOS 和下载后安装尚未验收，详见[每夜构建](nightly.md)。
 
 2026-10-05 最新沉浸/批注方案：替换“文字编辑自动切换全屏/最大化”的过渡方案。Windows 使用精确覆盖当前显示器的无边框窗口，关闭无标题栏阴影；系统栏按钮通过本窗口全屏标记控制任务栏覆盖，窗口与客户区不变。macOS 使用当前 Space 的 simple fullscreen 与 presentation options，尚未运行验收。批注统一阅读/选择/画笔/橡皮擦/文字，工具不建空层，首份内容与自动层一次撤销；鼠标图标提交草稿返回阅读并保留沉浸，支持直接选择移动，橡皮只作用于当前画笔层。右上角纯图标并修正悬停对比度。Windows renderer/test 类型检查、Tauri Vite/debug、Rust 34/34、WebView2 GUI 192/192 通过；实际中英/A／あ模式切换、多显示器及其他 DPI、macOS/Linux、release/NSIS 待验收。详见 [跨平台方案与验证](reader-annotations.md)。

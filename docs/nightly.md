@@ -1,6 +1,6 @@
 # 每夜构建与版本
 
-当前实现：2026-10-05。只提供 Windows x64 NSIS `.exe` 和 macOS Apple Silicon（arm64）`.dmg`。正式版发布流程暂未实现。
+当前实现：2026-10-06。只提供 Windows x64 NSIS `.exe` 和 macOS Apple Silicon（arm64）`.dmg`。正式版发布流程暂未实现。
 
 ## 版本与渠道
 
@@ -17,7 +17,7 @@
 1. 获取当前 `main` 的 SHA，与最近一次完整、已发布的 Nightly 来源比较。相同则跳过；不以“过去 24 小时有没有提交”判断。
 2. 当天已经有公开 Nightly 就跳过，次日再包含后续提交。当天存在上传中断留下的草稿则恢复该草稿的 SHA 和批次时间，不移动标签。
 3. 两个平台检出相同 SHA 及该提交固定的 submodule；使用 Node 22.19.0、Rust 1.96.0、Tauri CLI 2.12.1 和 npm/Cargo 锁文件。只带小型 OCR 仓库索引，模型和 Python/ORT 引擎继续独立下载。
-4. 分别执行类型检查、Node 测试、Rust 测试和正式打包；macOS runner 另编译 Swift Vision OCR 工具，放进应用 Resources/tools，最低系统为 macOS 14。前端目标包含 Safari 17。
+4. 分别执行类型检查、Node 测试、Rust 测试和正式打包；Tauri 入口的所有模式（含 `check` / `test`）都先构建前端，满足 `generate_context!` 对 `frontendDist` 的编译依赖，不依赖本机残留的 `dist/`。macOS runner 另编译 Swift Vision OCR 工具，放进应用 Resources/tools，最低系统为 macOS 14。前端目标包含 Safari 17。
 5. 收集并校验两个安装包的源码 SHA、引擎 SHA、版本、批次时间和文件 SHA256。CI 构建中若已跟踪源码被修改，则拒绝发布。
 6. 两个平台都成功后由唯一发布任务创建草稿，上传两个安装包、`build-info.json`、`SHA256SUMS.txt`。确认四项资产上传完整后再公开。失败保留草稿，已公开标签和版本不覆盖。
 
@@ -54,4 +54,10 @@ Windows 11 x64 / 2026-10-05 已验证：renderer/test 类型检查、`node scrip
 
 本地验证包为 21,455,121 字节（20.46 MiB）。包内 EXE 与编译输出只有官方 bundler 的安装类型标记 `UNK → NSS` 三字节差异，按该标记归一化后逐字节一致；不能用未归一化的裸 EXE SHA 判断包内代码是否一致。Windows 浏览器打开沿用 ShellExecute 与平衡的 COM 初始化，最后新增该初始化后定向 Rust 更新测试 3/3、发布事务测试 8/8、debug 构建通过；未因此重打 NSIS。
 
-macOS 编译/运行/DMG、GitHub 托管 runner 的第一次实际运行、公开 Release 发布与下载后安装尚未验收；构建脚本和更新逻辑的测试不代表这些平台或发布步骤已实测。
+### 首次 CI 失败与修复（2026-10-06）
+
+[首次定时运行](https://github.com/heyanLE/arale-book/actions/runs/37395940195)于香港时间 08:48 触发（调度延迟）。公开任务记录显示 Windows x64/macOS arm64 都通过类型检查与 Node 测试，在 `npm run tauri:test` 失败；打包与发布均未执行。完整日志下载需要 GitHub 登录，本轮未取得该日志。
+
+Windows 11 x64 / Node 24.19.0 / Rust 1.96.0：移走本地 `dist/` 后，以同一 Nightly 配置执行 `node scripts/tauri.mjs test`，复现 `generate_context!` 报 `frontendDist` 指向的 `../dist/renderer` 不存在。原入口只在 `dev` / `build` / `pack` 前构建前端，本机旧产物掩盖了测试入口缺少前置构建的问题。已改为每个入口模式都先构建 Vite；再次从没有 `dist/` 的状态运行同一命令，前端构建及 Rust 37/37 通过。
+
+修复后的 GitHub 两平台构建尚未验收；macOS 编译/运行/DMG、公开 Release 发布与下载后安装仍待验证。本地复现与 Windows 测试通过不代表 macOS 或发布步骤已通过。
