@@ -61,3 +61,7 @@ Windows 11 x64 / 2026-10-05 已验证：renderer/test 类型检查、`node scrip
 Windows 11 x64 / Node 24.19.0 / Rust 1.96.0：移走本地 `dist/` 后，以同一 Nightly 配置执行 `node scripts/tauri.mjs test`，复现 `generate_context!` 报 `frontendDist` 指向的 `../dist/renderer` 不存在。原入口只在 `dev` / `build` / `pack` 前构建前端，本机旧产物掩盖了测试入口缺少前置构建的问题。已改为每个入口模式都先构建 Vite；再次从没有 `dist/` 的状态运行同一命令，前端构建及 Rust 37/37 通过。
 
 修复后的 GitHub 两平台构建尚未验收；macOS 编译/运行/DMG、公开 Release 发布与下载后安装仍待验证。本地复现与 Windows 测试通过不代表 macOS 或发布步骤已通过。
+
+2026-10-06 [第二次手动运行](https://github.com/heyanLE/arale-book/actions/runs/37419589126)：Windows Server 2022 x64 / macOS 15 arm64 均通过类型检查、Node 测试（各 401 通过、13 跳过；原生测试 CLI 未构建等项明确跳过）、Rust 测试（Windows 37/37、macOS 33/33）和安装包构建（NSIS 20.46 MiB、DMG 27.52 MiB）。随后 `node scripts/nightly.mjs collect <target>` 被已跟踪源码变化检查拦截，未上传或发布。原日志只报告变化存在，没有列出文件；现补充文件状态及 GitHub 错误注释，继续定位，检查仍保持严格。
+
+本机 Windows 11 x64 / Node 22.19.0 / Rust 1.96.0 使用相同 CI 渠道、日期版本及 `x86_64-pc-windows-msvc` 目标，正常网络权限下执行 `node scripts/tauri.mjs pack` 后，再以 `CI=true` 执行 `node scripts/nightly.mjs collect windows-x64`，打包/收集通过且已跟踪源码无变化。本地结果尚未解释托管环境的具体差异；完整失败日志已通过用户授权的 GitHub CLI 登录取得。未安装本机产物。

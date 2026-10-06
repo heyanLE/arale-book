@@ -75,7 +75,10 @@ export function collectInstaller({ workspace = root, output, target, version, sh
   if (candidates.length !== 1) throw new Error(`Expected one ${target} ${version} installer, got ${candidates.length}`);
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim();
   if (commit !== sha) throw new Error('Build source does not match the frozen commit');
-  if (process.env.CI && execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: workspace, encoding: 'utf8' }).trim()) throw new Error('Tracked source changed during the CI build');
+  if (process.env.CI) {
+    const changes = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: workspace, encoding: 'utf8' }).trimEnd();
+    if (changes) throw new Error(`Tracked source changed during the CI build:\n${changes}`);
+  }
   const enginesCommit = execFileSync('git', ['-C', 'engines', 'rev-parse', 'HEAD'], { cwd: workspace, encoding: 'utf8' }).trim();
   const name = installerName(version, target);
   mkdirSync(output, { recursive: true });
@@ -140,5 +143,13 @@ export async function publishNightly({ github, owner, repo, directory, version, 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] !== 'collect') throw new Error('Usage: node scripts/nightly.mjs collect <windows-x64|macos-arm64>');
   const target = process.argv[3];
-  collectInstaller({ output: join(root, '.tmp', 'nightly', target), target, version: process.env.ARALE_BUILD_VERSION, sha: process.env.ARALE_BUILD_COMMIT, builtAt: process.env.ARALE_BUILD_TIME });
+  try {
+    collectInstaller({ output: join(root, '.tmp', 'nightly', target), target, version: process.env.ARALE_BUILD_VERSION, sha: process.env.ARALE_BUILD_COMMIT, builtAt: process.env.ARALE_BUILD_TIME });
+  } catch (error) {
+    if (process.env.GITHUB_ACTIONS === 'true') {
+      const message = String(error.message).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+      console.error(`::error title=Nightly installer validation::${message}`);
+    }
+    throw error;
+  }
 }
