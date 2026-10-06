@@ -32,12 +32,24 @@ else if (mode === 'build') await run('cargo', ['build', ...manifest, '--release'
 else if (mode === 'pack') {
   // A workspace-local official CLI also works on machines without a global install.
   const local = resolve(root, '.tmp/tauri-cli/bin', process.platform === 'win32' ? 'cargo-tauri.exe' : 'cargo-tauri');
-  const args = ['build'];
-  if (version) args.push('--config', JSON.stringify({ version }));
-  if (process.env.ARALE_BUILD_TARGET) args.push('--target', process.env.ARALE_BUILD_TARGET);
-  args.push('--', '--locked');
+  const options = [];
+  if (version) options.push('--config', JSON.stringify({ version }));
+  if (process.env.ARALE_BUILD_TARGET) options.push('--target', process.env.ARALE_BUILD_TARGET);
   const cli = resolve(root, 'node_modules/@tauri-apps/cli/tauri.js');
-  if (existsSync(cli)) await run(process.execPath, [cli, ...args]);
-  else if (existsSync(local)) await run(local, args);
-  else await run('cargo', ['tauri', ...args]);
+  const invoke = args => existsSync(cli) ? run(process.execPath, [cli, ...args])
+    : existsSync(local) ? run(local, args) : run('cargo', ['tauri', ...args]);
+  if (process.platform === 'darwin' && process.env.CI) {
+    // Build must succeed before any retry; bundle never substitutes an old binary.
+    await invoke(['build', ...options, '--no-bundle', '--', '--locked']);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await invoke(['bundle', ...options, '--verbose']);
+        break;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        console.warn('macOS installer bundling failed; retrying once without recompiling.');
+        await new Promise(accept => setTimeout(accept, 1500));
+      }
+    }
+  } else await invoke(['build', ...options, '--', '--locked']);
 } else await run('cargo', [mode, ...manifest]);
