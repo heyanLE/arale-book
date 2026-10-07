@@ -1,6 +1,6 @@
 # 官网与部署
 
-核对日期：2026-10-07。GitHub Pages 首次构建和部署已通过；公开入口因继承的旧域名绑定跳转到博客 404，域名处理待用户确认。
+核对日期：2026-10-07。[官网](https://heyanle.github.io/arale-book/) 已公开部署到 GitHub Pages，首页与静态资源访问通过；个人主页旧域名绑定已按用户确认解除。
 
 ## 页面与使用路径
 
@@ -31,12 +31,14 @@ Windows 11 x64 / 2026-10-07 / Chrome 154.0.8037.98：官网 Vite 生产构建、
 
 2026-10-07 / GitHub Actions Ubuntu 24.04 / Node 22.19.0：[Website 首次 CI](https://github.com/heyanLE/arale-book/actions/runs/37569379514) 在源码 `351a083109262b56fac1b411f2043901b744e92a` 上执行 `npm ci`、`npm run site:build`、上传 Pages artifact 和部署，两个任务均成功。Windows 本地 `actionlint .github/workflows/pages.yml` 通过。
 
-2026-10-07 / Windows 11 x64 / `curl.exe -I -L https://heyanle.github.io/arale-book/` 与 Chrome 实际访问均确认：入口返回 301，跳转 `https://heyanle.com/arale-book/` 后返回 404。`Resolve-DnsName heyanle.com -Type A` 指向外部服务器 `124.221.138.94`，页面为现有 Halo 博客；个人主页仓库 `heyanLE/heyanle.github.io` 的 Pages 仍绑定 `heyanle.com`。官网仓库自身 `cname` 为空，不能仅通过清空官网仓库的域名消除继承；解除个人主页绑定会影响该账户其他 Pages 地址，待用户确认后处理。未修改博客 DNS 或服务器。
+首次访问遇到 301 → 博客 404：个人主页仓库 `heyanLE/heyanle.github.io` 的 Pages 绑定了 `heyanle.com`，该域名指向外部 Halo 博客服务器。2026-10-07 用户明确要求解除绑定后，通过 Pages API `PUT /repos/heyanLE/heyanle.github.io/pages` 发送 `{"cname":null}`；GitHub 自动删除个人主页源分支的 CNAME，生成提交 `4b485b3a4e59ba138428d3c49ad0b7bc8912ab99`，个人主页 Pages 构建状态为 `built`。两个仓库的 `cname` 均为空，地址恢复 `github.io`，`https_enforced` 均为 `true`。未修改博客 DNS 或服务器。
 
-尚未通过公开页面可访问验收，macOS Safari、实际手机浏览器未验证；本轮没有修改桌面功能或安装包发布流程。
+2026-10-07 / GitHub Actions Ubuntu 24.04 / Node 22.19.0：解除域名绑定后手动触发 [Website 再部署](https://github.com/heyanLE/arale-book/actions/runs/37572287651)，源码 `f2356e3305d49dff9b71ad70c245348eedb862d9`，构建和部署均通过。Windows 11 x64 / Chrome 154.0.8037.98：`curl.exe -L https://heyanle.github.io/arale-book/` 确认最终为同一 `github.io` 地址、HTTP 200；真实浏览器访问 1440/390px，标题、图片和 CSS 正常，无横向溢出。四项静态资源（两张图片、JS、CSS）分别返回 200，桌面主题切换和查词开关通过；Nightly 链接指向 `nightly-2026.10.7`，正式版显示未发布并指向发布记录。验证脚本与截图位于忽略的 `.tmp/site-preview/`。
+
+macOS Safari、实际手机浏览器未验证；本轮没有修改桌面功能或安装包发布流程。
 
 ## GitHub Pages
 
-GitHub Pages 入口为 `https://heyanle.github.io/arale-book/`。当前账户主页绑定了 `heyanle.com`，GitHub 会把项目入口重定向到该域名的 `/arale-book/`；该域名目前指向外部服务器，公开访问需单独验证，不能以 Actions 部署成功代替可访问验收。仓库 Pages 的构建方式使用 GitHub Actions，入口为 [pages.yml](../.github/workflows/pages.yml)。
+GitHub Pages 入口为 `https://heyanle.github.io/arale-book/`。账户主页不绑定自定义域名，项目官网使用默认 `github.io` 项目路径并强制 HTTPS。仓库 Pages 的构建方式使用 GitHub Actions，入口为 [pages.yml](../.github/workflows/pages.yml)。若将来重新绑定账户主页域名，需同时核对项目路径的继承跳转。
 
 `main` 上修改 `site/**`、`package.json`、`package-lock.json` 或官网 workflow 后自动部署，也可在 Actions 手动运行 Website。Ubuntu 24.04 / Node 22.19.0 执行 `npm ci` 与 `npm run site:build`，只上传 `dist-site/`；构建任务只读源码和 Pages 元数据，部署任务通过 `github-pages` 环境取得 Pages 写入与 OIDC 权限。不上传整个工作区，也不触发桌面构建。
