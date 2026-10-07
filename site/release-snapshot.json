@@ -1,0 +1,22 @@
+{
+  "releases": [
+    {
+      "draft": false,
+      "published_at": "2026-10-06T23:16:28Z",
+      "assets": [
+        {
+          "name": "ARaLeBook_2026.10.7_macos-arm64.dmg",
+          "size": 28859010
+        },
+        {
+          "name": "ARaLeBook_2026.10.7_windows-x64-setup.exe",
+          "size": 21456752
+        }
+      ],
+      "prerelease": true,
+      "tag_name": "nightly-2026.10.7",
+      "html_url": "https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.7"
+    }
+  ],
+  "checkedAt": "2026-10-07"
+}

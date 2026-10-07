@@ -1,5 +1,7 @@
 # 当前状态与接续任务
 
+2026-10-07 官网首版：参考 EasyBangumi 并应用用户指定的 frontend-design skill，新增独立 `site/` 静态页面、深浅主题、手机导航、功能介绍、查词示例、每夜/正式下载入口及 FAQ。版本从公开 GitHub Release 读取，未发布正式版时展示真实状态，网络失败使用带日期的核对快照；不显示草稿/缺包，不跳转不存在的 Latest。Windows Chrome 实际浏览器 32 项检查通过，320–1440px 无横向溢出，Vite 生产构建通过。已提供本地预览，尚未部署 GitHub Pages，macOS Safari/实际手机未验收，详见[官网预览](website.md)。
+
 2026-10-06 首次 Nightly 已公开发布：[Nightly 2026.10.6](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.6)。[完整 CI](https://github.com/heyanLE/arale-book/actions/runs/37424997509) 在 Windows Server 2022 x64/macOS 15 arm64 上通过类型检查、Node 测试（各 405 通过/13 跳过）、Rust 测试（37/37、33/33）、安装包构建、严格源码与元数据校验、上传和发布；Windows NSIS 20.46 MiB、macOS DMG 27.52 MiB，公开清单与 GitHub 文件大小/SHA256 一致。已修复测试前缺少前端构建、误跟踪生成权限/Swift 二进制，补充封装有界重试、错误路径和索引回归检查。来源固定为 `d32daec2`，下载后安装/卸载和 macOS 实际运行未验收，命令与验证边界见[发布记录](nightly.md#首次发布通过2026-10-06)。
 
 2026-10-05 每夜构建：新增 Windows x64/macOS arm64 日更 CI，日期版本 `YYYY.M.D`，源码与上次成功发布一致或当天已发布则跳过；冻结源码/引擎指针，两个平台通过后统一上传并公开 GitHub prerelease。设置显示原生版本/渠道/提交/批次时间，Nightly 可检查更新并打开对应下载页，开发版与正式版不检查。macOS Vision 工具新增 Resources 打包路径，前端兼容 Safari 17；本轮 Windows Node 413 通过/1 跳过、Rust 37/37、开发/Nightly 真实 WebView2 各 195/195、日期 NSIS 打包和 actionlint 通过。GitHub CI 首次运行、macOS 和下载后安装尚未验收，详见[每夜构建](nightly.md)。

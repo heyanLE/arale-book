@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-site/
 dist-test/
 .npm-cache/
 .home/

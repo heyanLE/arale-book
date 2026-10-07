@@ -4,6 +4,9 @@
   "private": true,
   "description": "あられブック (ARaLeBook) — desktop-only Calibre-style manager and reader for comics and novels, with Japanese segmentation and click-to-lookup popup dictionary.",
   "scripts": {
+    "site:dev": "vite --config site/vite.config.mjs",
+    "site:build": "vite build --config site/vite.config.mjs",
+    "site:preview": "vite preview --config site/vite.config.mjs",
     "tauri:dev": "node scripts/tauri.mjs dev",
     "tauri:build": "node scripts/tauri.mjs build",
     "tauri:pack": "node scripts/tauri.mjs pack",

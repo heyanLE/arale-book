@@ -1,10 +1,12 @@
 # 开发文档入口
 
-最后核对：2026-10-06。新上下文按以下顺序阅读即可继续工作。
+最后核对：2026-10-07。新上下文按以下顺序阅读即可继续工作。
 
 应用使用 Tauri + Rust + React/TypeScript，旧主进程、预加载和 Electron 打包入口已删除。运行与安装命令见 [开发文档](development.md)，已接入范围与 Windows 验证见 [Tauri 状态](tauri-migration.md)。应用沿用本机已迁移的数据根；窗口刷新中断制卡并保留检查点，需手动续跑，切换应用内页面不停止任务。
 
 日期版本的 Windows x64 / macOS arm64 每夜构建、GitHub 发布和设置更新检查见[每夜构建](nightly.md)；首次 [Nightly 2026.10.6](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.6) 已通过两平台 CI 并公开发布，下载后安装和 macOS 实际运行尚未验收，正式版发布暂未实现。
+
+官网首版位于 `site/`，运行 `npm run site:dev` 本地预览；每夜/正式构建分别跳转 GitHub Release，正式版缺失和联网失败都有明确状态。页面、命令与验证边界见[官网预览](website.md)，尚未公开部署。
 
 1. [当前状态](current-state.md)：已完成的决策、验证边界、当前优先任务。
 2. [Windows 迁移与待修事项](windows-handoff.md)：下一台设备恢复材料、启动与验收顺序。
