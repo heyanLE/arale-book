@@ -6,7 +6,7 @@
 
 日期版本的 Windows x64 / macOS arm64 每夜构建、GitHub 发布和设置更新检查见[每夜构建](nightly.md)；首次 [Nightly 2026.10.6](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.6) 已通过两平台 CI 并公开发布，下载后安装和 macOS 实际运行尚未验收，正式版发布暂未实现。
 
-官网首版位于 `site/`，运行 `npm run site:dev` 本地预览；每夜/正式构建分别跳转 GitHub Release，正式版缺失和联网失败都有明确状态。页面、命令与验证边界见[官网预览](website.md)，尚未公开部署。
+官网首版位于 `site/`，运行 `npm run site:dev` 本地预览；每夜/正式构建分别跳转 GitHub Release，正式版缺失和联网失败都有明确状态。GitHub Pages 首次 CI 构建/部署已通过，公开入口因账户主页继承的旧域名跳转到博客 404，域名处理待确认。页面、命令与验证边界见[官网与部署](website.md)。
 
 1. [当前状态](current-state.md)：已完成的决策、验证边界、当前优先任务。
 2. [Windows 迁移与待修事项](windows-handoff.md)：下一台设备恢复材料、启动与验收顺序。

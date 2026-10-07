@@ -1,6 +1,6 @@
 # 官网与部署
 
-核对日期：2026-10-07。已准备 GitHub Pages 自动部署流程，首次公开部署待验证。
+核对日期：2026-10-07。GitHub Pages 首次构建和部署已通过；公开入口因继承的旧域名绑定跳转到博客 404，域名处理待用户确认。
 
 ## 页面与使用路径
 
@@ -29,7 +29,11 @@ npm run site:preview   # 预览构建产物，同样使用 5174 端口
 
 Windows 11 x64 / 2026-10-07 / Chrome 154.0.8037.98：官网 Vite 生产构建、`node --check site/main.js`、`git diff --check` 通过。隔离浏览器通过 32 项交互/数据场景检查：图片加载、内部锚点、深浅主题及记忆、按钮文字对比度、查词打开/关闭/焦点恢复与手机浮层完整可见、手机导航及 Escape、FAQ、公开 Nightly 链接、正式版缺失、模拟正式版上线、草稿/缺包过滤、接口失败回退与意外外站链接拒绝。无运行时异常；1440、1024、768、390、320px 无横向溢出。另在 5175 端口实际浏览器检查构建产物的图片、CSS、下载入口，资源路径均可解析到 `/arale-book/` 下；这不代表公开部署通过。已查看实际参考站和官网桌面、手机、深色及查词示例截图，记录在忽略的 `.tmp/site-preview/`。
 
-尚未验证 macOS Safari、实际手机浏览器或公开 GitHub Pages 部署；本轮没有修改桌面功能、安装包发布流程或进行官网公开发布。
+2026-10-07 / GitHub Actions Ubuntu 24.04 / Node 22.19.0：[Website 首次 CI](https://github.com/heyanLE/arale-book/actions/runs/37569379514) 在源码 `351a083109262b56fac1b411f2043901b744e92a` 上执行 `npm ci`、`npm run site:build`、上传 Pages artifact 和部署，两个任务均成功。Windows 本地 `actionlint .github/workflows/pages.yml` 通过。
+
+2026-10-07 / Windows 11 x64 / `curl.exe -I -L https://heyanle.github.io/arale-book/` 与 Chrome 实际访问均确认：入口返回 301，跳转 `https://heyanle.com/arale-book/` 后返回 404。`Resolve-DnsName heyanle.com -Type A` 指向外部服务器 `124.221.138.94`，页面为现有 Halo 博客；个人主页仓库 `heyanLE/heyanle.github.io` 的 Pages 仍绑定 `heyanle.com`。官网仓库自身 `cname` 为空，不能仅通过清空官网仓库的域名消除继承；解除个人主页绑定会影响该账户其他 Pages 地址，待用户确认后处理。未修改博客 DNS 或服务器。
+
+尚未通过公开页面可访问验收，macOS Safari、实际手机浏览器未验证；本轮没有修改桌面功能或安装包发布流程。
 
 ## GitHub Pages
 
