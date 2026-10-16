@@ -1,10 +1,12 @@
 # LLM Harness 结构化返回协议
 
-核对日期：2026-10-04。本文描述 Anki F1–F3、旧 R1–R3 和新 A2–A4 的 Chat Completions 返回协议；A0/A1/R0 不调用 LLM。旧 schema 由 `harness-tool.ts` 定义，新 `submit_anki_pipeline` / `verify_anki_pipeline` schema 与严格字段、问题类型和证据 ID 校验由 `core/study/pipeline.ts` 定义；未通过的批次不会被当成完成结果。
+核对日期：2026-10-15。本文描述 Anki F1–F3、旧 R1–R3 和新 A2–A4 的 Chat Completions 返回协议；A0/A1/R0 不调用 LLM。旧 schema 由 `harness-tool.ts` 定义，新 `submit_anki_pipeline` / `verify_anki_pipeline` schema 与严格字段、问题类型和证据 ID 校验由 `core/study/pipeline.ts` 定义；未通过的批次不会被当成完成结果。
 
 新 A 档位复用以下供应商协议协商。生成请求带输出 token 上限：OpenAI 官方地址用 `max_completion_tokens`，其他端点用 `max_tokens`。预算模式在每次 HTTP/协议重试前检查保守估算；返回 usage 时用供应商数字记账，未报告时用估算。`budgetTokens` 是实际/估算合并的预算记账，不能显示成已确认计费 token；正常输入/输出 token 与估算分开展示。单次实际用量仍可能超过估算；真实供应商和推理模型兼容性尚未验收。A 阶段预算不包含用户单独启动的 F 筛词，详情见 [Anki Harness](anki-harness.md)。
 
 2026-10-04：协议实现移动到 `src/core/services/llm.ts`，Electron 原 `src/main/llm/service.ts` 为 Node 平台适配器，公共入口保持兼容。Tauri 服务 Worker 共用该实现，Rust 保存密钥并发送 HTTP；本轮验证覆盖协议适配、真实词卡分析和截断返回，完整 Tauri Anki 流水线/缩批与卡片恢复尚待迁移，见[迁移范围](tauri-migration.md)。
+
+2026-10-15：A 生成 schema 新增字符串 `etymology`，完整输出 schema 要求返回，历史 JSON 解析允许省略以兼容旧任务。只有选中词源且为舶来语候选才保存；未知或不确定来源留空，不作为必需字段阻断。外部 AI MD 与返回校验共用同一字段逻辑，详见[Harness](anki-harness.md#2026-10-15流程卡面词源与气泡截图)。新字段导致 schema 能力指纹更新，旧缓存不冒充新版协议已验证。
 
 ## 默认选择与降级
 

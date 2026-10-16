@@ -7,8 +7,11 @@
  * 手感就是这样：进阅读器再出来，列表还停在原处）。
  */
 
+import type { ReadingEntry, ReadingEntryDraft } from '@shared/reading';
+import { ReadingJournal } from './components/ReadingJournal';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
+import type { ImportQueueState } from '@shared/imports';
 import type { LlmSettings, TranslationSettings } from '@shared/types';
 import { CURRENT_SEGMENT_ENGINE } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
@@ -62,6 +65,21 @@ export function App(): JSX.Element {
   const [banner, setBanner] = useState<string | null>(null);
   const [status, setStatus] = useState('就绪');
   const [busy, setBusy] = useState(false);
+  const [journal, setJournal] = useState<{ bookId?: string; draft?: ReadingEntryDraft } | null>(null);
+  const [journalJump, setJournalJump] = useState<{ token: number; entry: ReadingEntry } | null>(null);
+  const jumpToJournalEntry = async (entry: ReadingEntry) => {
+    const result = await call('打开阅读记录原文', () => api.library.open(entry.bookId));
+    if (!result) throw new Error('无法打开阅读记录的原书');
+    const book = result.book;
+    const position = entry.position;
+    const valid = (book.readerMode ?? book.format) === 'comic'
+      ? !!book.pages?.some((page, index) => entry.pageUrl ? page.url === entry.pageUrl : index === position.pageIndex)
+      : !!book.spine?.some((chapter, index) => position.spineHref ? chapter.href === position.spineHref : index === position.spineIndex);
+    if (!valid) throw new Error('原文位置已失效，书籍内容可能已更换');
+    setJournal(null); setOpen(result); setView('reader');
+    setJournalJump({ token: Date.now(), entry });
+    notifyMain('reader:opened', { bookId: entry.bookId });
+  };
   const [searchRequest, setSearchRequest] = useState(0);
   const [shown, setShown] = useState({ shown: 0, total: 0 });
 
@@ -82,6 +100,7 @@ export function App(): JSX.Element {
    */
   const [ocrQueue, setOcrQueue] = useState<OcrQueueState | null>(null);
   const [studyQueue, setStudyQueue] = useState<StudyTaskQueueState | null>(null);
+  const [importQueue, setImportQueue] = useState<ImportQueueState | null>(null);
 
   /**
    * 扩展状态。
@@ -167,6 +186,7 @@ export function App(): JSX.Element {
   });
 
   useIpcEvent('study:queue', (state) => setStudyQueue(state));
+  useIpcEvent('library:importQueue', state => setImportQueue(state));
   useIpcEvent('study:done', (task) => {
     setStatus(task.status === 'completed'
       ? `${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}完成：《${task.title}》`
@@ -272,6 +292,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     void api.ocr.queue().then(setOcrQueue).catch(() => undefined);
     void api.study.taskQueue().then(setStudyQueue).catch(() => undefined);
+    void api.library.importQueue().then(setImportQueue).catch(() => undefined);
   }, []);
 
   const loadExtensions = useCallback(async () => {
@@ -479,6 +500,19 @@ export function App(): JSX.Element {
     setView(settingsReturnView);
   }, [settingsReturnView, open]);
 
+  const closeSegments = useCallback(async () => {
+    if (segmentReturnView === 'reader' && open) {
+      const refreshed = await call('恢复阅读位置', () => api.library.open(open.book.id));
+      if (!refreshed) return;
+      setOpen(refreshed);
+    }
+    setView(segmentReturnView);
+    setSegmentBookId(null); setSegmentData(null);
+  }, [segmentReturnView, open]);
+  const backLabel = view === 'settings'
+    ? settingsReturnView === 'reader' ? '返回阅读' : settingsReturnView === 'segments' ? '返回词汇与制卡' : '返回书库'
+    : view === 'segments' && segmentReturnView === 'reader' ? '返回阅读' : '返回书库';
+
   useIpcEvent('shell:openFiles', (payload) => {
     if (!payload || !Array.isArray(payload.paths) || payload.paths.length === 0) return;
     const paths = payload.paths.filter((path): path is string => typeof path === 'string');
@@ -555,7 +589,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (mod && key === 'f') {
@@ -571,6 +605,8 @@ export function App(): JSX.Element {
         if (view === 'settings') {
           event.preventDefault();
           void closeSettings();
+        } else if (view === 'segments') {
+          event.preventDefault(); void closeSegments();
         } else if (view === 'reader') {
           // 词典弹窗在**捕获阶段**处理 Esc 并 stopPropagation，所以走到这里说明
           // 没有弹窗——退到书库才是此时用户的意思。
@@ -586,7 +622,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [view, openSettings, closeSettings, leaveReader, settings.showDetail, selectedIds.length]);
+  }, [view, openSettings, closeSettings, closeSegments, leaveReader, settings.showDetail, selectedIds.length]);
 
   // ------------------------------------------------------------------
 
@@ -648,7 +684,9 @@ export function App(): JSX.Element {
         onImportFiles={() => void importViaDialog('files')}
         onImportDirectory={() => void importViaDialog('directory')}
         onOpenSettings={openSettings}
-        onLeaveReader={leaveReader}
+        onOpenJournal={() => setJournal({})}
+        backLabel={backLabel}
+        onBack={() => { if (view === 'settings') void closeSettings(); else if (view === 'segments') void closeSegments(); else leaveReader(); }}
       />
 
       <div className="app-main">
@@ -671,10 +709,13 @@ export function App(): JSX.Element {
         {view === 'reader' &&
           (open ? (
             <ReaderView
+              key={open.book.id}
               open={open}
+              journalOpen={journal !== null}
+              journalJump={journalJump}
+              onOpenJournal={draft => setJournal({ bookId: open.book.id, draft })}
               systemBarsVisible={systemBarsVisible}
               onSystemBarsChange={setSystemBarsVisible}
-              onBack={leaveReader}
               onStatus={setStatus}
               ocrProgress={ocrProgress[open.book.id] ?? null}
               ocrResult={ocrResult[open.book.id] ?? null}
@@ -693,8 +734,6 @@ export function App(): JSX.Element {
         {view === 'settings' && (
           <SettingsPanel
             info={info.data}
-            onClose={() => void closeSettings()}
-            returnLabel={settingsReturnView === 'reader' ? '返回阅读' : settingsReturnView === 'segments' ? '返回词汇与制卡' : '返回书库'}
             onStatus={setStatus}
             ocrCapability={ocrCapability}
             onRefreshOcrCapability={() => void loadOcrCapability()}
@@ -742,11 +781,6 @@ export function App(): JSX.Element {
             segments={segmentData}
             loading={segmentLoading}
             isComic={segmentIsComic}
-            onBack={() => {
-              setView(segmentReturnView);
-              setSegmentBookId(null);
-              setSegmentData(null);
-            }}
             onGenerate={(force) => void startSegment(force)}
             onClear={() => void clearSegment()}
             onReload={() => void reloadSegments(segmentBookId)}
@@ -755,6 +789,8 @@ export function App(): JSX.Element {
         )}
       </div>
 
+      {journal && <ReadingJournal bookId={journal.bookId} initialDraft={journal.draft}
+        onClose={() => setJournal(null)} onJump={jumpToJournalEntry} />}
       <StatusBar
         info={info.data}
         shown={counts.shown}
@@ -768,6 +804,9 @@ export function App(): JSX.Element {
             onCancel={cancelOcr}
             onOpenBook={(bookId) => void openBook(bookId)}
             studyQueue={studyQueue}
+            importQueue={importQueue}
+            onCancelImport={id => void call('取消导入排队', () => api.library.cancelImport(id))}
+            onDismissImport={id => void call('清除导入结果', () => api.library.dismissImport(id))}
             onCancelStudy={(id) => void call('取消 AI 任务', () => api.study.cancelTask(id))}
             onDismissStudy={(id) => void call('清除任务结果', () => api.study.dismissTask(id))}
             onOpenStudy={(bookId, title) => void openSegments(bookId, title, 'study', true)}

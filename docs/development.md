@@ -53,6 +53,10 @@ Windows 已使用 Node 22.19.0 和 24.19.0 验证。Rust 解包器需要 Rust/MS
 
 Windows 使用 Rust/MSVC 与 WebView2。Tauri 原生解包库直接链接到应用，无须另外打包 Node.js 或解包 sidecar。构建通过不能写成安装/卸载验收通过。
 
+2026-10-13 启动修正：`npm start` / `scripts/tauri.mjs` 优先使用仓库内 `.rust/cargo/bin/cargo`（Windows 为 `cargo.exe`），自动向所有构建及 Tauri CLI 子进程传递对应的 `PATH`、`CARGO_HOME` 和 `RUSTUP_HOME`；没有仓库工具链时沿用系统 Cargo。无需手动 export 或重复安装 Rust。此前脚本仅查系统 PATH，会在前端构建后报 `spawn cargo ENOENT`；现在启动前先探测 Cargo，缺失或不可运行时给出明确提示。
+
+本轮 macOS arm64 / Node 22.22.2 / 仓库 Cargo 1.98.1：`npm start` 已实际完成 Swift OCR 工具、Vite 和 Rust debug 构建，并运行 `src-tauri/target/debug/aralebook-tauri`，进程持续运行；无 `spawn cargo ENOENT`。日志为 `.tmp/startup-2026-10-13/start-native.log`。OCR 探测仍报告本机缺少系统识别资源，属于已有能力状态，不阻止启动。脚本语法/diff 检查通过，新增启动夹具验证仓库 Cargo 环境传递及缺 Cargo 的提前失败；自动化工具无法绑定未打包的 macOS 应用，窗口内容和原生操作未做 GUI 验收，Windows 和安装包未验证。
+
 ## OCR 开发
 
 Tauri debug 自动加载本机 `engines/arale_onnx_v1/build/dev-<platform>-<arch>/extension.json`，正式 release 只使用已安装扩展；`ARALE_TAURI_NO_DEV_ENGINE=1` 仅用于隔离测试关闭自动发现。若 release 窗口仍开着，单实例机制会让新 debug 启动只唤醒已有 release；先关闭当前窗口，再执行 `node scripts/tauri.mjs dev`。

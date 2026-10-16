@@ -9,6 +9,7 @@
  * 它也碰不到 Node.js（见 shared/types.ts 中 ChapterContent 的注释）。
  */
 
+import type { ReaderJournalProps } from '@shared/reading';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BookRecord,
@@ -27,7 +28,7 @@ import { ReaderEdgeTurns } from './ReaderEdgeTurns';
 import { isTauri } from '../lib/tauri-bridge';
 import { SelectionLookupButton, useSelectionAction } from './SelectionLookupButton';
 
-export interface EpubReaderProps {
+export interface EpubReaderProps extends ReaderJournalProps {
   book: BookRecord;
   /** 上次的阅读位置；spineIndex + charOffset 都在这里恢复。 */
   initialPosition: ReadingPosition | null;
@@ -63,6 +64,7 @@ export function EpubReader({
   onProgress,
   onOpenSegments,
   wordCards,
+  onPosition, onExcerpt, jump,
 }: EpubReaderProps): JSX.Element {
   // 设置页里的是**默认值**；阅读器里改的写进本书的覆盖值。
   const { settings, patch: patchBook } = useBookSettings(book.id);
@@ -93,6 +95,7 @@ export function EpubReader({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   /** 最近一次从 iframe 收到的全局文本偏移；null = 本章还没报过，不能让 0 覆盖已存进度。 */
   const offsetRef = useRef<number | null>(null);
+  const jumpQuoteRef = useRef('');
   const fractionRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
 
@@ -101,6 +104,8 @@ export function EpubReader({
   spineIndexRef.current = spineIndex;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const journalPositionRef = useRef(onPosition);
+  journalPositionRef.current = onPosition;
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
 
@@ -199,6 +204,7 @@ export function EpubReader({
     setLoadError(null);
     setChapter(null);
     offsetRef.current = null;
+    journalPositionRef.current?.({ bookId: book.id, spineIndex, charOffset: 0, updatedAt: Date.now() }, []);
 
     void call('加载章节', () => api.book.chapter(book.id, spineIndex)).then((content) => {
       if (!alive) return;
@@ -239,6 +245,22 @@ export function EpubReader({
     },
     [flushNow, spine.length],
   );
+
+  useEffect(() => {
+    if (!jump || jump.entry.bookId !== book.id) return;
+    const position = jump.entry.position;
+    const index = position.spineHref ? spine.findIndex(item => item.href === position.spineHref) : position.spineIndex ?? -1;
+    if (index < 0 || index >= spine.length) return;
+    const offset = position.charOffset ?? 0;
+    if (index === spineIndexRef.current && chapter) {
+      post({ type: 'restore', absoluteOffset: offset });
+      if (jump.entry.quote) post({ type: 'highlight', start: offset, end: offset + jump.entry.quote.length });
+    } else {
+      pendingRestoreRef.current = { spineIndex: index, offset };
+      jumpQuoteRef.current = jump.entry.quote;
+      goToSpine(index);
+    }
+  }, [jump, book.id, spine, goToSpine, post]);
 
   const jumpToCardSource = useCallback((source: import('@shared/types').WordCardSource | null) => {
     if (source?.kind !== 'epub' || source.spineIndex < 0 || source.spineIndex >= spine.length) return;
@@ -375,6 +397,9 @@ export function EpubReader({
       switch (data.type) {
         case 'ready': {
           const pending = pendingRestoreRef.current;
+          const index = spineIndexRef.current;
+          const restoredOffset = pending?.spineIndex === index ? pending.offset : 0;
+          journalPositionRef.current?.({ bookId: book.id, spineIndex: index, charOffset: restoredOffset, spineHref: spine[index]?.href, updatedAt: Date.now() }, [`chapter:${index}`]);
           if (pending !== null && pending.spineIndex === spineIndexRef.current) {
             post({ type: 'restore', absoluteOffset: pending.offset });
             pendingRestoreRef.current = null;
@@ -383,19 +408,27 @@ export function EpubReader({
           // CSS 变量短暂处于「一半新一半旧」的状态（切换时会出现一帧闪烁）。
           post({ type: 'appearance', value: readerAppearance(settingsRef.current) });
           post({ type: 'mode', vertical: settingsRef.current.vertical });
+          if (jumpQuoteRef.current) {
+            post({ type: 'highlight', start: restoredOffset, end: restoredOffset + jumpQuoteRef.current.length });
+            jumpQuoteRef.current = '';
+          }
           break;
         }
         case 'click':
+          window.dispatchEvent(new Event('reading:interaction'));
           selectionAction.dismiss();
           void handleClick(data);
           break;
         case 'selection':
+          window.dispatchEvent(new Event('reading:interaction'));
           void handleSelection(data);
           break;
         case 'selectionClear':
           selectionAction.dismiss();
           break;
         case 'position':
+          window.dispatchEvent(new Event('reading:interaction'));
+          journalPositionRef.current?.({ bookId: book.id, spineIndex: spineIndexRef.current, charOffset: data.absoluteOffset, spineHref: spine[spineIndexRef.current]?.href, updatedAt: Date.now() }, [`chapter:${spineIndexRef.current}`]);
           offsetRef.current = data.absoluteOffset;
           fractionRef.current = data.fraction;
           scheduleSave();
@@ -434,6 +467,7 @@ export function EpubReader({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
       const target = event.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName;
@@ -479,6 +513,7 @@ export function EpubReader({
 
   // 主进程菜单 → 翻章 / 缩放。
   useShellCommand((command) => {
+    if (document.querySelector('dialog[open]')) return;
     switch (command) {
       case 'nextPage':
         goToSpine(spineIndexRef.current + 1);
@@ -646,7 +681,12 @@ export function EpubReader({
 
       {/* 弹窗可同时开多张：pin 住的不会被后来者顶掉。 */}
       {selectionAction.pending && <SelectionLookupButton point={selectionAction.pending.point} busy={selectionAction.busy}
-        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss} />}
+        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss}
+        onExcerpt={onExcerpt ? () => { const message = selectionAction.pending!.payload;
+          onExcerpt({ bookId: book.id, kind: 'excerpt', title: message.text.slice(0, 60), quote: message.text, note: '',
+            position: { bookId: book.id, spineIndex, charOffset: message.absoluteOffset, spineHref: spine[spineIndex]?.href, updatedAt: Date.now() } });
+          selectionAction.dismiss();
+        } : undefined} />}
       {wordCards.popups.map((popup, index) => (
         <WordCardPopup
           key={popup.id}

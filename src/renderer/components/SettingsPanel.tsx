@@ -32,8 +32,6 @@ import {
 
 export interface SettingsPanelProps {
   info: LibraryInfo | null;
-  onClose: () => void;
-  returnLabel?: string;
   onStatus: (message: string) => void;
   /** 各 OCR 引擎的可用性与就绪状态（App 启动时探过一次）。 */
   ocrCapability?: OcrCapability | null;
@@ -82,8 +80,6 @@ export interface SettingsPanelProps {
 
 export function SettingsPanel({
   info,
-  onClose,
-  returnLabel = '返回书库',
   onStatus,
   ocrCapability = null,
   onRefreshOcrCapability,
@@ -168,10 +164,6 @@ export function SettingsPanel({
     <div className="settings">
       <div className="settings-header">
         <span className="settings-title">设置</span>
-        <nav className="settings-navigation" aria-label="设置分组">
-        <input type="search" aria-label="查找设置分组" placeholder="查找设置分组" value={settingsQuery} onChange={e => setSettingsQuery(e.target.value)} />
-        {groups.filter(([,label]) => label!.toLowerCase().includes(settingsQuery.toLowerCase())).map(([id,label]) => <button type="button" key={id} className="btn btn-sm" onClick={() => document.getElementById('settings-'+id)?.scrollIntoView({block:'start'})}>{label}</button>)}
-      </nav>
         <div className="settings-header-actions">
           <button
             type="button"
@@ -185,12 +177,14 @@ export function SettingsPanel({
           >
             重置界面偏好
           </button>
-          <button type="button" className="btn btn-sm" onClick={onClose}>
-            {returnLabel}
-          </button>
         </div>
       </div>
 
+      <nav className="settings-navigation" aria-label="设置分组">
+        <input type="search" aria-label="查找设置分组" placeholder="查找设置分组" value={settingsQuery} onChange={e => setSettingsQuery(e.target.value)} />
+        {groups.filter(([,label]) => label!.toLowerCase().includes(settingsQuery.toLowerCase())).map(([id,label]) => <button type="button" key={id} className="btn btn-sm" onClick={() => document.getElementById('settings-'+id)?.scrollIntoView({block:'start'})}>{label}</button>)}
+        {!groups.some(([,label]) => label!.toLowerCase().includes(settingsQuery.toLowerCase())) && <span role="status" className="muted">没有匹配的设置分组</span>}
+      </nav>
       <div className="settings-body"><p className="settings-save-hint">界面和阅读偏好即时生效并自动保存；LLM 配置和提示词请点击对应的保存按钮。</p>
         <AppVersionCard />
         {/* ---------------- 书库 ---------------- */}

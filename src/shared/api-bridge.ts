@@ -28,6 +28,9 @@ export function createAraleApi(transport: ApiTransport): AraleApi {
       list: (query) => transport.invoke(IPC.libraryList, query),
       importPaths: (paths) => transport.invoke(IPC.libraryImport, paths),
       importViaDialog: (kind) => transport.invoke(IPC.libraryImportDialog, kind),
+      importQueue: () => transport.invoke(IPC.libraryImportQueue),
+      cancelImport: (id) => transport.invoke(IPC.libraryCancelImport, id),
+      dismissImport: (id) => transport.invoke(IPC.libraryDismissImport, id),
       remove: (bookIds) => transport.invoke(IPC.libraryRemove, bookIds),
       open: (bookId) => transport.invoke(IPC.libraryOpen, bookId),
       savePosition: (position) => transport.invoke(IPC.librarySavePosition, position),
@@ -69,6 +72,13 @@ export function createAraleApi(transport: ApiTransport): AraleApi {
       read: () => transport.invoke(IPC.defaultsRead),
       write: (patch) => transport.invoke(IPC.defaultsWrite, patch),
     },
+    reading: {
+      snapshot: () => transport.invoke(IPC.readingSnapshot),
+      save: draft => transport.invoke(IPC.readingSave, draft),
+      remove: (id, updatedAt) => transport.invoke(IPC.readingRemove, id, updatedAt),
+      record: activity => transport.invoke(IPC.readingRecord, activity),
+      export: ids => transport.invoke(IPC.readingExport, ids),
+    },
     cards: {
       list: (bookId) => transport.invoke(IPC.cardsList, bookId),
       add: (bookId, draft) => transport.invoke(IPC.cardsAdd, bookId, draft),
@@ -95,6 +105,7 @@ export function createAraleApi(transport: ApiTransport): AraleApi {
       clear: (bookId) => transport.invoke(IPC.segmentClear, bookId),
     },
     study: {
+      previewImage: (bookId, candidateId, contextRef) => transport.invoke(IPC.studyPreviewImage, bookId, candidateId, contextRef),
       read: (bookId) => transport.invoke(IPC.studyRead, bookId),
       generate: (bookId) => transport.invoke(IPC.studyGenerate, bookId),
       cancel: (bookId) => transport.invoke(IPC.studyCancel, bookId),

@@ -31,11 +31,12 @@ function fixture(){
     if(channel==='service:http'){
       while(!cancelled.has(args[0].id))await delay(1);return {aborted:true};
     }
+    if(channel==='comic:pageText'){assert.equal(args[0],'book');return {blocks:[{box:[100,10,120,100],vertical:true,fontSize:20,singleLine:true,lines:['猫です。']},{box:[70,10,90,100],vertical:true,fontSize:20,singleLine:true,lines:['好きです。']}]};}
     if(channel==='study:initialize'){owner=args[0];return structuredClone(queue);}
     assert.equal(args[0],owner,'all native operations must belong to current Worker');
     switch(channel){
       case 'study:lease': if(args[2]){assert(!leases.has(args[1]));leases.add(args[1]);}else leases.delete(args[1]);return;
-      case 'study:snapshot':return {book:{id:'book',format:'comic',readerMode:'comic',title:'test'},segments:{bookId:'book',generatedAt:1,units:[{ref:'page:p.png#0',text:'猫です。',label:'page',tokens:[]}],vocabulary:[]},list:structuredClone(list),revision:String(revision),source:'source',dictionary:'dict'};
+      case 'study:snapshot':return {book:{id:'book',format:'comic',readerMode:'comic',title:'test',pages:[{url:'p.png',width:200,height:200}]},segments:{bookId:'book',generatedAt:1,units:[{ref:'page:p.png#0',text:'猫です。',label:'page',tokens:[]}],vocabulary:[]},list:structuredClone(list),revision:String(revision),source:'source',dictionary:'dict'};
       case 'study:commit':
         if(failCommit)throw Error('disk commit failed');
         assert.equal(args[2].revision,String(revision),'commits must be serialized with updated revisions');
@@ -44,6 +45,7 @@ function fixture(){
       case 'study:select':return {token:'grant',path:'C:/isolated/selected.tsv'};
       case 'study:writeExport':if(failWrite)throw Error('export disk failed');return;
       case 'study:releaseExport':return;
+      case 'study:image':return {name:'bubble.png',data:'aW1hZ2U='};
       default:throw Error(channel);
     }
   };
@@ -97,4 +99,16 @@ async function generate(f) {const list=await f.adapter.request('study:generate',
   assert.equal(result.workflow.manualAi.cards.directory,f.list().workflow.manualAi.cards.directory);
   console.log('ok manual MD session stores actual directory in its first checkpoint');
 }
-console.log('Tauri study adapter: 5/5 passed');
+
+{
+  const f=fixture(); const list=await generate(f);
+  const preview=await f.adapter.request('study:previewImage',['book',list.candidates[0].id]);
+  assert.match(preview,/^data:image\/png;base64,/);
+  const request=f.calls.find(call=>call.channel==='study:image');
+  assert.deepEqual(request.args[4],[0,1]);
+  assert.equal(f.calls.filter(call=>call.channel==='service:http').length,0);
+  assert.equal(f.leases.size,0);
+  console.log('ok screenshot preview groups all context lines without external requests or mutation leases');
+}
+
+console.log('Tauri study adapter: 6/6 passed');

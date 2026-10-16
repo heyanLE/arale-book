@@ -65,3 +65,39 @@ export function strokeHit(point: AnnotationPoint, stroke: AnnotationStroke, tole
   });
 }
 export function layerCount(layer: AnnotationLayer): number { return Object.values(layer.objects).reduce((n, rows) => n + rows.length, 0); }
+
+/** 检查橡皮移动整段轨迹，快速划过细笔迹时也能命中。 */
+export function strokeHitSweep(start: AnnotationPoint, end: AnnotationPoint, stroke: AnnotationStroke, tolerance: number): boolean {
+  if (strokeHit(start, stroke, tolerance) || strokeHit(end, stroke, tolerance)) return true;
+  const sweep: AnnotationStroke = { ...stroke, width: .5, points: [start, end] };
+  if (stroke.points.some(p => strokeHit(p, sweep, Math.max(0, stroke.width / 2 + tolerance - .25)))) return true;
+  const cross = (a: AnnotationPoint, b: AnnotationPoint, p: AnnotationPoint) => (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  return stroke.points.slice(1).some((b, i) => {
+    const a = stroke.points[i]!;
+    return Math.max(a.x, b.x) >= Math.min(start.x, end.x) && Math.min(a.x, b.x) <= Math.max(start.x, end.x)
+      && Math.max(a.y, b.y) >= Math.min(start.y, end.y) && Math.min(a.y, b.y) <= Math.max(start.y, end.y)
+      && cross(start, end, a) * cross(start, end, b) <= 0 && cross(a, b, start) * cross(a, b, end) <= 0;
+  });
+}
+
+/** 保留原始点用于存储/命中，以中点二次曲线显示连续笔迹。 */
+export function strokePath(points: AnnotationPoint[]): string {
+  if (!points.length) return '';
+  const first = points[0]!;
+  let path = `M ${first.x} ${first.y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i]!, next = points[i + 1]!;
+    path += ` Q ${p.x} ${p.y} ${(p.x + next.x) / 2} ${(p.y + next.y) / 2}`;
+  }
+  const last = points.at(-1)!;
+  return `${path} L ${last.x} ${last.y}`;
+}
+
+/** 一次橡皮手势作为一个文档事务提交，保留隐藏/锁定内容及其他页面。 */
+export function erasePageInk(document: ComicAnnotations, url: string, ids: Set<string>): ComicAnnotations {
+  return { ...document, layers: document.layers.map(layer => {
+    const objects = layer.objects[url];
+    if (layer.type !== 'pen' || !layer.visible || layer.locked || !objects?.some(o => ids.has(o.id))) return layer;
+    return { ...layer, objects: { ...layer.objects, [url]: objects.filter(o => !ids.has(o.id)) } };
+  }) };
+}

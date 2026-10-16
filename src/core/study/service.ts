@@ -671,9 +671,9 @@ export class StudyService {
       }
       draft.contextRef = patch.contextRef;
     }
-    for (const key of ['expression', 'lemma', 'reading', 'sentence', 'sourceLabel', 'meaning', 'sentenceTranslation', 'usage', 'nuance'] as const) {
+    for (const key of ['expression', 'lemma', 'reading', 'sentence', 'sourceLabel', 'meaning', 'sentenceTranslation', 'usage', 'nuance', 'etymology'] as const) {
       if (typeof patch[key] !== 'string') continue;
-      const value = patch[key]!.trim().slice(0, key === 'meaning' ? 15000 : key === 'sentence' || key === 'sentenceTranslation' ? 5000 : key === 'sourceLabel' ? 300 : 1000);
+      const value = patch[key]!.trim().slice(0, key === 'meaning' ? 15000 : key === 'sentence' || key === 'sentenceTranslation' ? 5000 : key === 'sourceLabel' ? 300 : key === 'etymology' ? 1200 : 1000);
       if ((key === 'expression' || (key === 'sentence' && (!draft.fields || draft.fields.includes('sentence')))) && !value) throw new Error('词语和所选原句不能为空');
       if (key === 'reading' && value !== draft.reading) draft.readingSource = 'manual';
       draft[key] = value;
@@ -682,7 +682,7 @@ export class StudyService {
     if (isPipelineTier(list.workflow!.cardRun!.tier) && missingReading) {
       Object.assign(draft, withIssues(draft, [...(draft.issues ?? []), { field: 'reading', code: 'missing', reason: '请补全汉字词的读音后再通过审核' }]));
     }
-    const complete = draft.fields ? draft.fields.every(f => f === 'lemma' ? !!draft.lemma : f === 'sentence' ? !!draft.sentence : !!draft[f]) : !!draft.meaning && (list.workflow?.cardRun?.tier === 'A0' || !!draft.sentenceTranslation);
+    const complete = draft.fields ? draft.fields.every(f => f === 'etymology' ? true : f === 'lemma' ? !!draft.lemma : f === 'sentence' ? !!draft.sentence : !!draft[f]) : !!draft.meaning && (list.workflow?.cardRun?.tier === 'A0' || !!draft.sentenceTranslation);
     if (patch.status === 'deferred') {
       draft.status = 'deferred';
       draft.needsReview = true;

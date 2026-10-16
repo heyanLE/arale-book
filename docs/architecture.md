@@ -1,6 +1,12 @@
 # 当前架构与数据流
 
+2026-10-15 制卡更新：`card-content.ts` 统一净化导出学习内容，`etymology.ts` 提取明确词典词源并辅助路由；`etymology` 经生成、外部任务、编辑、预览进入 v3 Anki 模型。`TauriStudy.image` 复用阅读器上下文分组，下发真实块下标，`study_image.rs` 负责闭合浅色气泡取景及边框／尾部留白。`study:previewImage` 沿同一原生路径只读预览。界面保留五步但突出当前任务、折叠高级信息；全部改动与验证见[制卡优化验收](anki-ux-2026-10-15.md)。
+
+2026-10-15 阅读记录：`reading:*` 经受限 API 桥接直接进入 `reading.rs`，在现有后台存储锁下验证位置／记录版本并原子更新根目录 `reading-journal.json` v1；包含个人书签／摘录／笔记、按天按书统计和最近上报去重 ID。`ReaderView` 接收两个阅读器的实际位置与选区，`ReadingJournal` 用独立 dialog 提供搜索、编辑、回跳和统计；不挤占词卡侧栏。计时／上报在 `reading-activity.ts`，前台闲置判定与跨午夜拆分复用 `core/reading/activity.ts`；阅读查词在 `useWordCards` 统一记录，已存词卡重开与后台词典查询不计入。Markdown 文件导出在释放后台锁后打开原生保存对话框并原子写入选择路径。详见[阅读记录与统计](reading-journal.md)。
+
 核对日期：2026-10-05。状态和待办见[当前状态](current-state.md)。
+
+2026-10-13 导入更新：漫画纯容器包在 `importer.rs` 展开成独立分卷，准备/解压不持有 `Backend` 锁，逐卷短锁发布并发出 `library:changed`。`dictionary-worker.ts` 中的会话 FIFO 为漫画、顶层 EPUB、图片和文件夹统一广播 `library:importQueue`；原生漫画阶段通过桥接转入同一队列。`App.tsx` 订阅后交给右下角 `OcrQueueDock`，并支持读取队列、取消等待项及清除结果。数据契约、边界和验证见 [导入文档](imports.md)。
 
 Tauri 使用自身 `app_data_dir()`，没有旧版数据迁入 UI、IPC、Worker 分支或启动迁入恢复器。本机开发数据已通过仓库外的一次性操作复制到该目录，保留书 ID/学习侧文件并重绑定 dir；未来用户直接在当前版本导入书籍。旧 Electron 目录与复制前目标目录备份保留，应用不自动读取它们。
 
@@ -83,6 +89,7 @@ Anki 第 2/4 步的自行 AI 文件/返回协议在 `src/core/study/manual-ai.ts
   library/<bookId>/original.*
   dictionaries/
   positions.json
+  reading-journal.json             # 个人阅读记录、按天统计、近期上报去重
   settings.json
   llm.json                        # 含本机 API key，不作为公开迁移材料
   extensions/repositories.json

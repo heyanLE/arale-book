@@ -1,5 +1,6 @@
 mod annotations;
 mod cards;
+mod reading;
 mod dictionaries;
 mod epub;
 mod extensions;
@@ -9,6 +10,7 @@ mod segments;
 mod services;
 pub mod storage;
 mod study;
+mod study_image;
 mod system;
 #[cfg(test)]
 mod tests;
@@ -109,6 +111,20 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
     if channel == "app:openRelease" {
         updates::open_release(args.first().and_then(Value::as_str))?;
         return Ok(Value::Null);
+    }
+    if channel == "reading:export" {
+        let ids = args.first().and_then(Value::as_array).context("缺少导出记录")?;
+        let text = {
+            let backend = app.state::<Mutex<Backend>>();
+            let backend = backend.lock().map_err(|_| anyhow::anyhow!("后台存储锁不可用"))?;
+            reading::markdown(&backend, ids)?
+        };
+        let file = app.dialog().file().set_title("导出书签、摘录与笔记")
+            .set_file_name("阅读记录.md").add_filter("Markdown", &["md"]).blocking_save_file();
+        let Some(file) = file else { return Ok(Value::Null); };
+        let path = file.into_path().map_err(|error| anyhow::anyhow!("{error}"))?;
+        reading::write_export(&path, &text)?;
+        return Ok(json!({"path":path.to_string_lossy(),"count":ids.len()}));
     }
     if channel.starts_with("study:") {
         return app.state::<study::Study>().dispatch(app, channel, args);
@@ -233,6 +249,27 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
     } else {
         None
     };
+    if channel == "library:import" || channel == "library:importDialog" {
+        let paths = importer::paths(&selected.map(Value::Array).unwrap_or_else(|| args.first().cloned().unwrap_or(Value::Null)))?;
+        let (root, direction) = {
+            let backend = state.lock().map_err(|_| anyhow::anyhow!("后台存储锁不可用"))?;
+            let settings = storage::read(&backend.root.join("settings.json"), json!({}))?;
+            (backend.root.clone(), if settings["direction"] == "ltr" { "ltr" } else { "rtl" })
+        };
+        let task_id = args.get(1).and_then(Value::as_str).unwrap_or("");
+        let progress = |mut payload: Value| {
+            if !task_id.is_empty() { payload["taskId"] = json!(task_id); event(app, "library:importProgress", payload); }
+        };
+        let mut results = vec![];
+        for path in paths {
+            results.extend(importer::import_batch(&root, &path, direction, &progress, &mut |book| {
+                let added = state.lock().map_err(|_| anyhow::anyhow!("后台存储锁不可用"))?.add(book)?;
+                event(app, "library:changed", json!({"reason":"import"}));
+                Ok(added)
+            }));
+        }
+        return Ok(json!(results));
+    }
     let mut backend = state
         .lock()
         .map_err(|_| anyhow::anyhow!("后台存储锁不可用"))?;
@@ -249,24 +286,6 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
         ),
         "library:list" => Ok(backend.list(first)),
         "library:select" => Ok(json!(selected.unwrap_or_default())),
-        "library:import" | "library:importDialog" => {
-            let paths =
-                importer::paths(&selected.map(Value::Array).unwrap_or_else(|| first.clone()))?;
-            let mut results = vec![];
-            for path in paths {
-                let result = match importer::import(&mut backend, &path) {
-                    Ok(book) => {
-                        json!({"ok":true,"source":path.to_string_lossy(),"bookId":book["id"],"format":book["format"],"error":null})
-                    }
-                    Err(error) => {
-                        json!({"ok":false,"source":path.to_string_lossy(),"bookId":null,"format":null,"error":format!("{error:#}")})
-                    }
-                };
-                results.push(result);
-            }
-            event(app, "library:changed", json!({"reason":"import"}));
-            Ok(json!(results))
-        }
         "library:open" => {
             let id = string(args, 0)?;
             let book = backend.book(id)?;
@@ -383,6 +402,10 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
             string(args, 0)?,
             args.get(1).context("缺少批注内容")?.clone(),
         ),
+        "reading:snapshot" => reading::snapshot(&backend),
+        "reading:save" => reading::save(&backend, first),
+        "reading:remove" => reading::remove(&backend, string(args, 0)?, args.get(1).and_then(Value::as_u64).context("缺少记录版本")?),
+        "reading:record" => reading::record(&backend, first),
         "cards:list" => Ok(json!(cards::list(&backend, string(args, 0)?)?)),
         "cards:add" | "cards:update" | "cards:remove" => {
             let id = string(args, 0)?;

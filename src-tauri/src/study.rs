@@ -269,6 +269,7 @@ impl Study {
                 text(1)?,
                 args.get(2).context("缺少出处")?,
                 text(3)?,
+                args.get(4),
             ),
             _ => bail!("未知制卡原生调用"),
         }
@@ -391,7 +392,7 @@ fn sqlite(commands: &Value) -> Result<Vec<u8>> {
     connection.close().map_err(|(_, e)| e)?;
     Ok(fs::read(path)?)
 }
-fn image(backend: &Backend, id: &str, occurrence: &Value, mode: &str) -> Result<Value> {
+fn image(backend: &Backend, id: &str, occurrence: &Value, mode: &str, group: Option<&Value>) -> Result<Value> {
     let reference = occurrence["ref"].as_str().context("缺少漫画出处")?;
     let (url, block) = reference
         .strip_prefix("page:")
@@ -437,17 +438,22 @@ fn image(backend: &Backend, id: &str, occurrence: &Value, mode: &str) -> Result<
             .iter()
             .map(|x| x.as_f64().context("无效文字框"))
             .collect::<Result<_>>()?;
-        let padding = (img.width().min(img.height()) as f64 * 0.004)
-            .round()
-            .max(8.0);
-        let x1 = (v[0] - padding).floor().max(0.0);
-        let y1 = (v[1] - padding).floor().max(0.0);
-        let x2 = (v[2] + padding).ceil().min(img.width() as f64);
-        let y2 = (v[3] + padding).ceil().min(img.height() as f64);
-        if x2 <= x1 || y2 <= y1 {
-            bail!("文字框不在原图内");
+        let mut bounds = [v[0], v[1], v[2], v[3]];
+        let mut font = block["fontSize"].as_f64().unwrap_or(16.0);
+        if let Some(group) = group.and_then(Value::as_array) {
+            if group.len() > 200 || !group.iter().any(|value| value.as_u64() == Some(index as u64)) { bail!("截图上下文框无效"); }
+            for value in group {
+                let index = value.as_u64().context("截图文字框编号无效")? as usize;
+                let other = text["blocks"].get(index).context("截图文字框已变化")?;
+                let other_box = other["box"].as_array().filter(|b| b.len() == 4).context("截图文字框无效")?;
+                let values = other_box.iter().map(|v| v.as_f64().filter(|v| v.is_finite()).context("截图文字框无效")).collect::<Result<Vec<_>>>()?;
+                bounds[0] = bounds[0].min(values[0]); bounds[1] = bounds[1].min(values[1]);
+                bounds[2] = bounds[2].max(values[2]); bounds[3] = bounds[3].max(values[3]);
+                font = font.max(other["fontSize"].as_f64().unwrap_or(16.0));
+            }
         }
-        img = img.crop_imm(x1 as u32, y1 as u32, (x2 - x1) as u32, (y2 - y1) as u32);
+        let (x, y, width, height) = crate::study_image::bubble_crop(&img, bounds, font)?;
+        img = img.crop_imm(x, y, width, height);
     } else if mode != "page" {
         bail!("未知配图模式");
     }
@@ -538,6 +544,32 @@ mod tests {
         fs::write(&file, b"broken").unwrap();
         assert!(snapshot(&backend, "test").is_err());
         assert_eq!(fs::read(file).unwrap(), b"broken");
+    }
+    #[test]
+    fn exported_crop_unites_context_lines_and_keeps_balloon_border() {
+        let root = tempfile::tempdir().unwrap();
+        let mut backend = Backend::load(root.path().into()).unwrap();
+        backend.add(json!({"id":"bubble","format":"comic","direction":"rtl","pages":[{"url":"page.png","width":500,"height":500}]})).unwrap();
+        let content = backend.dir("bubble").unwrap().join("content");
+        fs::create_dir_all(&content).unwrap();
+        let mut pixels = image::RgbImage::from_pixel(500, 500, image::Rgb([160,160,160]));
+        for y in 70..330 { for x in 80..320 {
+            let border = x < 84 || x >= 316 || y < 74 || y >= 326;
+            pixels.put_pixel(x, y, if border {image::Rgb([0,0,0])} else {image::Rgb([255,255,255])});
+        }}
+        pixels.save(content.join("page.png")).unwrap();
+        storage::write(&content.join("manga.json"), &json!({"pages":[{"url":"page.png","blocks":[
+            {"box":[210,110,250,265],"font_size":20,"vertical":true,"single_line":true,"lines":["カメラ"]},
+            {"box":[125,110,165,265],"font_size":20,"vertical":true,"single_line":true,"lines":["を持ってきた"]}
+        ]}]})).unwrap();
+        let occurrence = json!({"ref":"page:page.png#0","text":"カメラ","start":0,"end":3});
+        let result = image(&backend, "bubble", &occurrence, "crop", Some(&json!([0,1]))).unwrap();
+        let decoded = image::load_from_memory(&STANDARD.decode(result["data"].as_str().unwrap()).unwrap()).unwrap();
+        assert!(decoded.width() >= 240 && decoded.height() >= 260);
+        assert!(image(&backend, "bubble", &occurrence, "crop", Some(&json!([1]))).is_err());
+        assert!(image(&backend, "bubble", &occurrence, "crop", Some(&json!([0,99]))).is_err());
+        let mut stale = occurrence.clone(); stale["text"] = json!("別の原文");
+        assert!(image(&backend, "bubble", &stale, "crop", Some(&json!([0,1]))).is_err());
     }
     #[test]
     fn replaced_worker_cannot_save_or_keep_a_lease() {

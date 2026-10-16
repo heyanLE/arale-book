@@ -12,6 +12,7 @@
  * 不需要额外的开关。
  */
 
+import { recordLookup } from '../lib/reading-activity';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   LlmProfile,
@@ -37,6 +38,8 @@ export interface WordCardLookupInput {
   /** 词典结果。点击时已查好；划词时由调用方先查。 */
   result: LookupResult | null;
   source: WordCardSource | null;
+  /** Saved cards reopening is not a new reading lookup. */
+  trackLookup?: boolean;
 }
 
 export interface WordCardPopupState extends WordCardLookupInput {
@@ -229,6 +232,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
   );
 
   const openPopup = useCallback((input: WordCardLookupInput): string => {
+    if (input.trackLookup !== false) recordLookup(bookRef.current, input.result?.term || input.word);
     popupSeq += 1;
     const id = `p${popupSeq}`;
     setPopups((prev) => [
@@ -507,6 +511,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
         analysisCache.set(analysisKey(entry.word, card.context), entry);
       }
       const id = openPopup({
+        trackLookup: false,
         word: card.word,
         context: card.context,
         offset: card.offset,

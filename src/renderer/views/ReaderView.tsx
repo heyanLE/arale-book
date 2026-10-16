@@ -5,6 +5,10 @@
  * 一个两边都别扭的接口；这里用一次显式分支换两个各自干净的实现。
  */
 
+import type { ReadingEntry, ReadingEntryDraft } from '@shared/reading';
+import type { ReadingPosition } from '@shared/types';
+import { useReadingActivity } from '../lib/reading-activity';
+import { api, call } from '../lib/api';
 import { useCallback, useEffect, useState } from 'react';
 import {
   isImageNovel,
@@ -25,7 +29,9 @@ import { useWordCards } from '../dict/word-cards';
 
 export interface ReaderViewProps {
   open: OpenBookResult;
-  onBack: () => void;
+  journalOpen?: boolean;
+  journalJump?: { token: number; entry: ReadingEntry } | null;
+  onOpenJournal?: (draft?: ReadingEntryDraft) => void;
   onStatus: (message: string) => void;
   systemBarsVisible: boolean;
   onSystemBarsChange: (visible: boolean) => void;
@@ -48,7 +54,7 @@ export interface ReaderViewProps {
 
 export function ReaderView({
   open,
-  onBack,
+  journalOpen = false, journalJump, onOpenJournal,
   onStatus,
   systemBarsVisible,
   onSystemBarsChange,
@@ -62,6 +68,26 @@ export function ReaderView({
 }: ReaderViewProps): JSX.Element {
   const { book, position } = open;
   const [progress, setProgress] = useState('');
+  const [currentPosition, setCurrentPosition] = useState<ReadingPosition | null>(null);
+  const reportActivityPosition = useReadingActivity(book.id, !journalOpen && currentPosition !== null);
+  const handlePosition = useCallback((next: ReadingPosition, locations: string[]) => {
+    setCurrentPosition(locations.length ? next : null); reportActivityPosition(next, locations);
+  }, [reportActivityPosition]);
+  const makeDraft = (kind: 'bookmark' | 'note'): ReadingEntryDraft | null => currentPosition ? {
+    bookId: book.id, kind, title: currentPosition.pageIndex !== undefined ? `第 ${currentPosition.pageIndex + 1} 页` : `第 ${(currentPosition.spineIndex ?? 0) + 1} 章`,
+    quote: '', note: '', position: currentPosition,
+  } : null;
+  const bookmark = async () => {
+    const draft = makeDraft('bookmark'); if (!draft) return;
+    const result = await call('添加书签', () => api.reading.save(draft));
+    if (result) onStatus('书签已保存，可在阅读记录中查看');
+  };
+  const journalTools = <>
+    <button type="button" className="btn btn-sm" disabled={!currentPosition} onClick={() => void bookmark()}>添加书签</button>
+    <button type="button" className="btn btn-sm" disabled={!currentPosition} onClick={() => { const draft = makeDraft('note'); if (draft) onOpenJournal?.(draft); }}>写笔记</button>
+    <button type="button" className="btn btn-sm" onClick={() => onOpenJournal?.()}>阅读记录</button>
+  </>;
+
   /**
    * 词卡状态放在这一层，而不是两个阅读器各自持有。
    *
@@ -71,13 +97,7 @@ export function ReaderView({
   const wordCards = useWordCards(book.id);
   const { autoHideChrome: immersive } = useSettings();
   const comicMode = readerModeOf(book) === 'comic';
-  const [sidebarTab, setSidebarTab] = useState<'cards' | 'layers'>('cards');
-  const [annotationManagerHost, setAnnotationManagerHost] = useState<HTMLDivElement | null>(null);
   const [immersiveToolsHost, setImmersiveToolsHost] = useState<HTMLDivElement | null>(null);
-  useEffect(() => { setSidebarTab('cards'); }, [book.id, comicMode]);
-  const openAnnotationManager = useCallback(() => {
-    setSidebarTab('layers'); wordCards.setPanelOpen(true);
-  }, [wordCards.setPanelOpen]);
 
   const handleProgress = useCallback((label: string) => setProgress(label), []);
 
@@ -89,6 +109,7 @@ export function ReaderView({
     <div className="reader">
       {immersive && <div className={`immersive-exit-zone${wordCards.panelOpen ? ' is-sidebar-open' : ''}`} aria-label="沉浸阅读工具">
         <div className="immersive-reader-actions">
+          {journalTools}
           {comicMode && <div ref={setImmersiveToolsHost} />}
           <button type="button" className={`btn btn-sm immersive-icon-button${systemBarsVisible ? ' btn-primary' : ''}`}
             data-testid="immersive-system-bars" aria-pressed={systemBarsVisible} aria-label="显示或隐藏系统栏"
@@ -96,8 +117,8 @@ export function ReaderView({
             onPointerDown={event => event.preventDefault()} onClick={() => onSystemBarsChange(!systemBarsVisible)}><ReaderToolIcon kind="system" /></button>
           <button type="button" className={`btn btn-sm immersive-icon-button${wordCards.panelOpen ? ' btn-primary' : ''}`}
             data-testid="immersive-sidebar-toggle" aria-expanded={wordCards.panelOpen} aria-controls="reader-sidebar"
-            aria-label="侧边栏"
-            title={`${wordCards.panelOpen ? '收起' : '打开'}右侧栏：词卡夹${comicMode ? '、图层管理' : ''}`}
+            aria-label="词卡夹"
+            title={`${wordCards.panelOpen ? '收起' : '打开'}右侧栏：词卡夹`}
             onClick={() => wordCards.setPanelOpen(!wordCards.panelOpen)}><ReaderToolIcon kind="sidebar" /></button>
           <button type="button" className="btn immersive-exit immersive-icon-button" data-testid="immersive-exit" title="退出沉浸模式" aria-label="退出沉浸模式"
             onClick={() => updateSettings({ autoHideChrome: false })}><ReaderToolIcon kind="exit" /></button>
@@ -134,6 +155,7 @@ export function ReaderView({
           {progress}
         </div>
 
+        {journalTools}
         {/* 沉浸模式：自动隐藏上下工具栏。 */}
         <button
           type="button"
@@ -148,12 +170,12 @@ export function ReaderView({
           type="button"
           className={`btn btn-sm${wordCards.panelOpen ? ' btn-primary' : ''}`}
           onClick={() => wordCards.setPanelOpen(!wordCards.panelOpen)}
-          title={`${wordCards.panelOpen ? '收起' : '打开'}右侧栏：词卡夹${comicMode ? '、图层管理' : ''}`}
+          title={`${wordCards.panelOpen ? '收起' : '打开'}右侧栏：词卡夹`}
           aria-expanded={wordCards.panelOpen}
           aria-controls="reader-sidebar"
           data-testid="reader-sidebar-toggle"
         >
-          侧边栏
+          词卡夹 {wordCards.cards.length > 0 && <span className="mono">{wordCards.cards.length}</span>}
         </button>
       </div>
 
@@ -164,6 +186,9 @@ export function ReaderView({
             book={book}
             initialPosition={position}
             onProgress={handleProgress}
+            onPosition={handlePosition}
+            onExcerpt={onOpenJournal}
+            jump={journalJump}
             onOpenSegments={() => onOpenSegments(book.id)}
             wordCards={wordCards}
           />
@@ -175,6 +200,9 @@ export function ReaderView({
             book={book}
             initialPosition={position}
             onProgress={handleProgress}
+            onPosition={handlePosition}
+            onExcerpt={onOpenJournal}
+            jump={journalJump}
             ocrProgress={ocrProgress}
             ocrResult={ocrResult}
             onStartOcr={onStartOcr}
@@ -183,32 +211,20 @@ export function ReaderView({
             ocrQueue={ocrQueue}
             onOpenSegments={() => onOpenSegments(book.id)}
             wordCards={wordCards}
-            annotationManagerHost={wordCards.panelOpen && sidebarTab === 'layers' ? annotationManagerHost : null}
             immersiveToolsHost={immersive ? immersiveToolsHost : null}
-            onOpenAnnotationManager={openAnnotationManager}
           />
         )}
 
         {wordCards.panelOpen && (
-          <aside className="reader-sidebar" id="reader-sidebar" data-testid="reader-sidebar" aria-label="阅读侧边栏">
+          <aside className="reader-sidebar" id="reader-sidebar" data-testid="reader-sidebar" aria-label="词卡夹">
             <div className="reader-sidebar-head">
-              <div className="reader-sidebar-tabs" role="tablist" aria-label="侧边栏内容">
-                <button type="button" role="tab" aria-selected={sidebarTab === 'cards' || !comicMode}
-                  aria-controls="reader-sidebar-cards" id="reader-sidebar-cards-tab" data-testid="reader-sidebar-cards"
-                  onClick={() => setSidebarTab('cards')}>词卡夹 <span className="mono">{wordCards.cards.length}</span></button>
-                {comicMode && <button type="button" role="tab" aria-selected={sidebarTab === 'layers'}
-                  aria-controls="reader-sidebar-layers" id="reader-sidebar-layers-tab" data-testid="annotations-manage"
-                  onClick={() => setSidebarTab('layers')}>图层管理</button>}
-              </div>
-              <button type="button" className="icon-btn" title="收起侧边栏" onClick={() => wordCards.setPanelOpen(false)}>×</button>
+              <strong id="reader-sidebar-cards-title" data-testid="reader-sidebar-cards">词卡夹 <span className="mono">{wordCards.cards.length}</span></strong>
+              <button type="button" className="icon-btn" aria-label="收起词卡夹" title="收起词卡夹" onClick={() => wordCards.setPanelOpen(false)}>×</button>
             </div>
-            {(sidebarTab === 'cards' || !comicMode) && <div className="reader-sidebar-content" role="tabpanel"
-              id="reader-sidebar-cards" aria-labelledby="reader-sidebar-cards-tab">
+            <div className="reader-sidebar-content" id="reader-sidebar-cards" aria-labelledby="reader-sidebar-cards-title">
               <WordCardPanel embedded cards={wordCards.cards} onOpen={(card) => void wordCards.openCard(card)}
                 onRemove={wordCards.removeCard} onClose={() => wordCards.setPanelOpen(false)} />
-            </div>}
-            {comicMode && sidebarTab === 'layers' && <div className="reader-sidebar-content" role="tabpanel"
-              id="reader-sidebar-layers" aria-labelledby="reader-sidebar-layers-tab" ref={setAnnotationManagerHost} />}
+            </div>
           </aside>
         )}
       </div>

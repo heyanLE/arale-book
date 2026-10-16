@@ -1,3 +1,4 @@
+import { buildContextGroups } from '@core/comic/context-groups';
 import { StudyService, chooseMeaning } from '@core/study/service';
 import { StudyTaskQueue } from '@core/study/task-queue';
 import { buildAnkiPackage, type AnkiDatabase } from '@core/study/apkg';
@@ -37,6 +38,7 @@ export class TauriStudy {
   private study: StudyService;
   private queue: StudyTaskQueue;
   private services: TauriServices;
+  private readonly cropGroups = new Map<string, number[]>();
   private readonly tokens = new Map<string, Awaited<ReturnType<typeof tokenizeJapanese>>>();
   private readonly runtime: StudyRuntime = {
     readJson: <T>(file: string, fallback: T): T => structuredClone((this.files.get(file) ?? fallback) as T),
@@ -199,7 +201,26 @@ export class TauriStudy {
     finally { this.operations.delete(id); this.captures.delete(id); }
   }
   private async image(id:string,occurrence:unknown,mode:string) {
-    await this.flush(id); const image=await this.native('study:image',this.owner,id,occurrence,mode);
+    await this.flush(id);
+    let group: number[] | undefined;
+    if (mode === 'crop') {
+      const ref = (occurrence as import('@shared/types').StudyOccurrence).ref;
+      const split = ref.lastIndexOf('#'); const url = ref.slice(5, split); const block = Number(ref.slice(split + 1));
+      const snapshot = this.snapshots.get(id)!;
+      const key = `${id}:${snapshot.source}:${ref}`;
+      group = this.cropGroups.get(key);
+      if (!group) {
+        const page = snapshot.book.pages?.findIndex(page => page.url === url) ?? -1;
+        if (page < 0) throw new Error('原文页已变化');
+        const text: import('@shared/types').PageText = await this.native('comic:pageText', id, page);
+        for (const context of buildContextGroups(text.blocks)) for (const index of context.indices) {
+          this.cropGroups.set(`${id}:${snapshot.source}:page:${url}#${index}`, context.indices);
+        }
+        group = this.cropGroups.get(key) ?? [block];
+        if (this.cropGroups.size > 20000) this.cropGroups.clear();
+      }
+    }
+    const image=await this.native('study:image',this.owner,id,occurrence,mode,group);
     return {name:image.name,data:decode(image.data)};
   }
   private zipf(candidate:StudyCandidate):number|null|undefined {
@@ -219,6 +240,19 @@ export class TauriStudy {
       case 'study:cancel': this.study.cancel(id); return null;
       case 'study:taskCancel': this.queue.cancel(id); await this.flush(); return null;
       case 'study:taskDismiss': this.recent=this.recent.filter(task=>task.id!==id); this.queue.dismiss(id); this.publish('study:queue',this.withRecent(this.queue.queueState())); await this.flush(); return null;
+      case 'study:previewImage': {
+        if (!this.operations.has(id) && !this.queue.isBusy(id)) await this.load(id);
+        await this.flush(id);
+        const list = this.study.read(id);
+        const candidate = list?.candidates.find(candidate => candidate.id === args[1]);
+        const draft = list?.workflow?.cardRun?.drafts.find(draft => draft.candidateId === args[1]);
+        const occurrence = candidate?.occurrences.find(one => one.id === (args[2] || draft?.contextRef || candidate.contextRef));
+        if (!occurrence) throw new Error('原文出处已失效');
+        const mode = list?.workflow?.imageMode ?? 'crop';
+        if (mode === 'none') return null;
+        const image = await this.image(id, occurrence, mode);
+        return `data:image/${mode === 'page' ? 'jpeg' : 'png'};base64,${encode(image.data)}`;
+      }
       case 'study:read':
         if(!this.operations.has(id) && !this.queue.isBusy(id)) await this.load(id);
         await this.flush(id); return this.study.read(id);

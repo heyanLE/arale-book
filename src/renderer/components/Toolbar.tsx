@@ -32,7 +32,9 @@ export interface ToolbarProps {
   onImportFiles: () => void;
   onImportDirectory: () => void;
   onOpenSettings: () => void;
-  onLeaveReader: () => void;
+  onOpenJournal?: () => void;
+  onBack: () => void;
+  backLabel: string;
 }
 
 const THEME_LABEL: Record<ThemeMode, string> = {
@@ -58,7 +60,8 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
     onImportFiles,
     onImportDirectory,
     onOpenSettings,
-    onLeaveReader,
+    onBack,
+    backLabel,
   } = props;
 
   const inLibrary = view === 'library';
@@ -77,8 +80,8 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
 
       <div className="toolbar-group">
         {!inLibrary && (
-          <button type="button" className="tool-btn" onClick={onLeaveReader} title="返回书库 (Esc)">
-            <Icon kind="back" />书库
+          <button type="button" className="tool-btn" onClick={onBack} title={`${backLabel} (Esc)`} data-testid="page-back">
+            <Icon kind="back" />{backLabel}
           </button>
         )}
 
@@ -162,6 +165,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
 
         <span className="toolbar-sep" />
 
+        {inLibrary && props.onOpenJournal && <button type="button" className="tool-btn" onClick={props.onOpenJournal}>阅读记录与统计</button>}
         <button type="button" className="tool-btn" onClick={onCycleTheme} title={THEME_LABEL[theme]}>
           <Icon kind="theme" />
         </button>
@@ -170,6 +174,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
           type="button"
           className={`tool-btn${view === 'settings' ? ' is-active' : ''}`}
           onClick={onOpenSettings}
+          disabled={view === 'settings'}
           title="设置与词典管理 (Cmd/Ctrl+,)"
         >
           <Icon kind="settings" />设置

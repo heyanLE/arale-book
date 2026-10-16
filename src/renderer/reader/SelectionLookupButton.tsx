@@ -24,14 +24,14 @@ export function useSelectionAction<T>(resetKey: unknown) {
 }
 
 /** Selection stays highlighted; lookup starts only after this explicit action. */
-export function SelectionLookupButton({ point, busy, onConfirm, onDismiss }: {
-  point: SelectionPoint; busy: boolean; onConfirm: () => void; onDismiss: () => void;
+export function SelectionLookupButton({ point, busy, onConfirm, onDismiss, onExcerpt }: {
+  point: SelectionPoint; busy: boolean; onConfirm: () => void; onDismiss: () => void; onExcerpt?: () => void;
 }): JSX.Element {
-  const button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const outside = (event: PointerEvent) => { if (!button.current?.contains(event.target as Node)) onDismiss(); };
+    const outside = (event: PointerEvent) => { if (!menu.current?.contains(event.target as Node)) onDismiss(); };
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.isComposing) return;
       event.preventDefault(); event.stopPropagation(); onDismiss();
     };
     window.addEventListener('pointerdown', outside, true);
@@ -45,11 +45,10 @@ export function SelectionLookupButton({ point, busy, onConfirm, onDismiss }: {
       window.removeEventListener('resize', onDismiss);
     };
   }, [onDismiss]);
-  return <button ref={button} type="button" className="btn selection-lookup-button" data-testid="selection-lookup-button"
-    aria-label="查所选文字" title="查所选文字" disabled={busy}
-    style={{ left: Math.max(6, Math.min(point.x + 10, window.innerWidth - 78)), top: Math.max(6, Math.min(point.y + 10, window.innerHeight - 34)) }}
-    onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }} onClick={onConfirm}>
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg>
-    {busy ? '查询中' : '查词'}
-  </button>;
+  return <div ref={menu} className="selection-action-menu" role="group" aria-label="所选文字操作"
+    style={{ left: Math.max(6, Math.min(point.x + 10, window.innerWidth - (onExcerpt ? 154 : 78))), top: Math.max(6, Math.min(point.y + 10, window.innerHeight - 34)) }}
+    onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}>
+    <button type="button" className="btn" data-testid="selection-lookup-button" aria-label="查所选文字" disabled={busy} onClick={onConfirm}>{busy ? '查询中' : '查词'}</button>
+    {onExcerpt && <button type="button" className="btn" disabled={busy} onClick={onExcerpt}>摘录 / 笔记</button>}
+  </div>;
 }

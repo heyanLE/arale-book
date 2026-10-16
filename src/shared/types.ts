@@ -335,7 +335,7 @@ export interface DictionaryStatus {
 
 /** 一次导入动作的结果。 */
 export interface ImportOutcome {
-  /** 源路径。 */
+  /** 源路径；合集分卷为「外层路径 → 成员相对路径」，用于追溯而非再次打开。 */
   source: string;
   ok: boolean;
   /** 成功时是新书 id。 */
@@ -874,7 +874,7 @@ export interface StudyPipelineCheckpoint {
   sourceReadings?: Record<string, string>;
 }
 
-export type StudyCardField = 'reading' | 'meaning' | 'sentence' | 'sentenceTranslation' | 'lemma';
+export type StudyCardField = 'reading' | 'meaning' | 'sentence' | 'sentenceTranslation' | 'lemma' | 'etymology';
 
 export interface StudyCardDraft {
   candidateId: string;
@@ -884,6 +884,8 @@ export interface StudyCardDraft {
   fields?: StudyCardField[];
   readingSource?: 'dictionary' | 'tokenizer' | 'translation_romaji' | 'manual' | 'external_ai';
   meaningSource?: 'dictionary' | 'ai';
+  /** 舶来语的来源语言、原词及借用变化；非舶来语或无资料时留空。 */
+  etymology?: string;
   reading?: string;
   sentence?: string;
   sourceLabel?: string;
@@ -906,7 +908,7 @@ export interface StudyCardDraft {
 
 export type StudyCardPatch = Partial<Pick<StudyCardDraft,
   'expression' | 'lemma' | 'reading' | 'sentence' | 'sourceLabel' | 'contextRef' |
-  'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'needsReview' | 'status'>>;
+  'meaning' | 'sentenceTranslation' | 'usage' | 'nuance' | 'etymology' | 'needsReview' | 'status'>>;
 
 export interface StudyRunProgress {
   bookId: string;

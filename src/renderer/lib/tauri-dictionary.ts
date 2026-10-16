@@ -1,3 +1,5 @@
+import type { ImportQueueState, ImportTaskEntry } from '@shared/imports';
+
 export function createTauriDictionary(
   native: (channel: string, ...args: unknown[]) => Promise<any>,
   deliver: (channel: string, payload: unknown) => void,
@@ -5,6 +7,7 @@ export function createTauriDictionary(
 ) {
   let nextId = 1;
   let failed: Error | null = null;
+  let lastImportQueue: ImportQueueState | null = null;
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   worker.onmessage = event => {
     const message = event.data;
@@ -13,7 +16,10 @@ export function createTauriDictionary(
         value => worker.postMessage({ kind: 'native-result', id: message.id, value }),
         error => worker.postMessage({ kind: 'native-result', id: message.id, error: String(error) }),
       );
-    } else if (message.kind === 'event') deliver(message.channel, message.payload);
+    } else if (message.kind === 'event') {
+      if (message.channel === 'library:importQueue') lastImportQueue = message.payload;
+      deliver(message.channel, message.payload);
+    }
     else if (message.kind === 'result') {
       const item = pending.get(message.id); pending.delete(message.id);
       if (message.error !== undefined) item?.reject(new Error(message.error)); else item?.resolve(message.value);
@@ -21,6 +27,13 @@ export function createTauriDictionary(
   };
   worker.onerror = event => {
     failed = new Error(event.message || '后台 Worker 启动失败');
+    if (lastImportQueue) {
+      const interrupted: ImportTaskEntry[] = [lastImportQueue.active, ...lastImportQueue.pending].filter((task): task is ImportTaskEntry => !!task).map(task => ({
+        ...task, status: 'failed', finishedAt: Date.now(), progress: { ...task.progress, message: '导入后台中断，请检查书库后重试' },
+        results: [{ ok: false, source: task.source, bookId: null, format: null, error: '导入后台中断；已经入库的书仍会保留，请检查书库后重试。' }],
+      }));
+      deliver('library:importQueue', { active: null, pending: [], recent: [...interrupted, ...lastImportQueue.recent].slice(0, 20) });
+    }
     for (const item of pending.values()) item.reject(failed);
     pending.clear();
   };

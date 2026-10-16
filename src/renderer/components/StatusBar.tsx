@@ -20,7 +20,7 @@ export interface StatusBarProps {
   total: number;
   selectionCount: number;
   /**
-   * OCR 队列入口（右下角）。队列为空时它自己渲染成 null，状态栏不用判断。
+   * 全局任务队列入口（导入/OCR/制卡，右下角）。为空时自身渲染 null。
    *
    * 曾经这里是一个纯文本的 `ocrLabel`：进度只读、不可点、也没法取消。
    * 现在识别是排队的，必须能点开看「排到第几个了」。

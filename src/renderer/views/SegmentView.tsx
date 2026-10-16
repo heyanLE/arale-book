@@ -29,7 +29,6 @@ export interface SegmentViewProps {
   /** 加载中标志（首次读盘）。 */
   loading: boolean;
   isComic: boolean;
-  onBack: () => void;
   onGenerate: (force: boolean) => void;
   onClear: () => void;
   onReload: () => void;
@@ -50,7 +49,7 @@ function formatTime(ms: number): string {
 }
 
 export function SegmentView(props: SegmentViewProps): JSX.Element {
-  const { bookId, bookTitle, initialTab = 'vocabulary', focusToken, status, progress, segments, loading, isComic, onBack, onGenerate, onClear, onReload } =
+  const { bookId, bookTitle, initialTab = 'vocabulary', focusToken, status, progress, segments, loading, isComic, onGenerate, onClear, onReload } =
     props;
 
   const [filter, setFilter] = useState('');
@@ -84,9 +83,6 @@ export function SegmentView(props: SegmentViewProps): JSX.Element {
   return (
     <div className="segment-view">
       <div className="segment-head">
-        <button type="button" className="btn btn-sm" onClick={onBack} title="返回书库">
-          ← 书库
-        </button>
         <div className="segment-heading">
           <div className="segment-title cell-ellipsis" title={bookTitle}>
             {bookTitle}

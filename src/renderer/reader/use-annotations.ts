@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 
 const stores = new Map<string, AnnotationStore>();
 const finalizers = new Set<() => void>();
-function finalizeAnnotations(): void { for (const finalize of finalizers) finalize(); }
+export function finalizeAnnotations(): void { for (const finalize of finalizers) finalize(); }
 export function registerAnnotationFinalizer(finalize: () => void): () => void {
   finalizers.add(finalize); return () => { finalizers.delete(finalize); };
 }
@@ -29,7 +29,6 @@ export function useAnnotations(bookId: string) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [style, setStyle] = useState({ color: '#d33828', width: 8, opacity: 1, fontSize: 30, background: null as string | null, vertical: false });
   const active = state.document.layers.find(l => l.id === activeId);
-  const eraserLayer = active?.type === 'pen' ? active : undefined;
   const isEditing = tool !== 'read' && state.document.visible && state.loaded;
   const setActiveId = setActiveIdState;
   const setTool = (next: typeof tool) => {
@@ -55,31 +54,20 @@ export function useAnnotations(bookId: string) {
     if (!current.state.loaded || doc.layers.length >= 100) return null;
     return { id, type, name: `${type === 'pen' ? '画笔' : '文字注释'} ${doc.layers.filter(l => l.type === type).length + 1}`, visible: true, locked: false, objects: page ? { [page.url]: [] } : {} };
   };
-  const create = (type: AnnotationLayer['type'], page?: ComicPage): string | null => {
-    finalizeAnnotations();
-    const layer = makeLayer(type, page); if (!layer) return null;
-    const doc = current.state.document, id = layer.id;
-    current.commit({ ...doc, visible: true, layers: [...doc.layers, layer] });
-    setActiveId(id); setToolState(type); setSelectedId(null);
-    return id;
-  };
   // 工具不建层；第一笔/非空文字与自动创建的图层一起提交，只占一次撤销。
   const prepareLayer = (type: AnnotationLayer['type'], page: ComicPage) => {
-    const layer = current.state.document.layers.find(l => l.id === activeId);
-    if (layer?.type === type && layer.visible && !layer.locked &&
-      (type === 'pen' || !Object.values(layer.objects).some(objects => objects.length))) return { layer, isNew: false };
+    const doc = current.state.document;
+    const layer = doc.layers.find(l => l.id === activeId);
+    if (layer?.type === type && layer.visible && !layer.locked) return { layer, isNew: false };
+    // 内容类型复用最近的可写层，不让每份文字占用一整个存储图层。
+    const reusable = [...doc.layers].reverse().find(l => l.type === type && l.visible && !l.locked);
+    if (reusable) { setActiveId(reusable.id); return { layer: reusable, isNew: false }; }
     const created = makeLayer(type, page); if (!created) return null;
     setActiveId(created.id); return { layer: created, isNew: true };
   };
   const armText = () => setTool('text');
   const usePen = () => setTool('pen');
   const useSelect = () => setTool('select');
-  const selectLayer = (id: string) => { finalizeAnnotations(); setActiveId(id); setToolState('select'); setSelectedId(null); };
-  const useEraser = () => {
-    const doc = current.state.document, layer = doc.layers.find(l => l.id === eraserLayer?.id);
-    if (!current.state.loaded || !layer || layer.locked || !layer.visible) return;
-    setTool('eraser');
-  };
   const putObject = (layerId: string, page: ComicPage, object: AnnotationObject, newLayer?: AnnotationLayer) => {
     const doc = current.state.document;
     const layers = doc.layers.some(l => l.id === layerId) ? doc.layers : newLayer && doc.layers.length < 100 ? [...doc.layers, newLayer] : doc.layers;
@@ -98,14 +86,14 @@ export function useAnnotations(bookId: string) {
     current.commit({ ...doc, layers: doc.layers.map(l => !layerId || l.id === layerId ? { ...l, objects: { ...l.objects, [url]: [] } } : l) });
     setSelectedId(null);
   };
-  const removeLayer = (id: string) => {
+  const toggleVisible = () => {
     finalizeAnnotations();
     const doc = current.state.document;
-    current.commit({ ...doc, layers: doc.layers.filter(layer => layer.id !== id) });
-    if (id === activeId) { setActiveId(null); setToolState('read'); setSelectedId(null); }
+    current.commit({ ...doc, visible: !doc.visible });
+    setToolState('read'); setSelectedId(null);
   };
-  return { ...state, active, activeId, setActiveId, editing: isEditing, setEditing, textPlacement: tool === 'text', armText, usePen, useSelect, selectLayer, eraserLayer, useEraser, tool, setTool, selectedId, setSelectedId, style, setStyle,
-    create, prepareLayer, patchLayer, putObject, removeObject, removeLayer, clearPage, commit: (doc: ComicAnnotations) => current.commit(doc),
+  return { ...state, active, activeId, setActiveId, editing: isEditing, setEditing, textPlacement: tool === 'text', armText, usePen, useSelect, tool, setTool, selectedId, setSelectedId, style, setStyle,
+    prepareLayer, putObject, removeObject, clearPage, toggleVisible, commit: (doc: ComicAnnotations) => current.commit(doc),
     canUndo: state.undo, canRedo: state.redo, undo: () => { finalizeAnnotations(); current.undo(); setSelectedId(null); }, redo: () => { finalizeAnnotations(); current.redo(); setSelectedId(null); }, retry: () => current.state.loaded ? void current.save() : void current.reload(), reload: () => void current.reload(),
   };
 }

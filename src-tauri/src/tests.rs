@@ -560,3 +560,171 @@ fn path_and_atomic_io_errors_do_not_overwrite_user_data() {
     storage::write(&path, &json!({"value":2})).unwrap();
     assert_eq!(storage::read(&path, Value::Null).unwrap()["value"], 2);
 }
+
+fn zip_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in entries {
+        writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+fn comic_zip_bytes() -> Vec<u8> {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(10, 20).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    zip_bytes(&[("p2.png", png.into_inner())])
+}
+
+#[test]
+fn collections_import_volumes_in_natural_order_and_keep_successful_siblings() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("合集.rar");
+    // Magic is authoritative: a ZIP named RAR is also a supported input.
+    fs::write(&source, zip_bytes(&[("第10卷.cbz", comic_zip_bytes()), ("第2卷.cbz", comic_zip_bytes()), ("第3卷.rar", b"broken".to_vec())])).unwrap();
+    let mut backend = Backend::load(temp.path().join("userdata")).unwrap();
+    let root = backend.root.clone();
+    let results = importer::import_batch(&root, &source, "rtl", &|_| {}, &mut |book| backend.add(book));
+    assert_eq!(results.len(), 3);
+    assert!(results[0]["source"].as_str().unwrap().ends_with("第2卷.cbz"));
+    assert_eq!(results[1]["ok"], false);
+    assert_eq!(results[2]["ok"], true);
+    assert_eq!(backend.books.len(), 2);
+    assert_eq!(backend.books[0]["pageCount"], 1);
+    assert_eq!(backend.books[0]["title"], "第2卷");
+    assert_eq!(fs::read_dir(root.join("import-staging")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("library")).unwrap().count(), 3); // two books and index.json
+    assert_eq!(fs::read(&source).unwrap(), zip_bytes(&[("第10卷.cbz", comic_zip_bytes()), ("第2卷.cbz", comic_zip_bytes()), ("第3卷.rar", b"broken".to_vec())]));
+}
+
+#[test]
+fn normal_image_archive_is_not_split_and_failed_publication_cleans_prepared_book() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut image_only = zip::ZipArchive::new(std::io::Cursor::new(comic_zip_bytes())).unwrap();
+    let mut png = Vec::new(); std::io::Read::read_to_end(&mut image_only.by_index(0).unwrap(), &mut png).unwrap();
+    let source = temp.path().join("普通漫画.cbz");
+    fs::write(&source, zip_bytes(&[("cover.png", png), ("附带.zip", comic_zip_bytes())])).unwrap();
+    let mut backend = Backend::load(temp.path().join("userdata")).unwrap();
+    let root = backend.root.clone();
+    let result = importer::import_batch(&root, &source, "ltr", &|_| {}, &mut |book| backend.add(book));
+    assert_eq!(result.len(), 1); assert_eq!(backend.books[0]["pageCount"], 1);
+    let before = fs::read_dir(root.join("library")).unwrap().count();
+    let failed = importer::import_batch(&root, &source, "ltr", &|_| {}, &mut |_| anyhow::bail!("write failure"));
+    assert_eq!(failed[0]["ok"], false);
+    assert_eq!(fs::read_dir(root.join("library")).unwrap().count(), before);
+}
+
+#[test]
+fn collection_recursion_limit_fails_without_partial_empty_books() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut bytes = comic_zip_bytes();
+    for _ in 0..7 { bytes = zip_bytes(&[("nested.cbz", bytes)]); }
+    let source = temp.path().join("deep.zip"); fs::write(&source, bytes).unwrap();
+    let mut backend = Backend::load(temp.path().join("userdata")).unwrap();
+    let root = backend.root.clone();
+    let results = importer::import_batch(&root, &source, "rtl", &|_| {}, &mut |book| backend.add(book));
+    assert_eq!(results.len(), 1); assert!(results[0]["error"].as_str().unwrap().contains("超过 5 层"));
+    assert!(backend.books.is_empty()); assert_eq!(fs::read_dir(root.join("import-staging")).unwrap().count(), 0);
+}
+
+#[test]
+#[ignore = "requires ARALE_IMPORT_COLLECTION pointing to a local sample RAR"]
+fn real_rar_collection_imports_two_independent_volumes() {
+    let source = std::path::PathBuf::from(std::env::var_os("ARALE_IMPORT_COLLECTION").expect("set ARALE_IMPORT_COLLECTION"));
+    let temp = tempfile::tempdir().unwrap();
+    let mut backend = Backend::load(temp.path().join("userdata")).unwrap();
+    let root = backend.root.clone();
+    let events = std::sync::Mutex::new(Vec::new());
+    let results = importer::import_batch(&root, &source, "rtl", &|event| events.lock().unwrap().push(event), &mut |book| backend.add(book));
+    assert_eq!(results.len(), 2, "{results:?}"); assert!(results.iter().all(|r| r["ok"] == true));
+    assert_eq!(backend.books.len(), 2);
+    for book in &backend.books { assert_eq!(book["pageCount"], 171); assert!(backend.dir(book["id"].as_str().unwrap()).unwrap().join("original.rar").is_file()); }
+    assert!(backend.books[0]["title"].as_str().unwrap().contains("01"));
+    assert!(backend.books[1]["title"].as_str().unwrap().contains("02"));
+    assert!(events.lock().unwrap().iter().any(|e| e["stage"] == "organizing" && e["done"] == 171));
+    assert_eq!(fs::read_dir(root.join("import-staging")).unwrap().count(), 0);
+    println!("{}", json!({"results":results,"pages":backend.books.iter().map(|b| b["pageCount"].clone()).collect::<Vec<_>>() }));
+}
+
+#[test]
+fn reading_journal_persists_validated_entries_and_rejects_stale_or_out_of_range_changes() {
+    let (_root, backend, book) = setup();
+    let id = book["id"].as_str().unwrap();
+    let draft = json!({"bookId":id,"kind":"bookmark","title":"第一页","quote":"","note":"","position":{"bookId":id,"pageIndex":0}});
+    let entry = crate::reading::save(&backend, &draft).unwrap();
+    let again = crate::reading::save(&backend, &draft).unwrap();
+    assert_eq!(entry["id"], again["id"]);
+    let reopened = Backend::load(backend.root.clone()).unwrap();
+    assert_eq!(crate::reading::snapshot(&reopened).unwrap()["entries"].as_array().unwrap().len(), 1);
+    let mut edit = entry.clone(); edit["note"] = json!("新的理解");
+    let updated = crate::reading::save(&backend, &edit).unwrap();
+    assert!(crate::reading::save(&backend, &edit).is_err());
+    assert!(crate::reading::remove(&backend, entry["id"].as_str().unwrap(), entry["updatedAt"].as_u64().unwrap()).is_err());
+    let mut invalid = draft.clone(); invalid["position"]["pageIndex"] = json!(999);
+    assert!(crate::reading::save(&backend, &invalid).is_err());
+    invalid["position"] = json!({"bookId":"other","pageIndex":0});
+    assert!(crate::reading::save(&backend, &invalid).is_err());
+    let mut excerpt = draft.clone(); excerpt["kind"] = json!("excerpt");
+    assert!(crate::reading::save(&backend, &excerpt).is_err());
+    let removed = crate::reading::remove(&backend, updated["id"].as_str().unwrap(), updated["updatedAt"].as_u64().unwrap()).unwrap();
+    let mut restore = removed; restore.as_object_mut().unwrap().remove("id"); restore.as_object_mut().unwrap().remove("updatedAt");
+    crate::reading::save(&backend, &restore).unwrap();
+    assert_eq!(crate::reading::snapshot(&backend).unwrap()["entries"][0]["note"], "新的理解");
+}
+
+#[test]
+fn reading_statistics_are_idempotent_and_preserve_corrupt_or_unknown_version_files() {
+    let (_root, backend, book) = setup();
+    let activity = json!({"id":"packet_1","bookId":book["id"],"day":"2026-10-15","activeMs":10000,"locations":["page:0"],"word":"猫"});
+    crate::reading::record(&backend, &activity).unwrap();
+    crate::reading::record(&backend, &activity).unwrap();
+    let mut second = activity.clone(); second["id"] = json!("packet_2");
+    crate::reading::record(&backend, &second).unwrap();
+    let row = &crate::reading::snapshot(&backend).unwrap()["days"][0];
+    assert_eq!(row["activeMs"], 20000); assert_eq!(row["lookups"], 2); assert_eq!(row["words"]["猫"], 2);
+    assert_eq!(row["locations"], json!(["page:0"]));
+    second["activeMs"] = json!(60001); assert!(crate::reading::record(&backend, &second).is_err());
+    second["activeMs"] = json!(0); second["locations"] = json!(["page:999"]); assert!(crate::reading::record(&backend, &second).is_err());
+    let path = backend.root.join("reading-journal.json");
+    for bytes in [b"{broken".as_slice(), br#"{"version":2,"entries":[],"days":[],"seen":[]}"#.as_slice()] {
+        fs::write(&path, bytes).unwrap();
+        assert!(crate::reading::snapshot(&backend).is_err());
+        assert!(crate::reading::record(&backend, &activity).is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn reading_epub_entries_keep_chapter_href_and_utf16_offsets_and_survive_book_removal() {
+    let (_root, mut backend, _) = setup();
+    let book = json!({"id":"epub_test","title":"小说","format":"epub","spine":[{"href":"chapter.xhtml"}]});
+    backend.books.push(book.clone());
+    let draft = json!({"bookId":"epub_test","kind":"excerpt","title":"引用","quote":"猫🐈","note":"原文","position":{"bookId":"epub_test","spineIndex":0,"charOffset":12}});
+    let saved = crate::reading::save(&backend, &draft).unwrap();
+    assert_eq!(saved["position"]["spineHref"], "chapter.xhtml");
+    assert_eq!(saved["position"]["charOffset"], 12);
+    backend.books.retain(|book| book["id"] != "epub_test");
+    let snapshot = crate::reading::snapshot(&backend).unwrap();
+    assert_eq!(snapshot["entries"][0]["available"], false);
+    assert_eq!(snapshot["entries"][0]["quote"], "猫🐈");
+}
+
+#[test]
+fn reading_export_writes_selected_records_and_preserves_existing_file_on_invalid_selection() {
+    let (root, backend, book) = setup();
+    let draft = json!({"bookId":book["id"],"kind":"excerpt","title":"引用","quote":"猫です。\n犬です。","note":"复习这段对话","position":{"bookId":book["id"],"pageIndex":0}});
+    let saved = crate::reading::save(&backend, &draft).unwrap();
+    let markdown = crate::reading::markdown(&backend, &[saved["id"].clone()]).unwrap();
+    assert!(markdown.contains("> 猫です。\n> 犬です。"));
+    assert!(markdown.contains("第 1 页"));
+    assert!(markdown.contains("复习这段对话"));
+    let destination = root.path().join("阅读记录.md");
+    fs::write(&destination, "old").unwrap();
+    crate::reading::write_export(&destination, &markdown).unwrap();
+    assert_eq!(fs::read_to_string(&destination).unwrap(), markdown);
+    assert!(crate::reading::markdown(&backend, &[json!("missing")]).is_err());
+    assert_eq!(fs::read_to_string(&destination).unwrap(), markdown);
+    let mut invalid = json!({"id":"invalid_day","bookId":book["id"],"day":"2026-02-30","activeMs":0,"locations":[]});
+    assert!(crate::reading::record(&backend, &invalid).is_err());
+    invalid["day"] = json!("2024-02-29");
+    crate::reading::record(&backend, &invalid).unwrap();
+}

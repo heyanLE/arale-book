@@ -18,6 +18,7 @@
  * 引擎选择器固化在那条任务的引擎上并淡化，主按钮变成「停止识别」/「取消排队」。
  */
 
+import type { ReaderJournalProps } from '@shared/reading';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as React from 'react';
@@ -52,11 +53,11 @@ import { ReaderEdgeTurns } from './ReaderEdgeTurns';
 import { ocrControlState } from './ocr-controls';
 import { capturePointer } from '../lib/pointer';
 import { imagePoint } from '@core/comic/annotations';
-import { useAnnotations } from './use-annotations';
+import { finalizeAnnotations, useAnnotations } from './use-annotations';
 import { ComicAnnotationCanvas, type NewAnnotationText } from './ComicAnnotationCanvas';
-import { ComicAnnotationControls, ComicAnnotationManager, ComicAnnotationQuickTools } from './ComicAnnotationControls';
+import { ComicAnnotationControls, ComicAnnotationQuickTools } from './ComicAnnotationControls';
 
-export interface ComicReaderProps {
+export interface ComicReaderProps extends ReaderJournalProps {
   book: BookRecord;
   initialPosition: ReadingPosition | null;
   onProgress: (label: string) => void;
@@ -78,9 +79,7 @@ export interface ComicReaderProps {
    * 词卡夹的开关在阅读器顶栏上、而顶栏属于 ReaderView；状态放两处必然不同步。
    */
   wordCards: UseWordCardsResult;
-  annotationManagerHost: HTMLDivElement | null;
   immersiveToolsHost: HTMLDivElement | null;
-  onOpenAnnotationManager: () => void;
 }
 
 /** 翻页滑动动画时长（ms）。够短，连按方向键不会排出一条动画队列。 */
@@ -104,9 +103,8 @@ export function ComicReader({
   ocrQueue = null,
   onOpenSegments,
   wordCards,
-  annotationManagerHost,
   immersiveToolsHost,
-  onOpenAnnotationManager,
+  onPosition, onExcerpt, jump,
 }: ComicReaderProps): JSX.Element {
   // 设置页里的是**默认值**；阅读器里改的写进本书的覆盖值，不影响下一本新书。
   const { settings, overrides: bookSettings, patch: patchBook } = useBookSettings(book.id);
@@ -192,7 +190,7 @@ export function ComicReader({
   const [annotationMenu, setAnnotationMenu] = useState<{ x: number; y: number; index: number; point: { x: number; y: number } } | null>(null);
   const [newAnnotationText, setNewAnnotationText] = useState<NewAnnotationText | null>(null);
   useEffect(() => {
-    annotations.setEditing(false); annotations.setSelectedId(null);
+    finalizeAnnotations(); annotations.setSelectedId(null);
     setAnnotationPage(pageIndex); setAnnotationMenu(null); setNewAnnotationText(null);
   }, [pageIndex, spread, spreadOffset]);
   useEffect(() => {
@@ -327,6 +325,11 @@ export function ComicReader({
   // 进度
   // ------------------------------------------------------------------
 
+  useEffect(() => {
+    onPosition?.({ bookId: book.id, pageIndex, updatedAt: Date.now() },
+      spreadPages(pageIndex, total, spreadOffset, spread).map(index => `page:${index}`));
+  }, [book.id, pageIndex, total, spreadOffset, spread, onPosition]);
+
   const firstRenderRef = useRef(true);
   useEffect(() => {
     if (firstRenderRef.current) {
@@ -451,6 +454,14 @@ export function ComicReader({
     [navigate],
   );
 
+  useEffect(() => {
+    if (!jump || jump.entry.bookId !== book.id) return;
+    const entry = jump.entry;
+    const index = entry.pageUrl ? pages.findIndex(page => page.url === entry.pageUrl) : entry.position.pageIndex ?? -1;
+    if (index < 0 || index >= total) return;
+    navigate(index, index >= pageIndexRef.current);
+  }, [jump, book.id, pages, total, navigate]);
+
   const jumpToCardSource = useCallback((source: WordCardSource | null) => {
     if (source?.kind !== 'comic') return;
     const byUrl = pages.findIndex((page) => page.url === source.pageUrl);
@@ -518,6 +529,7 @@ export function ComicReader({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
       if (event.code !== 'Space' || event.repeat) return;
       const target = event.target as HTMLElement | null;
       // 输入框里敲空格是打字，不是「按住空格要移动画面」。
@@ -684,18 +696,22 @@ export function ComicReader({
 
   useEffect(() => {
     const escapeAnnotation = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || (!annotationMenu && !annotations.editing)) return;
+      if (document.querySelector('dialog[open]')) return;
+      if (event.isComposing || event.key !== 'Escape' || (!annotationMenu && !annotations.editing)) return;
       // 文本编辑框自己的 Esc 取消本次编辑；其他 Esc 先退出批注，再由 App 返回书库。
-      if ((event.target as HTMLElement | null)?.closest('.annotation-text-editor')) return;
+      if ((event.target as HTMLElement | null)?.closest('.annotation-text-editor, .annotation-object-toolbar')) return;
       event.preventDefault(); event.stopPropagation();
-      setAnnotationMenu(null); annotations.setEditing(false); annotations.setSelectedId(null);
+      if (annotationMenu) { setAnnotationMenu(null); return; }
+      if (annotations.selectedId) { annotations.setSelectedId(null); return; }
+      annotations.setEditing(false);
     };
     window.addEventListener('keydown', escapeAnnotation, true);
     return () => window.removeEventListener('keydown', escapeAnnotation, true);
-  }, [annotationMenu, annotations.editing]);
+  }, [annotationMenu, annotations.editing, annotations.selectedId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return;
       const target = event.target as HTMLElement | null;
       if (target) {
         const tag = target.tagName;
@@ -709,7 +725,7 @@ export function ComicReader({
         event.preventDefault(); if (event.shiftKey) annotations.redo(); else annotations.undo(); return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); annotations.redo(); return; }
-      if (annotations.editing && event.key === 'Delete' && annotations.activeId && annotations.selectedId) {
+      if (annotations.editing && (event.key === 'Delete' || event.key === 'Backspace') && annotations.activeId && annotations.selectedId) {
         event.preventDefault(); const page = pages[annotationPage];
         if (page) annotations.removeObject(annotations.activeId, page.url, annotations.selectedId); return;
       }
@@ -753,6 +769,7 @@ export function ComicReader({
   }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total, annotations, annotationPage, annotationMenu, pages]);
 
   useShellCommand((command) => {
+    if (document.querySelector('dialog[open]')) return;
     switch (command) {
       case 'nextPage':
         next();
@@ -1097,23 +1114,26 @@ export function ComicReader({
 
       <ComicAnnotationControls controller={annotations} page={pages[annotationPage]} />
       {immersiveToolsHost && createPortal(<ComicAnnotationQuickTools controller={annotations} page={pages[annotationPage]} immersive />, immersiveToolsHost)}
-      {annotationManagerHost && createPortal(<ComicAnnotationManager controller={annotations} page={pages[annotationPage]}
-        pageNumber={annotationPage + 1} pages={pages} onGoToPage={index => { setAnnotationPage(index); setPageIndex(index); }} />, annotationManagerHost)}
       {annotationMenu && <div className="annotation-context-menu" role="menu" data-testid="annotation-context-menu"
         style={{ left: Math.max(0, Math.min(annotationMenu.x, window.innerWidth - 210)),
           top: Math.max(0, Math.min(annotationMenu.y, window.innerHeight - 140)) }}>
-        <button role="menuitem" disabled={!annotations.loaded || annotations.document.layers.length >= 100 || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => { annotations.create('pen', pages[annotationMenu.index]); setAnnotationMenu(null); }}>新建画笔图层</button>
-        <button role="menuitem" disabled={!annotations.loaded || annotations.document.layers.length >= 100 || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => {
+        <button role="menuitem" disabled={!annotations.loaded || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => { annotations.usePen(); setAnnotationMenu(null); }}>画笔</button>
+        <button role="menuitem" disabled={!annotations.loaded || annotations.document.layers.length >= 100 && !annotations.document.layers.some(l => l.type === 'text' && l.visible && !l.locked) || annotations.stalePages.includes(pages[annotationMenu.index]!.url)} onClick={() => {
           annotations.armText();
           setNewAnnotationText({ id: crypto.randomUUID(), pageUrl: pages[annotationMenu.index]!.url, point: annotationMenu.point });
           setAnnotationMenu(null);
-        }}>新建文字图层</button>
-        <button role="menuitem" onClick={() => { onOpenAnnotationManager(); setAnnotationMenu(null); }}>管理图层</button>
+        }}>添加文字</button>
+        <button role="menuitem" onClick={() => { annotations.useSelect(); setAnnotationMenu(null); }}>选择批注</button>
       </div>}
 
       {/* 弹窗可以同时开多张：pin 住的不会被后来者顶掉。 */}
       {selectionAction.pending && <SelectionLookupButton point={selectionAction.pending.point} busy={selectionAction.busy}
-        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss} />}
+        onConfirm={() => void selectionAction.confirm(openSelection)} onDismiss={selectionAction.dismiss}
+        onExcerpt={onExcerpt ? () => { const payload = selectionAction.pending!.payload;
+          onExcerpt({ bookId: book.id, kind: 'excerpt', title: payload.selection.text.slice(0, 60), quote: payload.selection.text, note: '',
+            position: { bookId: book.id, pageIndex: payload.pageIndex, updatedAt: Date.now() }, pageUrl: pages[payload.pageIndex]?.url });
+          selectionAction.dismiss();
+        } : undefined} />}
       {wordCards.popups.map((popup, index) => (
         <WordCardPopup
           key={popup.id}

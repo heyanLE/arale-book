@@ -32,7 +32,7 @@ if (window.__TAURI__ && !window.arale) {
   const study = createTauriDictionary((channel, ...args) => channel === 'dict:studyEvidence' ? dictionary.invoke(channel, ...args) : native(channel, ...args), deliver,
     new Worker(new URL('./study-worker.ts', import.meta.url), { type: 'module' }));
   window.arale = createAraleApi({
-    invoke: (channel, ...args) => channel.startsWith('study:') ? study.invoke(channel, ...args) : channel.startsWith('llm:') || channel.startsWith('translation:') ? services.invoke(channel, ...args) : channel.startsWith('dict:') || channel.startsWith('segment:') || channel === 'library:import' || channel === 'library:importDialog' ? dictionary.invoke(channel, ...args) : native(channel, ...args),
+    invoke: (channel, ...args) => channel.startsWith('study:') ? study.invoke(channel, ...args) : channel.startsWith('llm:') || channel.startsWith('translation:') ? services.invoke(channel, ...args) : channel.startsWith('dict:') || channel.startsWith('segment:') || ['library:import', 'library:importDialog', 'library:importQueue', 'library:cancelImport', 'library:dismissImport'].includes(channel) ? dictionary.invoke(channel, ...args) : native(channel, ...args),
     assetUrl: (bookId, relative) => {
       const path = [bookId, ...relative.replace(/\\/g, '/').split('/')].map(encodeURIComponent).join('/');
       // Wry exposes custom protocols through <scheme>.localhost on Windows.
@@ -55,7 +55,8 @@ if (window.__TAURI__ && !window.arale) {
   });
   bridgeReady = Promise.all([
     tauri.event.listen<{ channel: string; payload: unknown }>(EVENT_CHANNEL, event => {
-      if (event.payload.channel === 'ocr:convert') void services.invoke('ocr:finalize').catch(error => console.error('[arale] OCR conversion', error));
+      if (event.payload.channel === 'library:importProgress') void dictionary.invoke('library:importProgress', event.payload.payload).catch(error => console.error('[arale] import progress', error));
+      else if (event.payload.channel === 'ocr:convert') void services.invoke('ocr:finalize').catch(error => console.error('[arale] OCR conversion', error));
       else deliver(event.payload.channel, event.payload.payload);
     }),
     tauri.event.listen<{ paths: string[] }>('tauri://drag-drop', event => deliver('shell:openFiles', { paths: event.payload.paths })),

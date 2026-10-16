@@ -190,7 +190,7 @@ Worker 生命周期覆盖整个窗口，切换视图继续工作。已完成产�
 
 章节协议独立为 `arale-book://localhost/<id>/<href>`，Windows 使用 `http://arale-book.localhost/<id>/<href>`，支持相对 CSS/图像/字体与白名单媒体；不服务 JS、书库 JSON 或其他任意文件。`arale` 保持被动图片入口。Rust 在请求章节时注入可信 reader bridge，避免在每章缓存/IPC 中重复脚本；`build.rs` 从同一共享脚本提取源码，CSP 只允许该脚本的 SHA-256。Tauri iframe sandbox 仅有 `allow-scripts`，不透明来源，原生命令通过 AppManifest 和本地 shell capability 显式授权。debug smoke 才额外注入测试脚本及对应 hash；release 不包含这些测试入口。实现依据见 [Tauri capability 文档](https://v2.tauri.app/security/capabilities/)；该文档指出 Linux/Android 无法区分 iframe 与所属窗口，当前仅验证 Windows，不能据此宣称其他平台隔离通过。
 
-章节原文件变化时拒绝使用过期文本，提示重新导入；分词输入读取整书缓存一次，逐章核对原文件 SHA，提交时再次核对源指纹和 UTF-16 偏移。已有旧 EPUB 如果没有预处理缓存需重新导入，尚未提供自动数据迁入。当前仅开放 `.epub` ZIP；原生 RAR/7Z/TAR 中的 EPUB、套娃书包和其他入口的结构推断尚未迁移。加密/DRM 书不在验收范围，媒体播放也没有专项运行验收。
+章节原文件变化时拒绝使用过期文本，提示重新导入；分词输入读取整书缓存一次，逐章核对原文件 SHA，提交时再次核对源指纹和 UTF-16 偏移。已有旧 EPUB 如果没有预处理缓存需重新导入，尚未提供自动数据迁入。小说当前仅开放顶层 `.epub` ZIP；合集内 EPUB 仍需先解压后单独导入。2026-10-13 已补齐漫画套娃书包的按卷导入与统一导入任务队列，见 [导入与任务反馈](imports.md)。其他入口的结构推断、加密/DRM 书不在验收范围，媒体播放也没有专项运行验收。
 
 ## 前两阶段验证记录（2026-10-04）
 

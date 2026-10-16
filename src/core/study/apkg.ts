@@ -1,3 +1,4 @@
+import { learningCardText, learningEtymology } from './card-content';
 /** 不依赖用户 Python 的 Anki .apkg 导出；SQLite 由平台端口提供。 */
 import { createHash } from '../util/hash';
 import { strToU8, zipSync } from 'fflate';
@@ -15,7 +16,7 @@ const FIELDS = ['Key', 'Expression', 'Reading', 'Meaning', 'Sentence', 'Sentence
   'Usage', 'Nuance', 'Image', 'Source', 'Provenance'];
 const CSS = '.card{font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;text-align:left;line-height:1.65;max-width:720px;margin:auto;padding:18px}.word{font-size:34px;font-weight:700}.sentence{font-size:21px;margin:16px 0}.answer{font-size:22px}.muted{color:#667;font-size:14px}.image img{max-width:100%;max-height:440px}mark{background:#dfead4}';
 const QFMT = '<div class="word">{{Expression}}</div><div class="sentence">{{Sentence}}</div>';
-const AFMT = '{{FrontSide}}<hr id="answer"><div class="answer">{{Reading}} · {{Meaning}}</div><div>{{SentenceTranslation}}</div>{{#Usage}}<p>用法：{{Usage}}</p>{{/Usage}}{{#Nuance}}<p>语气：{{Nuance}}</p>{{/Nuance}}<div class="image">{{Image}}</div><p class="muted">{{Source}}</p><p class="muted">{{Provenance}}</p>';
+const AFMT = '{{FrontSide}}<hr id="answer"><div class="answer">{{Reading}} · {{Meaning}}</div><div>{{SentenceTranslation}}</div>{{#Usage}}<p>用法：{{Usage}}</p>{{/Usage}}{{#Nuance}}<p>语气：{{Nuance}}</p>{{/Nuance}}<div class="image">{{Image}}</div><p class="muted">{{Source}}</p>';
 
 /** genanki 兼容的旧版 collection.anki2 结构；参考 genanki（MIT）源码。 */
 const SCHEMA = `
@@ -35,13 +36,13 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function model(modelId: number, deckId: number, nowSec: number, extended = false): Record<string, unknown> {
+function model(modelId: number, deckId: number, nowSec: number, extended = false, etymology = false): Record<string, unknown> {
   return {
-    id: modelId, name: `ARaLeBook 漫画词语 v${extended ? 2 : 1}`, type: 0, mod: nowSec, usn: -1,
+    id: modelId, name: `ARaLeBook 漫画词语 v${etymology ? 3 : extended ? 2 : 1}`, type: 0, mod: nowSec, usn: -1,
     sortf: 1, did: deckId, latexPre: '', latexPost: '', latexsvg: false, vers: [], css: CSS, tags: [],
-    flds: (extended ? [...FIELDS, 'Lemma'] : FIELDS).map((name, ord) => ({ name, ord, sticky: false, rtl: false, font: 'Arial', size: 20, media: [] })),
+    flds: (etymology ? [...FIELDS, 'Lemma', 'Etymology'] : extended ? [...FIELDS, 'Lemma'] : FIELDS).map((name, ord) => ({ name, ord, sticky: false, rtl: false, font: 'Arial', size: 20, media: [] })),
     tmpls: [{ name: '词语理解', ord: 0, qfmt: QFMT, afmt: extended
-      ? AFMT.replace('{{Reading}} · {{Meaning}}', '{{#Reading}}读音（辞书形）：{{Reading}}{{/Reading}}{{#Meaning}}<div>{{Meaning}}</div>{{/Meaning}}') + '{{#Lemma}}<p>辞书形：{{Lemma}}</p>{{/Lemma}}'
+      ? AFMT.replace('{{Reading}} · {{Meaning}}', '{{#Reading}}读音（辞书形）：{{Reading}}{{/Reading}}{{#Meaning}}<div>{{Meaning}}</div>{{/Meaning}}') + '{{#Lemma}}<p>辞书形：{{Lemma}}</p>{{/Lemma}}' + (etymology ? '{{#Etymology}}<p>词源：{{Etymology}}</p>{{/Etymology}}' : '')
       : AFMT, bqfmt: '', bafmt: '', bfont: '', bsize: 0, did: null }],
     req: [[0, 'all', [1]]],
   };
@@ -69,7 +70,7 @@ const DEFAULT_DCONF = {
     rev: { perDay: 100, ease4: 1.3, fuzz: 0.05, ivlFct: 1, maxIvl: 36500, minSpace: 1, bury: true } },
 };
 
-function noteFields(input: CardInput, bookTitle: string, tier: StudyCardTier, extended = false): string[] {
+function noteFields(input: CardInput, bookTitle: string, tier: StudyCardTier, extended = false, etymology = false): string[] {
   const { candidate, draft, imageName } = input;
   const occurrence = candidate.occurrences.find((one) => one.id === draft.contextRef) ?? chosenOccurrence(candidate);
   if (!occurrence) throw new Error(`「${candidate.expression}」缺少漫画出处`);
@@ -82,13 +83,15 @@ function noteFields(input: CardInput, bookTitle: string, tier: StudyCardTier, ex
   const sentence = start < 0 ? escapeHtml(rawSentence)
     : escapeHtml(rawSentence.slice(0, start)) + '<mark>' + escapeHtml(rawSentence.slice(start, end)) + '</mark>' + escapeHtml(rawSentence.slice(end));
   const selected = (field: import('../../shared/types').StudyCardField): boolean => !draft.fields || draft.fields.includes(field);
+  if (selected('meaning') && !learningCardText(draft.meaning)) throw new Error(`「${target}」缺少实际词义，请补充后导出`);
   return [
     `aralebook:${candidate.id}`, escapeHtml(target), selected('reading') ? escapeHtml(draft.reading ?? candidate.reading) : '',
-    selected('meaning') ? escapeHtml(draft.meaning) : '', selected('sentence') ? sentence : '', selected('sentenceTranslation') ? escapeHtml(draft.sentenceTranslation) : '',
-    escapeHtml(draft.usage), escapeHtml(draft.nuance), imageName ? `<img src="${imageName}">` : '',
+    selected('meaning') ? escapeHtml(learningCardText(draft.meaning)) : '', selected('sentence') ? sentence : '', selected('sentenceTranslation') ? escapeHtml(learningCardText(draft.sentenceTranslation)) : '',
+    escapeHtml(learningCardText(draft.usage)), escapeHtml(learningCardText(draft.nuance)), imageName ? `<img src="${imageName}">` : '',
     escapeHtml(draft.sourceLabel ?? `${bookTitle} · ${occurrence.label}`),
-    escapeHtml(`${tier} 自动生成；JLPT 为非官方参考等级；译文和 OCR 未经人工校对。`),
+    '', // Retain the legacy field ordinal without exporting workflow warnings.
     ...(extended ? [selected('lemma') ? escapeHtml(draft.lemma ?? candidate.expression) : ''] : []),
+    ...(etymology ? [selected('etymology') ? escapeHtml(learningEtymology(draft.etymology ?? '')) : ''] : []),
   ];
 }
 
@@ -100,15 +103,16 @@ export async function buildAnkiPackage(bookId: string, bookTitle: string, tier: 
   try {
     db.run(SCHEMA);
     const deckId = stableNumber(`aralebook-deck:${bookId}`);
-    const extended = inputs.some(input => !!input.draft.fields);
-    const modelId = stableNumber(`aralebook-note-model:v${extended ? 2 : 1}`);
+    const etymology = inputs.some(input => input.draft.fields?.includes('etymology') || !!input.draft.etymology);
+    const extended = etymology || inputs.some(input => !!input.draft.fields);
+    const modelId = stableNumber(`aralebook-note-model:v${etymology ? 3 : extended ? 2 : 1}`);
     const now = Date.now();
     const nowSec = Math.floor(now / 1000);
     const deckName = `漫画日语::${bookTitle}`;
     db.run('INSERT INTO col VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [
       1, nowSec, now, now, 11, 0, 0, 0,
       JSON.stringify(collectionConfig(deckId, modelId)),
-      JSON.stringify({ [modelId]: model(modelId, deckId, nowSec, extended) }),
+      JSON.stringify({ [modelId]: model(modelId, deckId, nowSec, extended, etymology) }),
       JSON.stringify({ 1: deck(1, 'Default', nowSec), [deckId]: deck(deckId, deckName, nowSec) }),
       JSON.stringify(DEFAULT_DCONF), '{}',
     ]);
@@ -119,7 +123,7 @@ export async function buildAnkiPackage(bookId: string, bookTitle: string, tier: 
     inputs.forEach((input, index) => {
       if (seenIds.has(input.candidate.id)) throw new Error('重复的词卡候选 ID');
       seenIds.add(input.candidate.id);
-      const fields = noteFields(input, bookTitle, tier, extended);
+      const fields = noteFields(input, bookTitle, tier, extended, etymology);
       const guid = createHash('sha256').update(`aralebook-note:${bookId}:${input.candidate.id}`).digest('base64url').slice(0, 12);
       const noteId = now + index * 2 + 1;
       const tags = ` aralebook book_${bookId} ${input.candidate.jlpt ? `jlpt_n${input.candidate.jlpt}` : 'jlpt_unknown'} ${tier.toLowerCase()} `;

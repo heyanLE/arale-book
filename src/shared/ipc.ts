@@ -52,6 +52,7 @@ import type {
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from './extensions';
 import type { AppDefaults } from './defaults';
 import type { AppBuildInfo, AppUpdateResult } from './releases';
+import type { ImportQueueState } from './imports';
 
 /** 所有 invoke 通道名。渲染进程与主进程都从这里取，禁止写字面量。 */
 export const IPC = {
@@ -64,6 +65,9 @@ export const IPC = {
   libraryImport: 'library:import',
   /** 弹系统文件或文件夹对话框再导入；两种模式必须分开。 */
   libraryImportDialog: 'library:importDialog',
+  libraryImportQueue: 'library:importQueue',
+  libraryCancelImport: 'library:cancelImport',
+  libraryDismissImport: 'library:dismissImport',
   libraryRemove: 'library:remove',
   libraryOpen: 'library:open',
   librarySavePosition: 'library:savePosition',
@@ -89,6 +93,11 @@ export const IPC = {
   defaultsRead: 'defaults:read',
   defaultsWrite: 'defaults:write',
 
+  readingSnapshot: 'reading:snapshot',
+  readingSave: 'reading:save',
+  readingRemove: 'reading:remove',
+  readingRecord: 'reading:record',
+  readingExport: 'reading:export',
   cardsList: 'cards:list',
   cardsAdd: 'cards:add',
   cardsUpdate: 'cards:update',
@@ -141,6 +150,7 @@ export const IPC = {
   studyClearFilterProgress: 'study:clearFilterProgress',
   studyRunCards: 'study:runCards',
   studyPreviewCards: 'study:previewCards',
+  studyPreviewImage: 'study:previewImage',
   studyManualAiExport: 'study:manualAiExport',
   studyManualAiImport: 'study:manualAiImport',
   studyManualAiClear: 'study:manualAiClear',
@@ -184,6 +194,9 @@ export interface AraleApi {
     importPaths(paths: string[]): Promise<ImportOutcome[]>;
     /** 弹文件或文件夹对话框，取消返回 `[]`。 */
     importViaDialog(kind: ImportDialogKind): Promise<ImportOutcome[]>;
+    importQueue(): Promise<ImportQueueState>;
+    cancelImport(id: string): Promise<ImportQueueState>;
+    dismissImport(id: string): Promise<ImportQueueState>;
     remove(bookIds: string[]): Promise<void>;
     open(bookId: string): Promise<OpenBookResult>;
     savePosition(position: ReadingPosition): Promise<void>;
@@ -255,6 +268,13 @@ export interface AraleApi {
    * 按书分文件，不走书库索引：词卡是「这本书的阅读产物」，跟 `segments.json` 同类，
    * 而且一本书可能攒几千张，塞进 index.json 会让每次书库刷新都变慢。
    */
+  reading: {
+    snapshot(): Promise<import('./reading').ReadingSnapshot>;
+    save(draft: import('./reading').ReadingEntryDraft): Promise<import('./reading').ReadingEntry>;
+    remove(id: string, updatedAt: number): Promise<import('./reading').ReadingEntry>;
+    record(activity: import('./reading').ReadingActivity): Promise<boolean>;
+    export(ids: string[]): Promise<{ path: string; count: number } | null>;
+  };
   cards: {
     list(bookId: string): Promise<WordCard[]>;
     add(bookId: string, draft: WordCardDraft): Promise<WordCard>;
@@ -326,6 +346,7 @@ export interface AraleApi {
     clear(bookId: string): Promise<void>;
   };
   study: {
+    previewImage(bookId: string, candidateId: string, contextRef?: string): Promise<string | null>;
     revealManualAi(bookId: string, kind: 'filter' | 'cards'): Promise<void>;
     read(bookId: string): Promise<StudyList | null>;
     generate(bookId: string): Promise<StudyList>;
@@ -357,6 +378,7 @@ export interface AraleApi {
 export interface AraleEvents {
   /** 导入进度 / 结果播报。 */
   'library:changed': { reason: 'import' | 'remove' | 'update' };
+  'library:importQueue': ImportQueueState;
   /** 词典索引在后台载入完成。 */
   'dict:changed': DictionaryStatus;
   /** 拖放进入窗口的文件路径（渲染进程自己也有 HTML5 dnd，这个是兜底）。 */

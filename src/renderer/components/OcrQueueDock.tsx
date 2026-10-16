@@ -1,18 +1,19 @@
 /**
- * 右下角的全局任务队列停靠条：OCR 与 Anki AI/翻译任务共用入口。
+ * 右下角的全局任务队列停靠条：导入、OCR 与 Anki AI/翻译任务共用入口。
  *
  * 为什么放在 App 层：OCR 和 AI 筛词/释义都可能耗时数分钟，用户可以离开当前页面。
  * 入口在所有视图的右下角，展开后能看到运行、排队和最近的任务结果。
  *
  * 三种形态：
  * - 没有运行、排队或最近结果时不渲染。
- * - 折叠：一个带进度的胶囊；展开：OCR 与 AI 任务列表及控制。
+ * - 折叠：一个带进度的胶囊；展开：导入、OCR 与 AI 任务列表及结果。
  *
- * OCR 与学习任务各有主进程队列，可以同时各运行一条；每条学习任务内部仍有有界 LLM 批次并发。
+ * OCR/学习任务各有主进程队列，导入使用 Worker 会话 FIFO；各类任务可以同时运行。
  */
 
 import { useEffect, useRef, useState } from 'react';
 import type { OcrProgress, OcrProviderId, OcrQueueState, StudyTaskEntry, StudyTaskQueueState } from '@shared/types';
+import type { ImportQueueState, ImportTaskEntry } from '@shared/imports';
 
 export interface OcrQueueDockProps {
   queue: OcrQueueState | null;
@@ -22,6 +23,9 @@ export interface OcrQueueDockProps {
   providerLabel: (id: OcrProviderId) => string;
   onCancel: (bookId: string) => void;
   studyQueue?: StudyTaskQueueState | null;
+  importQueue?: ImportQueueState | null;
+  onCancelImport?: (id: string) => void;
+  onDismissImport?: (id: string) => void;
   onCancelStudy?: (id: string) => void;
   onDismissStudy?: (id: string) => void;
   onOpenStudy?: (bookId: string, title: string) => void;
@@ -30,7 +34,7 @@ export interface OcrQueueDockProps {
 }
 
 export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
-  const { queue, progress, providerLabel, onCancel, onOpenBook, studyQueue, onCancelStudy, onDismissStudy, onOpenStudy } = props;
+  const { queue, progress, providerLabel, onCancel, onOpenBook, studyQueue, onCancelStudy, onDismissStudy, onOpenStudy, importQueue, onCancelImport, onDismissImport } = props;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -39,7 +43,11 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
   const studyActive = studyQueue?.active ?? null;
   const studyPending = studyQueue?.pending ?? [];
   const studyRecent = studyQueue?.recent ?? [];
-  const total = (active ? 1 : 0) + pending.length + (studyActive ? 1 : 0) + studyPending.length + studyRecent.length;
+  const importActive = importQueue?.active;
+  const importPending = importQueue?.pending ?? [], importRecent = importQueue?.recent ?? [];
+  const waiting = pending.length + studyPending.length + importPending.length;
+  const running = (active ? 1 : 0) + (studyActive ? 1 : 0) + (importActive ? 1 : 0);
+  const total = running + waiting + studyRecent.length + importRecent.length;
 
   // 点外面收起弹层。队列**跑空**时也收起：任务都没了，留一个空弹层没有意义。
   useEffect(() => {
@@ -81,8 +89,8 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
           <div className="ocr-dock-head">
             <span className="ocr-dock-title">任务队列</span>
             <span className="ocr-dock-count mono">
-              {`${(active ? 1 : 0) + (studyActive ? 1 : 0)} 个运行中`}
-              {pending.length + studyPending.length > 0 ? ` · 排队 ${pending.length + studyPending.length}` : ''}
+              {`${running} 个运行中`}
+              {waiting > 0 ? ` · 排队 ${waiting}` : ''}
             </span>
             <button
               type="button"
@@ -95,6 +103,8 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
           </div>
 
           <div className="ocr-dock-list">
+            {importActive && <ImportTaskRow task={importActive} />}
+            {importPending.map((task, index) => <ImportTaskRow key={task.id} task={task} position={index + 1} onCancel={onCancelImport} />)}
             {active && (
               <div className="ocr-queue-item is-active">
                 <div className="ocr-queue-row">
@@ -162,28 +172,30 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
             {studyActive && <StudyTaskRow task={studyActive} onCancel={onCancelStudy} onOpen={openStudy} />}
             {studyPending.map((task, index) => <StudyTaskRow key={task.id} task={task} position={index + 1} onCancel={onCancelStudy} onOpen={openStudy} />)}
             {studyRecent.map((task) => <StudyTaskRow key={task.id} task={task} onDismiss={onDismissStudy} onOpen={openStudy} />)}
+            {importRecent.map(task => <ImportTaskRow key={task.id} task={task} onDismiss={onDismissImport} onOpen={onOpenBook ? id => { setOpen(false); onOpenBook(id); } : undefined} />)}
           </div>
         </div>
       )}
 
       <button
         type="button"
-        className={`ocr-dock-pill${open ? ' is-open' : ''}${!active && !studyActive ? ' is-idle' : ''}`}
+        className={`ocr-dock-pill${open ? ' is-open' : ''}${running === 0 ? ' is-idle' : ''}`}
         onClick={() => setOpen((value) => !value)}
         title="点击查看任务队列"
         aria-expanded={open}
       >
         <span className="ocr-dock-spinner" aria-hidden="true" />
-        <span className="ocr-dock-label">
-          {active ? '识别中' : studyActive ? 'AI 任务中' : pending.length + studyPending.length > 0 ? '排队中' : '任务结果'}
-          {pages > 0 && active ? (
+        <span className="ocr-dock-label" role="status" aria-live="polite">
+          {importActive ? '导入中' : active ? '识别中' : studyActive ? 'AI 任务中' : waiting > 0 ? '排队中' : '任务结果'}
+          {pages > 0 && active && !importActive ? (
             <span className="mono ocr-dock-progress">
               {Math.min(done + (activeProgress ? 1 : 0), pages)}/{pages}
             </span>
           ) : null}
-          {!active && studyActive && studyActive.total > 0 && <span className="mono ocr-dock-progress">{studyActive.done}/{studyActive.total}</span>}
-          {pending.length + studyPending.length + studyRecent.length + (active && studyActive ? 1 : 0) > 0 ? (
-            <span className="ocr-dock-pending mono">+{pending.length + studyPending.length + studyRecent.length + (active && studyActive ? 1 : 0)}</span>
+          {!active && !importActive && studyActive && studyActive.total > 0 && <span className="mono ocr-dock-progress">{studyActive.done}/{studyActive.total}</span>}
+          {importActive && <span className="ocr-dock-progress cell-ellipsis" title={importActive.title}>{importActive.progress.message}</span>}
+          {total > 1 ? (
+            <span className="ocr-dock-pending mono">+{total - 1}</span>
           ) : null}
         </span>
         <span className="ocr-dock-caret" aria-hidden="true">
@@ -192,6 +204,28 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
       </button>
     </div>
   );
+}
+
+function ImportTaskRow({ task, position, onCancel, onDismiss, onOpen }: {
+  task: ImportTaskEntry; position?: number; onCancel?: (id: string) => void; onDismiss?: (id: string) => void; onOpen?: (id: string) => void;
+}): JSX.Element {
+  const label = task.status === 'queued' ? `等待导入 ${position ?? ''}` : task.status === 'running' ? '导入中'
+    : task.status === 'completed' ? '导入完成' : task.status === 'partial' ? '部分失败' : task.status === 'cancelled' ? '已取消' : '导入失败';
+  const { done, total, message } = task.progress;
+  return <div className={`ocr-queue-item import-task-item${task.status === 'running' ? ' is-active' : ''}`} data-testid="import-task" data-status={task.status}>
+    <div className="ocr-queue-row"><span className={`ocr-queue-badge${task.status === 'queued' ? ' is-waiting' : ''}`}>{label}</span>
+      <span className="ocr-queue-title cell-ellipsis" title={task.source}>{task.title}</span></div>
+    <div className="ocr-queue-meta" role="status">{message}{task.status === 'running' && total > 0 ? ` · ${done}/${total} 页` : ''}</div>
+    {task.status === 'running' && <div className={`ocr-queue-bar${total === 0 ? ' is-indeterminate' : ''}`} aria-hidden="true"><div className="ocr-queue-bar-fill" style={{ width: total > 0 ? `${Math.min(100, Math.round(100 * done / total))}%` : '35%' }} /></div>}
+    {task.results.length > 0 && <details className="import-task-results" open={task.status === 'failed' || task.status === 'partial'}><summary>导入结果（{task.results.length} 项）</summary>
+      {task.results.map((result, index) => <div key={index}><span>{result.ok ? '已导入' : '失败'} · {result.source.replace(/\\/g, '/').split('/').at(-1)}{result.error ? `：${result.error}` : ''}</span>
+        {result.ok && result.bookId && onOpen && <button type="button" className="btn btn-sm" onClick={() => onOpen(result.bookId!)}>打开书籍</button>}</div>)}
+    </details>}
+    <div className="ocr-queue-actions">
+      {task.status === 'queued' && onCancel && <button type="button" className="btn btn-sm" onClick={() => onCancel(task.id)}>取消排队</button>}
+      {task.finishedAt && onDismiss && <button type="button" className="btn btn-sm" onClick={() => onDismiss(task.id)}>清除</button>}
+    </div>
+  </div>;
 }
 
 function StudyTaskRow(props: {

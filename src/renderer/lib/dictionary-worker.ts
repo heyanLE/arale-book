@@ -6,6 +6,7 @@ import { TauriSegments } from './tauri-segments';
 import { sanitizeGlossaryHtml } from '@core/dict/glossary';
 import type { GlossaryContent } from '@shared/types';
 import { importBooks } from './tauri-epub';
+import { ImportTaskQueue } from '@core/import/task-queue';
 
 // No filesystem or Tauri globals in this worker: the host forwards a narrow native RPC.
 let nextNativeId = 1;
@@ -19,7 +20,8 @@ function native(channel: string, ...args: unknown[]): Promise<any> {
 let index = emptyTermIndex();
 let loaded = false;
 let mutation: Promise<unknown> = Promise.resolve();
-let bookImports: Promise<unknown> = Promise.resolve();
+const imports = new ImportTaskQueue((path, id, progress) => importBooks(native, [path], id, progress),
+  payload => self.postMessage({ kind: 'event', channel: 'library:importQueue', payload }));
 const segments = new TauriSegments(native, (channel, payload) => self.postMessage({ kind: 'event', channel, payload }), async () => {
   await mutation;
   if (!loaded) await serialize(reload);
@@ -83,10 +85,12 @@ async function importOne(path: string): Promise<void> {
 }
 async function dispatch(channel: string, args: any[]): Promise<unknown> {
   if (channel === 'library:import') {
-    const task = bookImports.then(() => importBooks(native, args[0]));
-    bookImports = task.catch(() => undefined);
-    return task;
+    return imports.enqueue(args[0]);
   }
+  if (channel === 'library:importQueue') return imports.snapshot();
+  if (channel === 'library:cancelImport') return imports.cancel(args[0]);
+  if (channel === 'library:dismissImport') return imports.dismiss(args[0]);
+  if (channel === 'library:importProgress') { const { taskId, ...progress } = args[0]; imports.progress(taskId, progress); return null; }
   if (channel.startsWith('segment:')) return segments.request(channel, args);
   switch (channel) {
     case 'dict:initialize': return serialize(reload);

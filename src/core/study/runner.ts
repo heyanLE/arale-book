@@ -1,3 +1,4 @@
+import { dictionaryEtymology, isLoanwordCandidate } from './etymology';
 /** A 档位的主进程编排：按证据生成、有限修复、预算和逐批检查点。 */
 import { createHash } from '../util/hash';
 import type { DictTerm, SegmentUnit, StudyCardDraft, StudyCardField, StudyCardIssue, StudyCardRunRequest, StudyDictionaryEvidence, StudyList, StudyPipelineCheckpoint, StudyPipelinePreview, StudyPipelineTier, StudyRunProgress, StudyRunStats } from '../../shared/types';
@@ -81,7 +82,7 @@ export async function runCardPipeline(options: Options): Promise<StudyList> {
   const usesTranslation = needsTranslation(tier, fields) && (!['A3', 'A4'].includes(tier) || !!request.translationProfileId);
   const selected = list.candidates.filter(c => c.selected && !c.excluded);
   if (!selected.length) throw new Error('请先选择要制卡的词');
-  if (usesLlm && (!options.llm || !request.profileId)) throw new Error('生成本词含义的 A2–A4 需要选择 LLM 配置');
+  if (usesLlm && (!options.llm || !request.profileId)) throw new Error('生成词义或舶来语词源需要选择 LLM 配置');
   if (usesTranslation && (!options.translation || !request.translationProfileId)) throw new Error('当前字段与档位需要选择翻译配置');
   const tokenBudget = request.tokenBudget == null ? null : request.tokenBudget;
   if (tokenBudget !== null && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1000)) throw new Error('token 预算必须为至少 1000 的整数，或留空不限');
@@ -108,7 +109,7 @@ export async function runCardPipeline(options: Options): Promise<StudyList> {
       invalid.push(withIssues({ candidateId: candidate.id, fields, lemma: fields.includes('lemma') ? candidate.expression : '', reading: fields.includes('reading') ? candidate.reading : '', meaning: '', sentenceTranslation: '', usage: '', nuance: '', needsReview: true, reviewReason: '' }, sourceIssues(candidate, occurrence), true));
     } else inputs.push({ candidate, occurrence, evidence: evidence[original.id]!, fields, tier, ...(['A3', 'A4'].includes(tier) ? { context: adjacentContext(occurrence, options.units ?? []) } : {}) });
   }
-  const planHash = digest({ version: 3, tier, fields, sourceHash: options.sourceHash, llmSignature, translationSignature,
+  const planHash = digest({ version: 4, tier, fields, sourceHash: options.sourceHash, llmSignature, translationSignature,
     profileId: usesLlm ? request.profileId : null, translationProfileId: usesTranslation ? request.translationProfileId : null,
     evidence, contexts: inputs.map(i => i.context ? [i.candidate.id, i.occurrence.id, i.context] : [i.candidate.id, i.occurrence.id]) });
   const pending = list.workflow?.pendingCardRun;
@@ -209,6 +210,7 @@ export async function runCardPipeline(options: Options): Promise<StudyList> {
     if (fields.includes('sentenceTranslation') && !input.sentenceTranslation) issues.push({ field: 'sentenceTranslation', code: 'missing', reason: tier === 'A0' ? '缺少句译；A0 不产生外部翻译请求' : '缺少句译，请选择翻译配置或手动补充' });
     return withIssues({ candidateId: candidate.id, contextRef: occurrence.id, reading: candidate.reading,
       meaning: fields.includes('meaning') ? [...new Set(rows.map(e => e.text))].join('\n') : '', sentenceTranslation: fields.includes('sentenceTranslation') ? input.sentenceTranslation ?? '' : '',
+      etymology: fields.includes('etymology') ? dictionaryEtymology(candidate, rows) : '',
       usage: '', nuance: '', evidenceIds: rows.map(e => e.id), needsReview: false, reviewReason: '', referenceOnly: true }, issues);
   };
   const finalize = (input: PipelineInput, draft: StudyCardDraft): StudyCardDraft => {
@@ -216,6 +218,7 @@ export async function runCardPipeline(options: Options): Promise<StudyList> {
     const issues = [...(draft.issues ?? [])].filter(i => fields.includes(i.field as StudyCardField) || (i.field === 'sentence' && fields.includes('meaning')) || i.code === 'budget' || i.code === 'limit');
     if (fields.includes('meaning') && filterDecision?.decision === 'review' && !input.candidate.forceInclude) issues.push({ field: 'meaning', code: 'ambiguous', reason: `选词仍存疑：${filterDecision.reason}` });
     const result = withIssues({ ...draft, fields, expression: input.occurrence.text.slice(input.occurrence.start, input.occurrence.end),
+      etymology: fields.includes('etymology') && isLoanwordCandidate(input.candidate) ? draft.etymology || dictionaryEtymology(input.candidate, input.evidence) : '',
       lemma: fields.includes('lemma') ? input.candidate.expression : '',
       sentence: fields.includes('sentence') ? input.occurrence.text : '',
       meaning: fields.includes('meaning') ? draft.meaning : '',

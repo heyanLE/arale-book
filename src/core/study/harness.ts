@@ -20,9 +20,9 @@ export const FILTER_TIERS: Record<StudyFilterTier, { name: string; description: 
 };
 
 export const CARD_TIERS: Record<StudyCardTier, { name: string; description: string; batchSize: number; passes: number }> = {
-  A0: { name: '本地词典', description: '只读取已导入词典，零外部请求；无句译，词义保留参考性质。', batchSize: 6, passes: 0 },
+  A0: { name: '本地词典', description: '使用已导入词典生成词义、读音与可用词源；完全离线。', batchSize: 6, passes: 0 },
   A1: { name: '翻译辅助', description: '词典可保留多个含义，按需翻译原句；不调用 LLM。', batchSize: 6, passes: 0 },
-  A2: { name: '缺词补全', description: '仅词典无释义时用 AI 补全，可列多个含义；最多一次修复。', batchSize: 6, passes: 1 },
+  A2: { name: '缺词补全', description: '补充词典缺失的词义与舶来语词源；最多一次修复。', batchSize: 6, passes: 1 },
   A3: { name: '语境选义', description: '单义直接用词典；多义或缺词才用 AI，提供上下文与译文；最多三次修复。', batchSize: 6, passes: 1 },
   A4: { name: '全量语境', description: '每个需要本词含义的词都过 AI，提供已有词典、上下文和译文；最多三次修复。', batchSize: 6, passes: 1 },
   R0: { name: '翻译释义', description: '翻译词语和原句；不调用 LLM，配图在导出时单独选择。', batchSize: 1, passes: 0 },
