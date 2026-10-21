@@ -1,0 +1,15 @@
+{
+  "id": "ocr-arale_onnx_v1-linux",
+  "name": "Arale ONNX OCR (Linux CPU)",
+  "version": "0.2.0-linux.1",
+  "kind": "ocr-engine",
+  "provides": "arale_onnx_v1",
+  "platforms": ["linux"],
+  "arch": ["x64", "arm64"],
+  "license": "GPL-3.0",
+  "runner": {
+    "program": "/usr/local/bin/python3",
+    "args": ["-s", "-u", "ocr/ocr_run.py", "--pages-file", "{pagesFile}"],
+    "env": {"PYTHONDONTWRITEBYTECODE": "1", "OPENBLAS_NUM_THREADS": "1"}
+  }
+}

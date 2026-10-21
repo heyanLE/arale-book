@@ -1,5 +1,7 @@
 # 开发、构建与验证
 
+服务端本机运行：`npm run build:native`、`npm run server:build`、`npm run server:start -- --library ./server-library --data ./.arale-server`。隔离集成使用 `npm run server:test -- --native`；加 `--real` 使用本机现有 ONNX 包。类型检查现包含 `tsconfig.server.json`。环境变量、凭据文件、兼容与平台验收范围见[服务端开发与验证](server.md)。Linux 镜像与 Compose 使用 `server/Dockerfile`、`server/compose.yaml`，本机容器验收为 `npm run server:docker:test -- --platform linux/arm64 --native`（镜像须先构建），详见[Docker 部署](server-docker.md)。
+
 Windows x64/macOS arm64 每夜构建及日期版本规则见[每夜构建](nightly.md)。npm 已锁定官方 Tauri CLI，本地打包入口为 `node scripts/tauri.mjs pack`，不要求全局安装 cargo-tauri。
 
 核对日期：2026-10-05。所有命令默认从主仓库根运行；Windows 特有问题先读 [Windows 交接](windows-handoff.md)。下方记录保留原验证日期；Tauri 预览命令及本轮验证见 [迁移文档](tauri-migration.md)。

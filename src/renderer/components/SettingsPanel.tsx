@@ -13,6 +13,7 @@ import type { LlmProfileInput, LlmSettings, TranslationProfile, TranslationSetti
 import type { AppDefaults } from '@shared/defaults';
 import { SPREAD_OFFSETS, clampSpreadOffset, spreadOffsetLabel } from '@core/comic/spread';
 import { ExtensionsCard } from './ExtensionsCard';
+import { ServersCard } from './ServersCard';
 import { AppVersionCard } from './AppVersionCard';
 import { LlmCard } from './LlmCard';
 import { TranslationCard } from './TranslationCard';
@@ -91,7 +92,7 @@ export function SettingsPanel({
 }: SettingsPanelProps): JSX.Element {
   const settings = useSettings();
   const [settingsQuery, setSettingsQuery] = useState('');
-  const groups = [['version','版本与更新'],['library','书库'],['dictionary','词典'],['appearance','外观与布局'],['llm','LLM 配置与提示词'],['translation','翻译'],['wordcards','词卡弹窗'],['ocr','OCR 与扩展'],['epub','小说阅读器'],['comic','漫画阅读器']];
+  const groups = [['servers','服务器与书源'],['version','版本与更新'],['library','书库'],['dictionary','词典'],['appearance','外观与布局'],['llm','LLM 配置与提示词'],['translation','翻译'],['wordcards','词卡弹窗'],['ocr','OCR 与扩展'],['epub','小说阅读器'],['comic','漫画阅读器']];
   const [dict, setDict] = useState<DictionaryStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -187,6 +188,7 @@ export function SettingsPanel({
       </nav>
       <div className="settings-body"><p className="settings-save-hint">界面和阅读偏好即时生效并自动保存；LLM 配置和提示词请点击对应的保存按钮。</p>
         <AppVersionCard />
+        <ServersCard />
         {/* ---------------- 书库 ---------------- */}
         <section className="settings-card" id="settings-library">
           <div className="settings-card-head">

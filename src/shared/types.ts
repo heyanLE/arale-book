@@ -39,6 +39,7 @@ export type ReaderMode = 'epub' | 'comic';
 
 /** 书库里的一本书（= `<libraryDir>/<id>/book.json` 的内容）。 */
 export interface BookRecord {
+  remote?: import('./server').RemoteOrigin;
   /** 稳定主键，`bk_` + 16 位随机十六进制。同时也是书目录名与 `arale://` 的 host 段。 */
   id: string;
   format: BookFormat;
@@ -455,7 +456,7 @@ export interface ChapterContent {
  * 曾经的 `builtin`（PP-OCRv5 / onnxruntime-node）已删除：它需要为竖排做旋转补偿，
  * 真实漫画上逐行命中只有 23%，而体积（onnxruntime 三个平台的二进制）还不小。
  */
-export type OcrProviderId = 'system' | 'arale_onnx_v1';
+export type OcrProviderId = 'system' | 'arale_onnx_v1' | 'server';
 
 /** 某个引擎的能力与就绪状态。 */
 export interface OcrEngineStatus {
@@ -553,6 +554,8 @@ export interface OcrJobResult {
  * 不用盯着哪一本先点在前面。
  */
 export interface OcrQueueEntry {
+  /** Additional server jobs may run alongside the local active slot. */
+  running?: boolean;
   bookId: string;
   /** 书名快照。队列弹层要显示「在识别哪一本」，此时书可能已经被重命名。 */
   title: string;

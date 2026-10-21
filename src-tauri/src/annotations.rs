@@ -114,7 +114,16 @@ pub fn validate(document: &Value) -> Result<()> {
     Ok(())
 }
 fn signature(backend: &Backend, id: &str, url: &str) -> Result<String> {
-    let file = storage::inside(&backend.dir(id)?.join("content"), url)?;
+    let content=backend.dir(id)?.join("content");
+    if id.starts_with("rs_") && !content.join(url).is_file() {
+        // A verified remote manifest binds uncached pages without downloading a book
+        // merely to check old annotations. Downloaded files still use the usual hash.
+        let book=backend.book(id)?;
+        let hash=book["pages"].as_array().into_iter().flatten().find(|p|p["url"]==url)
+            .and_then(|p|p["sha256"].as_str()).context("远程页面指纹缺失")?;
+        return Ok(hash.to_owned());
+    }
+    let file = storage::inside(&content, url)?;
     Ok(format!("{:x}", Sha256::digest(fs::read(file)?)))
 }
 fn stale(backend: &Backend, id: &str, document: &Value) -> Result<Vec<String>> {
@@ -223,4 +232,21 @@ pub fn write(backend: &Backend, id: &str, mut next: Value) -> Result<Value> {
     next["revision"] = json!(current["document"]["revision"].as_u64().unwrap() + 1);
     storage::write(&backend.dir(id)?.join("comic-annotations.json"), &next)?;
     Ok(json!({"stalePages":stale(backend,id,&next)?,"document":next}))
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    #[test]
+    fn remote_annotations_bind_uncached_pages_and_still_detect_changed_cache() {
+        let root=tempfile::tempdir().unwrap();
+        let mut backend=Backend::load(root.path().into()).unwrap();
+        let expected=format!("{:x}",Sha256::digest(b"verified original"));
+        backend.remote_books.push(json!({"id":"rs_test","format":"comic","pages":[{"url":"revision/pages/1.png","sha256":expected}]}));
+        assert_eq!(signature(&backend,"rs_test","revision/pages/1.png").unwrap(),expected);
+        assert!(signature(&backend,"rs_test","../outside.png").is_err());
+        let file=backend.dir("rs_test").unwrap().join("content/revision/pages/1.png");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();fs::write(file,b"changed cache").unwrap();
+        assert_ne!(signature(&backend,"rs_test","revision/pages/1.png").unwrap(),expected);
+    }
 }

@@ -16,6 +16,8 @@ import type { LibraryViewMode, ThemeMode } from '../lib/reader-settings';
 import brandMark from '../assets/brand-mark.png';
 
 export interface ToolbarProps {
+  sourceSlot?: React.ReactNode;
+  remoteSource?: boolean;
   view: ViewName;
   /** 阅读器视图下的书名，其它视图传 null。 */
   bookTitle: string | null;
@@ -78,6 +80,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
         </span>
       </div>
 
+      {inLibrary && props.sourceSlot}
       <div className="toolbar-group">
         {!inLibrary && (
           <button type="button" className="tool-btn" onClick={onBack} title={`${backLabel} (Esc)`} data-testid="page-back">
@@ -145,7 +148,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
             <button
               type="button"
               className="tool-btn"
-              onClick={onImportFiles}
+              disabled={props.remoteSource} onClick={onImportFiles}
               title="导入书籍文件（可多选，也可拖放）"
               data-testid="toolbar-import-files"
             >
@@ -154,7 +157,7 @@ export function Toolbar(props: ToolbarProps): JSX.Element {
             <button
               type="button"
               className="tool-btn"
-              onClick={onImportDirectory}
+              disabled={props.remoteSource} onClick={onImportDirectory}
               title="把页图文件夹导入为漫画"
               data-testid="toolbar-import-directory"
             >

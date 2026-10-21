@@ -16,6 +16,7 @@ import { BookDetail, type BookMetaPatch } from '../components/BookDetail';
 import { capturePointer } from '../lib/pointer';
 
 export interface LibraryViewProps {
+  remoteSource?: boolean;
   query: LibraryQuery;
   onQueryChange: (patch: Partial<LibraryQuery>) => void;
   selectedIds: string[];
@@ -105,6 +106,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
 
   const importPaths = useCallback(
     async (paths: string[]) => {
+      if(props.remoteSource){onStatus('请切换到本地书库导入；服务端书籍请放入扫描目录');return;}
       if (paths.length === 0) {
         onStatus('没有拿到可导入的路径');
         return;
@@ -115,7 +117,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
       onStatus(summarizeImportOutcome(outcomes));
       if (outcomes.some((o) => o.ok)) onLibraryChanged();
     },
-    [onLibraryChanged, onStatus],
+    [onLibraryChanged, onStatus, props.remoteSource],
   );
 
   // Native Tauri drag/drop and open-file events deliver filesystem paths.
@@ -130,11 +132,12 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
   const onDrop = useCallback((event: React.DragEvent) => { event.preventDefault(); }, []);
 
   const importViaDialog = useCallback(async (kind: 'files' | 'directory') => {
+    if(props.remoteSource){onStatus('请切换到本地书库导入；服务端书籍请放入扫描目录');return;}
     const outcomes = await call('导入', () => api.library.importViaDialog(kind));
     if (!outcomes) return;
     onStatus(summarizeImportOutcome(outcomes));
     if (outcomes.some((o) => o.ok)) onLibraryChanged();
-  }, [onLibraryChanged, onStatus]);
+  }, [onLibraryChanged, onStatus, props.remoteSource]);
 
   // ------------------------------------------------------------------
   // 书籍操作
@@ -164,7 +167,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
       onStatus(`已更新《${updated.title}》`);
       onLibraryChanged();
     },
-    [onLibraryChanged, onStatus],
+    [onLibraryChanged, onStatus, props.remoteSource],
   );
 
   const revealBook = useCallback((bookId: string) => {
@@ -386,15 +389,17 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
             },
             {
               label: '在文件夹中显示',
-              disabled: menuTargets.length !== 1,
+              disabled: !!menu.book.remote || menuTargets.length !== 1,
               onSelect: () => revealBook(menu.book.id),
             },
             { separator: true },
             {
               label: '在详情面板中编辑',
+              disabled: !!menu.book.remote,
               onSelect: () => updateSettings({ showDetail: true }),
             },
             {
+              disabled: !!menu.book.remote,
               label: `切换阅读方向（${menu.book.direction === 'rtl' ? 'RTL → LTR' : 'LTR → RTL'}）`,
               onSelect: () => {
                 for (const id of menuTargets) {
@@ -408,6 +413,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
             {
               label: menuTargets.length > 1 ? `从书库移除这 ${menuTargets.length} 本…` : '从书库移除…',
               danger: true,
+              disabled: !!menu.book.remote,
               onSelect: () => void removeBooks(menuTargets),
             },
           ]}

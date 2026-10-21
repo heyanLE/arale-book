@@ -166,11 +166,7 @@ impl Study {
                     bail!("未知自行 AI 阶段");
                 }
                 let list = storage::read(
-                    &backend
-                        .root
-                        .join("library")
-                        .join(id)
-                        .join("study-list.json"),
+                    &backend.dir(id)?.join("study-list.json"),
                     Value::Null,
                 )?;
                 let directory = list["workflow"]["manualAi"][kind]["directory"]

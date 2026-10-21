@@ -1,0 +1,106 @@
+{
+  "verifiedOn": "2026-10-20",
+  "host": "physical Ubuntu x86_64 NAS",
+  "docker": "29.1.3",
+  "compose": "5.1.4",
+  "image": "arale-server:nas-20261020",
+  "deploymentProject": "arale-nas",
+  "port": 3737,
+  "dataLayout": {
+    "library": "dedicated Arale directory, read-only bind",
+    "data": "dedicated Arale directory, writable bind",
+    "otherReaderLibrariesMounted": false
+  },
+  "modelSource": {
+    "archiveBytes": 722309909,
+    "archiveSha256": "9d83ceca86f6c5e29f635eba2b0b9ab03d06d5c9ff7bc9d09b7f0eb9de244539",
+    "archiveAndAllFiveModelHashesVerifiedOnNas": true,
+    "transport": "parallel HTTPS byte ranges from public mirror, original locked hashes enforced"
+  },
+  "buildContext": {
+    "sourceArchiveSha256": "47c4579d8592cfa36319fd40a80188c0ba2ce189287f0bc40b53a417c2eb16ac",
+    "sourceFiles": 127,
+    "dockerfileAfterPermissionFixSha256": "031a6060eb0a36a8f1d8832e23e1db76c7af22c41557fa4e5b152b7bc0e8c106",
+    "rustImageOverride": "rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e"
+  },
+  "acceptance": {
+    "date": "2026-10-20",
+    "platform": "NAS Ubuntu x86_64 Docker",
+    "endpoint": "local EasyTier forward",
+    "pageCount": 2,
+    "ocrBlocks": 14,
+    "ocrRevision": 1,
+    "position": 0,
+    "checks": [
+      "NAS authenticated API and OCR capability",
+      "independent Arale library and two-page acceptance comic",
+      "real NAS remote page matches original bytes",
+      "two-client progress sync, conflict protection and idempotency",
+      "submitting client exits while NAS background OCR continues",
+      "real NAS ONNX OCR completes and publishes both text pages",
+      "two actual Rust clients read NAS content and preserve local data"
+    ],
+    "tokenPrinted": false
+  },
+  "restart": {
+    "date": "2026-10-20",
+    "onlyAraleRestarted": true,
+    "serverIdentityPreserved": true,
+    "accessTokenPreserved": true,
+    "readingProgressPreserved": true,
+    "fullOcrLayerPreserved": true,
+    "bookRevisionPreserved": true
+  },
+  "serviceAudit": {
+    "runtime": {
+      "python": "3.12.15",
+      "platform": "Linux",
+      "machine": "x86_64",
+      "onnxRuntime": "1.30.0",
+      "providers": [
+        "AzureExecutionProvider",
+        "CPUExecutionProvider"
+      ]
+    },
+    "date": "2026-10-20",
+    "existingContainers": 17,
+    "existingServiceDifferences": [],
+    "existingReaderHttpUnchanged": true,
+    "araleHealthy": true,
+    "araleOnlyOwnDirectories": true,
+    "libraryReadonly": true,
+    "cpuLimit": 2.0,
+    "memoryLimitBytes": 3221225472,
+    "sourceFilesVerified": 127,
+    "imageId": "sha256:72f001de1eefa013a603b99912a7115e4c0fab7d60f58a06414e7ef3e896f4a6"
+  },
+  "commands": [
+    "docker build --platform linux/amd64 --build-arg RUST_IMAGE=rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e -t arale-server:nas-20261020 -f server/Dockerfile .",
+    "docker compose -f /srv/arale/compose.yaml up -d --no-build --wait --wait-timeout 180",
+    "python3 .tmp/nas-deploy/verify-nas.py",
+    "python3 .tmp/nas-deploy/verify-native-only.py",
+    "cargo test --manifest-path src-tauri/Cargo.toml --locked remote_round_trip -- --ignored --nocapture",
+    "python3 .tmp/nas-deploy/verify-restart.py",
+    "docker compose -f /srv/arale/compose.yaml restart arale",
+    "python3 .tmp/network-session/nas_remote.py --script .tmp/nas-deploy/audit-services.py --timeout 90",
+    "PYTHONPYCACHEPREFIX=.tmp/python-cache python3 server/docker/test-models.py",
+    "git diff --check"
+  ],
+  "validationNotes": [
+    "Initial startup rejected private build-context file permissions; Dockerfile now normalizes public runtime asset readability, retaining UID 1000 and read-only rootfs. Rebuilt image was validated on NAS.",
+    "Initial native test runner resolved the cargo symlink to rustup. Fixed the runner and reran only the native step successfully; six prior HTTP/OCR checks were retained.",
+    "Service audit compares mount sets in sorted order because Docker inspect ordering varies. Existing container IDs, states, start times, port bindings and mounts all matched baseline.",
+    "Machine-specific deployment paths are replaced with /srv/arale in this public report; private original retained locally."
+  ],
+  "notValidated": [
+    "native desktop GUI against NAS",
+    "personal manga library",
+    "long-running load",
+    "HTTPS reverse proxy",
+    "NAS reboot",
+    "SMB/NFS or ACL variants",
+    "non-ZIP comic formats on physical NAS",
+    "other NAS hardware",
+    "ARM64 rebuild after permission-only fix"
+  ]
+}

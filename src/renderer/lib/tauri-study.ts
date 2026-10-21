@@ -80,7 +80,7 @@ export class TauriStudy {
     yield: async () => { await this.flush(); await new Promise(resolve => setTimeout(resolve,0)); },
     crop: (id, occurrence) => this.image(id, occurrence, 'crop'),
     pageImage: (id, occurrence) => this.image(id, occurrence, 'page'),
-    validateSource: (id, occurrence) => this.native('study:image',this.owner,id,occurrence,'validate'),
+    validateSource: async (id, occurrence) => { await this.ensureRemotePage(id,occurrence);return this.native('study:image',this.owner,id,occurrence,'validate'); },
     buildPackage: async (id,title,tier,inputs) => {
       const native = this.native, owner = this.owner;
       class Database implements AnkiDatabase {
@@ -200,8 +200,18 @@ export class TauriStudy {
     catch(error) { await this.flush(); this.check(id); throw error; }
     finally { this.operations.delete(id); this.captures.delete(id); }
   }
+  private async ensureRemotePage(id:string,occurrence:unknown) {
+    if (id.startsWith('rs_')) {
+      const ref = (occurrence as import('@shared/types').StudyOccurrence).ref;
+      const url = ref.slice(5, ref.lastIndexOf('#'));
+      const page = this.snapshots.get(id)?.book.pages?.findIndex(p => p.url === url) ?? -1;
+      if (page < 0) throw new Error('远程原文页已变化');
+      await this.native('remote:ensurePage', id, page);
+    }
+  }
   private async image(id:string,occurrence:unknown,mode:string) {
     await this.flush(id);
+    await this.ensureRemotePage(id,occurrence);
     let group: number[] | undefined;
     if (mode === 'crop') {
       const ref = (occurrence as import('@shared/types').StudyOccurrence).ref;

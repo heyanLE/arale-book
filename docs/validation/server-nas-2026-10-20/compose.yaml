@@ -1,0 +1,25 @@
+name: arale-nas
+services:
+  arale:
+    image: arale-server:nas-20261020
+    platform: linux/amd64
+    init: true
+    user: "1000:1000"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: 2
+    mem_limit: 3g
+    ports:
+      - "0.0.0.0:3737:3737"
+    environment:
+      ARALE_SERVER_NAME: Arale NAS
+      ARALE_OCR_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+    volumes:
+      - ./data:/data
+      - ./library:/library:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

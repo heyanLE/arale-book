@@ -45,3 +45,16 @@ native/arale-vision-ocr/arale-vision-ocr
 
 # 注意：`engines/` 是 git submodule（OCR 引擎库），**不能**忽略。
 # 它自己的构建产物由它自己的 .gitignore 管（`**/build/`、`**/dist/*.zip`）。
+
+# Arale Server local runtime (books, SQLite and credentials)
+.arale-server/
+server-library/
+dist-server/
+server/.env
+server/arale-data/
+
+# Python packaging checks
+server/docker/__pycache__/
+
+# Private PC-to-NAS handoff; contains household device configuration
+/docs/pc-to-nas-migration-task.md

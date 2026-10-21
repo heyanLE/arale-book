@@ -80,7 +80,7 @@ export function ocrControlState(input: OcrControlInput): OcrControlState {
     ? `本次识别已锁定为「${label}」——任务结束后才能改。`
     : '选哪个 OCR 引擎';
 
-  if (frozen && active) {
+  if (frozen && (active || queueEntry?.running)) {
     // 识别中：同一个按钮变成「停止识别」。带进度是为了保留旧版「识别中 12/171」的信息量，
     // 但那句话不该是按钮的全部——按钮要说清点下去会发生什么。
     return {
@@ -113,6 +113,6 @@ export function ocrControlState(input: OcrControlInput): OcrControlState {
     label: hasResult ? '重新识别' : '识别文字',
     isCancel: false,
     disabled: !canStart,
-    title: `本地识别这一卷的文字（${label}）。OCR 是可选的，不跑也能看。`,
+    title: provider === 'server' ? '在服务器后台识别本卷；关闭客户端后仍继续。' : `本地识别这一卷的文字（${label}）。OCR 是可选的，不跑也能看。`,
   };
 }

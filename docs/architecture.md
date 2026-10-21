@@ -1,5 +1,9 @@
 # 当前架构与数据流
 
+2026-10-20 Linux 容器：`server/Dockerfile` 分阶段构建 Node 服务、Linux Rust 解包器和 CPU Python／ORT，模型与 wheel 均校验锁定哈希；`server/compose.yaml` 只读挂载漫画、持久保存服务端数据，支持独立 bind／secret override。`server/src/lock.ts` 的心跳租约支持容器主机名／PID 变化和强杀恢复，Linux 依赖锁计入 OCR 检查点签名。双架构实际运行报告及未验收范围见[Docker 部署](server-docker.md)。
+
+2026-10-19 增加可选 Arale Server：`server/src/` 使用 Fastify／SQLite WAL，复用 Rust 解包器与 Python ONNX runner。客户端原生 `remote.rs` 保管连接令牌、校验并缓存远程页图与文字层、持久重试进度；`core/remote-transport.ts` 按书 ID 分流，本地书库索引不含远程书。远程目录独立于 `library/`，学习 sidecar 继续走现有原生接口；本地／服务端 OCR 共用 `core/ocr/convert.ts`。具体数据归属、接口和恢复边界见[服务端与远程书库](server.md)。
+
 2026-10-15 制卡更新：`card-content.ts` 统一净化导出学习内容，`etymology.ts` 提取明确词典词源并辅助路由；`etymology` 经生成、外部任务、编辑、预览进入 v3 Anki 模型。`TauriStudy.image` 复用阅读器上下文分组，下发真实块下标，`study_image.rs` 负责闭合浅色气泡取景及边框／尾部留白。`study:previewImage` 沿同一原生路径只读预览。界面保留五步但突出当前任务、折叠高级信息；全部改动与验证见[制卡优化验收](anki-ux-2026-10-15.md)。
 
 2026-10-15 阅读记录：`reading:*` 经受限 API 桥接直接进入 `reading.rs`，在现有后台存储锁下验证位置／记录版本并原子更新根目录 `reading-journal.json` v1；包含个人书签／摘录／笔记、按天按书统计和最近上报去重 ID。`ReaderView` 接收两个阅读器的实际位置与选区，`ReadingJournal` 用独立 dialog 提供搜索、编辑、回跳和统计；不挤占词卡侧栏。计时／上报在 `reading-activity.ts`，前台闲置判定与跨午夜拆分复用 `core/reading/activity.ts`；阅读查词在 `useWordCards` 统一记录，已存词卡重开与后台词典查询不计入。Markdown 文件导出在释放后台锁后打开原生保存对话框并原子写入选择路径。详见[阅读记录与统计](reading-journal.md)。

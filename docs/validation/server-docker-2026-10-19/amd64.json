@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-19T10:59:55.699Z",
+  "platform": "linux/amd64",
+  "host": "darwin/arm64",
+  "image": "arale-server:linux-amd64",
+  "runtime": {
+    "kind": "runtime",
+    "ok": true,
+    "platform": "Linux",
+    "arch": "x86_64",
+    "python": "3.12.15",
+    "provider": "CPUExecutionProvider",
+    "models": 5,
+    "versions": {
+      "onnxruntime": "1.30.0",
+      "numpy": "2.5.3",
+      "opencv-python-headless": "5.0.0.93",
+      "scipy": "1.18.1",
+      "pillow": "12.3.0",
+      "pyclipper": "1.4.0",
+      "shapely": "2.1.2",
+      "jaconv": "0.5.0"
+    }
+  },
+  "checkpointDone": 1,
+  "crashExitCode": 137,
+  "leaseVerifiedAfterCrash": true,
+  "finalAttempt": 2,
+  "blocks": 28,
+  "checks": [
+    "real Linux amd64 Python/ONNX probe and five verified models",
+    "healthy authenticated server with OCR capability",
+    "read-only CBZ library scanned by container Linux Rust extractor",
+    "remote page bytes match the original fixture",
+    "two-device progress CAS, backwards-reading conflict and idempotency",
+    "active data directory excludes a second writer",
+    "submitting client process exits while server OCR continues",
+    "SIGKILL and container recreation retain identity, token and recover stale lease",
+    "real ONNX OCR resumes persisted page checkpoints after container crash",
+    "completed text layer is readable through the remote API",
+    "reading progress survives container crash",
+    "two existing Rust desktop clients read, sync, resolve conflicts and preserve local data",
+    "clean recreation retains library, OCR and progress",
+    "external Compose secret supplies the token without embedding it in image or environment",
+    "original host comic archive remains byte-for-byte unchanged"
+  ],
+  "elapsedSeconds": 159,
+  "imageInspect": "sha256:00fc6fd8a49da058cb247c90107f911a16f493dae2b6aa3d617bd97ea278ad90"
+}

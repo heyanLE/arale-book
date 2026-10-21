@@ -1,0 +1,9 @@
+# Optional NAS bind-mount override; prepare ARALE_DATA_DIR with the selected UID/GID.
+services:
+  arale:
+    volumes:
+      - type: bind
+        source: ${ARALE_DATA_DIR:?Set ARALE_DATA_DIR to an existing writable directory}
+        target: /data
+        bind:
+          create_host_path: false

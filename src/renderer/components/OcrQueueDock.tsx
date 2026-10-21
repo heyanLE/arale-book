@@ -45,8 +45,8 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
   const studyRecent = studyQueue?.recent ?? [];
   const importActive = importQueue?.active;
   const importPending = importQueue?.pending ?? [], importRecent = importQueue?.recent ?? [];
-  const waiting = pending.length + studyPending.length + importPending.length;
-  const running = (active ? 1 : 0) + (studyActive ? 1 : 0) + (importActive ? 1 : 0);
+  const waiting = pending.filter(entry=>!entry.running).length + studyPending.length + importPending.length;
+  const running = pending.filter(entry=>entry.running).length + (active ? 1 : 0) + (studyActive ? 1 : 0) + (importActive ? 1 : 0);
   const total = running + waiting + studyRecent.length + importRecent.length;
 
   // 点外面收起弹层。队列**跑空**时也收起：任务都没了，留一个空弹层没有意义。
@@ -148,7 +148,7 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
             {pending.map((entry, index) => (
               <div className="ocr-queue-item" key={entry.bookId}>
                 <div className="ocr-queue-row">
-                  <span className="ocr-queue-badge is-waiting">{index + 1}</span>
+                  <span className={`ocr-queue-badge${entry.running ? '' : ' is-waiting'}`}>{entry.running ? '识别中' : index + 1}</span>
                   <span className="ocr-queue-title cell-ellipsis" title={entry.title}>
                     {entry.title}
                   </span>
@@ -156,7 +156,7 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
                 <div className="ocr-queue-meta mono">
                   {providerLabel(entry.provider)}
                   {entry.total > 0 ? ` · ${entry.total} 页` : ''}
-                  {` · 等待 ${waitingFor(entry.enqueuedAt)}`}
+                  {entry.running ? ` · ${progress[entry.bookId]?.done??0} / ${entry.total} 页` : ` · 等待 ${waitingFor(entry.enqueuedAt)}`}
                 </div>
                 <div className="ocr-queue-actions">
                   <button
@@ -164,7 +164,7 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
                     className="btn btn-sm"
                     onClick={() => onCancel(entry.bookId)}
                   >
-                    取消排队
+                    {entry.running ? '停止识别' : '取消排队'}
                   </button>
                 </div>
               </div>

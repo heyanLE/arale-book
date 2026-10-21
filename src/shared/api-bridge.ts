@@ -11,6 +11,16 @@ export interface ApiTransport {
 
 export function createAraleApi(transport: ApiTransport): AraleApi {
   return {
+    sources: {
+      connections: () => transport.invoke(IPC.sourcesConnections),
+      save: input => transport.invoke(IPC.sourcesSave, input),
+      probe: input => transport.invoke(IPC.sourcesProbe, input),
+      activate: id => transport.invoke(IPC.sourcesActivate, id),
+      remove: id => transport.invoke(IPC.sourcesRemove, id),
+      scan: id => transport.invoke(IPC.sourcesScan, id),
+      poll: () => transport.invoke(IPC.sourcesPoll),
+      resolve: (bookId, choice) => transport.invoke(IPC.sourcesResolve, bookId, choice),
+    },
     app: {
       buildInfo: () => transport.invoke(IPC.appBuildInfo),
       checkUpdate: () => transport.invoke(IPC.appCheckUpdate),

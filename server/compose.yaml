@@ -1,0 +1,32 @@
+name: arale
+services:
+  arale:
+    image: ${ARALE_IMAGE:-arale-server:local}
+    platform: ${ARALE_PLATFORM:-linux/amd64}
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    init: true
+    user: "${ARALE_UID:-1000}:${ARALE_GID:-1000}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${ARALE_BIND_ADDRESS:-0.0.0.0}:${ARALE_PORT:-3737}:3737"
+    environment:
+      ARALE_SERVER_NAME: ${ARALE_SERVER_NAME:-Arale Server}
+      ARALE_OCR_THREADS: ${ARALE_OCR_THREADS:-4}
+    volumes:
+      - arale-data:/data
+      - type: bind
+        source: ${ARALE_LIBRARY_DIR:-../server-library}
+        target: /library
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  arale-data:

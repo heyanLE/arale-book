@@ -1,6 +1,7 @@
 mod annotations;
 mod cards;
 mod reading;
+mod remote;
 mod dictionaries;
 mod epub;
 mod extensions;
@@ -49,6 +50,9 @@ async fn arale_invoke(
     channel: String,
     args: Vec<Value>,
 ) -> Result<Value, String> {
+    if channel.starts_with("remote:") {
+        return app.state::<remote::Remote>().handle(app.state::<State>().inner(), &channel, &args).await.map_err(|e| format!("{e:#}"));
+    }
     if channel == "app:checkUpdate" {
         return updates::check(&updates::build_info(&app))
             .await
@@ -330,6 +334,7 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
                 .map(|id| id.as_str().context("书 ID 必须为文本"))
                 .collect::<Result<_>>()?;
             for id in &ids {
+                if id.starts_with("rs_") { bail!("请在服务端管理远程书籍"); }
                 backend.book(id)?;
                 if app.state::<study::Study>().busy(id) {
                     bail!("书籍正在制卡，请先取消或等待完成");
@@ -797,6 +802,7 @@ pub fn run() {
             let backend = Backend::load(root)?;
             dictionaries::clean_pending(&backend)?;
             epub::clean_pending(&backend)?;
+            app.manage(remote::Remote::new(backend.root.clone())?);
             app.manage(services::Services::new(backend.root.clone())?);
             app.manage(extensions::Extensions::new(
                 backend.root.join("extensions"),
@@ -812,8 +818,18 @@ pub fn run() {
             system::install(app.handle())?;
             Ok(())
         })
-        .register_uri_scheme_protocol("arale", |context, request| {
-            protocol(context.app_handle(), request)
+        .register_asynchronous_uri_scheme_protocol("arale", |context, request, responder| {
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8().ok().map(|p|p.trim_start_matches('/').to_owned());
+                if let Some((id,rel))=path.as_deref().and_then(|p|p.split_once('/')) {
+                    if let Err(_) = app.state::<remote::Remote>().ensure_asset(app.state::<State>().inner(),id,rel).await {
+                        responder.respond(tauri::http::Response::builder().status(503).header("Access-Control-Allow-Origin","*").body(b"Remote resource unavailable".to_vec()).unwrap());
+                        return;
+                    }
+                }
+                responder.respond(protocol(&app,request));
+            });
         })
         .register_uri_scheme_protocol("arale-book", |context, request| {
             book_protocol(context.app_handle(), request)

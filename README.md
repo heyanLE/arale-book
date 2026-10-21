@@ -63,6 +63,19 @@ npm start                   # 构建并启动 Tauri
 
 </div>
 
+## NAS 服务端（可选）
+
+桌面端可配置服务器 URL，让本地与远程书库并存。服务端提供漫画、阅读进度同步与独立后台 OCR，使用 Linux Docker 运行，支持 amd64／arm64；上方平台表描述桌面程序，容器验证范围另见[Linux OCR 与 Docker Compose 部署](docs/server-docker.md)。
+
+```bash
+mkdir -p server-library
+cp server/.env.example server/.env   # 配置漫画目录与架构
+docker compose -f server/compose.yaml up -d --build
+docker compose -f server/compose.yaml exec -T arale cat /data/access-token
+```
+
+漫画目录只读挂载，服务端身份、进度、OCR 和令牌保存在独立数据卷。客户端学习资料仍保存在本机，现有本地书库不迁移，详见[数据归属与兼容](docs/server.md)。
+
 ## 贡献
 
 这是一个个人项目，[Issue](https://github.com/heyanLE/arale-book/issues) 与 PR 都欢迎；改动较大的话，请先开个 Issue 聊一下。

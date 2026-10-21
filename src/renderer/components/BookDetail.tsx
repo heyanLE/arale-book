@@ -58,6 +58,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
             <button
               type="button"
               className="btn btn-danger btn-block"
+              disabled={selectedIds.some(id=>id.startsWith('rs_'))}
               onClick={() => onRemove(selectedIds)}
             >
               移除选中的 {selectionCount} 本…
@@ -112,7 +113,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
       <DetailHeader title={book.title} onClose={onClose} />
 
       <div className="detail-primary-actions"><button type="button" className="btn btn-primary btn-block" onClick={() => onOpen(book.id)}>{book.lastOpenedAt ? '继续阅读' : '开始阅读'}</button>
-        <button type="button" className="btn btn-block" onClick={beginEdit}>编辑元数据</button></div>
+        <button type="button" className="btn btn-block" disabled={!!book.remote} onClick={beginEdit}>编辑元数据</button></div>
       <div className="detail-body">
         <div className="detail-cover-wrap">
           {cover ? (
@@ -182,7 +183,8 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
             <div className="detail-title">{book.title}</div>
             <div className="detail-sub">{bookDisplay(book).author || '作者未录入'}</div>
 
-            {bookDisplay(book).needsMetadata && <p className="detail-hint">部分元数据未录入，作者和卷号可能来自文件名。可点击上方“编辑元数据”补充或修正乱码。</p>}
+            {book.remote && <p className="detail-hint">服务器书籍 · 元数据与原文件由服务器管理，本机学习资料独立保存。</p>}
+            {!book.remote && bookDisplay(book).needsMetadata && <p className="detail-hint">部分元数据未录入，作者和卷号可能来自文件名。可点击上方“编辑元数据”补充或修正乱码。</p>}
             <details className="detail-metadata"><summary>书籍信息与文件位置</summary><dl className="detail-fields">
               <Field label="格式" value={book.format === 'epub' ? 'EPUB 小说' : '漫画'} />
               <Field
@@ -194,6 +196,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
                     <button
                       type="button"
                       className="link-btn"
+                      disabled={!!book.remote}
                       title="在小说阅读器与漫画阅读器之间切换"
                       onClick={() =>
                         onUpdateMeta(book.id, {
@@ -269,23 +272,25 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
               <button
                 type="button"
                 className="btn btn-block"
+                disabled={!!book.remote}
                 onClick={() =>
                   onUpdateMeta(book.id, { direction: book.direction === 'rtl' ? 'ltr' : 'rtl' })
                 }
               >
                 切换阅读方向（当前：{book.direction.toUpperCase()}）
               </button>
-              <button type="button" className="btn btn-block" onClick={() => onReveal(book.id)}>
+              <button type="button" className="btn btn-block" disabled={!!book.remote} onClick={() => onReveal(book.id)}>
                 在文件夹中显示
               </button>
               <button
                 type="button"
                 className="btn btn-danger btn-block"
-                onClick={() => onRemove([book.id])}
+                disabled={!!book.remote} onClick={() => onRemove([book.id])}
               >
                 从书库移除…
               </button>
-            </div></details>
+            </div>
+</details>
           </>
         )}
       </div>

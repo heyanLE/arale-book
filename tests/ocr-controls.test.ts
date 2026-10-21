@@ -20,7 +20,7 @@ import { ocrControlState, type OcrControlInput } from '../src/renderer/reader/oc
 import type { OcrProgress, OcrProviderId, OcrQueueEntry } from '../src/shared/types';
 
 const LABELS: Record<OcrProviderId, string> = {
-  system: '系统 OCR（macOS Vision）',
+  server: '服务器 OCR', system: '系统 OCR（macOS Vision）',
   'arale_onnx_v1': 'arale_onnx_v1 (ONNX)',
 };
 

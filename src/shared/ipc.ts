@@ -1,3 +1,4 @@
+import type { ServerConnectionInput, ServerConnections, ServerInfo, ServerPoll } from './server';
 /**
  * Tauri 原生调用/Worker 通道名与渲染进程 API 契约。
  *
@@ -56,6 +57,15 @@ import type { ImportQueueState } from './imports';
 
 /** 所有 invoke 通道名。渲染进程与主进程都从这里取，禁止写字面量。 */
 export const IPC = {
+  sourcesConnections: 'remote:connections',
+  sourcesSave: 'remote:save',
+  sourcesProbe: 'remote:probe',
+  sourcesActivate: 'remote:activate',
+  sourcesRemove: 'remote:remove',
+  sourcesScan: 'remote:scan',
+  sourcesPoll: 'remote:poll',
+  sourcesResolve: 'remote:resolve',
+
   appBuildInfo: 'app:buildInfo',
   appCheckUpdate: 'app:checkUpdate',
   appOpenRelease: 'app:openRelease',
@@ -178,6 +188,16 @@ export function importDialogProperties(
 
 /** Tauri API bridge 挂到 `window.arale` 上的完整 API。 */
 export interface AraleApi {
+  sources: {
+    connections(): Promise<ServerConnections>;
+    save(input: ServerConnectionInput): Promise<ServerConnections>;
+    probe(input: ServerConnectionInput): Promise<ServerInfo>;
+    activate(id: string | null): Promise<ServerConnections>;
+    remove(id: string): Promise<ServerConnections>;
+    scan(id: string): Promise<void>;
+    poll(): Promise<ServerPoll>;
+    resolve(bookId: string, choice: 'local' | 'remote' | 'restart'): Promise<void>;
+  };
   app: {
     buildInfo(): Promise<AppBuildInfo>;
     checkUpdate(): Promise<AppUpdateResult>;
@@ -377,6 +397,8 @@ export interface AraleApi {
 /** 主进程推给渲染进程的事件。 */
 export interface AraleEvents {
   /** 导入进度 / 结果播报。 */
+  'sources:changed': ServerConnections;
+  'sources:status': ServerPoll;
   'library:changed': { reason: 'import' | 'remove' | 'update' };
   'library:importQueue': ImportQueueState;
   /** 词典索引在后台载入完成。 */

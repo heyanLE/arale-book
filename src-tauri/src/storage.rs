@@ -121,6 +121,7 @@ pub fn inside(root: &Path, relative: &str) -> Result<PathBuf> {
 pub struct Backend {
     pub root: PathBuf,
     pub books: Vec<Value>,
+    pub remote_books: Vec<Value>,
 }
 
 impl Backend {
@@ -145,15 +146,34 @@ impl Backend {
         for book in &books {
             valid_id(book["id"].as_str().context("书库记录缺少 ID")?)?;
         }
-        Ok(Self { root, books })
+        let remote_books = read(&root.join("remote/catalog.json"), json!([]))?
+            .as_array()
+            .context("远程缓存索引格式错误，原文件已保留")?
+            .clone();
+        for book in &remote_books {
+            valid_id(book["id"].as_str().context("远程书缺少 ID")?)?;
+        }
+        Ok(Self {
+            root,
+            books,
+            remote_books,
+        })
     }
     pub fn dir(&self, id: &str) -> Result<PathBuf> {
-        Ok(self.root.join("library").join(valid_id(id)?))
+        Ok(self
+            .root
+            .join(if id.starts_with("rs_") {
+                "remote-cache"
+            } else {
+                "library"
+            })
+            .join(valid_id(id)?))
     }
     pub fn book(&self, id: &str) -> Result<&Value> {
         valid_id(id)?;
         self.books
             .iter()
+            .chain(self.remote_books.iter())
             .find(|book| book["id"] == id)
             .context("书不存在（可能已删除）")
     }
@@ -173,6 +193,9 @@ impl Backend {
         Ok(book)
     }
     pub fn update(&mut self, id: &str, patch: &Value) -> Result<Value> {
+        if id.starts_with("rs_") {
+            bail!("请在服务端管理远程书籍元数据");
+        }
         let mut updated = self.book(id)?.clone();
         let target = updated.as_object_mut().context("书记录格式错误")?;
         for key in [

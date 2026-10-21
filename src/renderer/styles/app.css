@@ -3497,3 +3497,10 @@ button[aria-disabled='true'] {
 .study-card-draft > summary { cursor: pointer; font-weight: 650; }.study-preview-word { display: block; font-size: 26px; margin: 5px 0 10px; }.study-preview-sentence { font-size: 17px; }.study-preview-meaning { font-size: 19px; margin: 6px 0; }.study-card-preview > div { white-space: pre-wrap; line-height: 1.7; }.study-card-preview > small { color: var(--text-dim); }
 .is-configuration .study-engine-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 12px 0; }.manual-ai-progress { position: sticky; top: 0; z-index: 2; padding: 8px 0; background: var(--bg-panel); }
 @media (max-width: 800px) { .is-configuration .study-engine-fields { grid-template-columns: 1fr; } }
+
+.source-picker { display:flex; align-items:center; gap:8px; min-width:0; }
+.source-picker select { max-width:200px; padding:5px; background:var(--bg); color:inherit; border:1px solid var(--border); border-radius:5px; }
+.server-connection { padding:12px 0; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:8px; }
+#settings-servers input { min-width:0; flex:1; }
+.server-sync-banner { padding:8px 16px; background:var(--bg-elevated); border-bottom:1px solid var(--border); }
+.server-sync-banner button { margin-inline-start:8px; }
