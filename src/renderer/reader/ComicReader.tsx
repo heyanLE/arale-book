@@ -56,6 +56,8 @@ import { imagePoint } from '@core/comic/annotations';
 import { finalizeAnnotations, useAnnotations } from './use-annotations';
 import { ComicAnnotationCanvas, type NewAnnotationText } from './ComicAnnotationCanvas';
 import { ComicAnnotationControls, ComicAnnotationQuickTools } from './ComicAnnotationControls';
+import { comicPageViewKey, MIN_COMIC_ZOOM as MIN_ZOOM, MAX_COMIC_ZOOM as MAX_ZOOM } from '@core/comic/page-view';
+import { useComicPageView } from './use-comic-page-view';
 
 export interface ComicReaderProps extends ReaderJournalProps {
   book: BookRecord;
@@ -85,8 +87,6 @@ export interface ComicReaderProps extends ReaderJournalProps {
 /** 翻页滑动动画时长（ms）。够短，连按方向键不会排出一条动画队列。 */
 const SLIDE_MS = 220;
 
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.2;
 /** 拖动超过这个像素数就算平移，而不是点击查词。 */
 const DRAG_THRESHOLD_PX = 4;
@@ -172,8 +172,6 @@ export function ComicReader({
   });
   /** 从词卡跳页前的页号；可以逐次返回，普通翻页不清掉返回路径。 */
   const [cardReturnStack, setCardReturnStack] = useState<number[]>([]);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   /**
    * 空格键是否按着。
@@ -258,27 +256,19 @@ export function ComicReader({
       : settings.comicFit === 'height'
         ? availableHeight / pairHeight
         : 1;
+  const pageViewKey = comicPageViewKey(settings.comicFit, visibleIndices.map(index => pages[index]!), rtl);
+  const { zoom, pan, setZoom, setPan, resetView } = useComicPageView(book.id, pageViewKey, {
+    width: pairWidth, height: pairHeight, baseScale,
+    viewportWidth: viewport.w, viewportHeight: viewport.h,
+  });
   const scale = baseScale * zoom;
 
   const displayedPairWidth = pairWidth * scale;
   const displayedPairHeight = pairHeight * scale;
   const canPan = displayedPairWidth > viewport.w + 1 || displayedPairHeight > viewport.h + 1;
 
-  // 缩放/换页后把平移量夹回可达范围，免得图被拖出视野再也拉不回来。
-  useEffect(() => {
-    setPan((prev) => {
-      const maxX = Math.max(0, (displayedPairWidth - viewport.w) / 2);
-      const maxY = Math.max(0, (displayedPairHeight - viewport.h) / 2);
-      const x = Math.min(maxX, Math.max(-maxX, prev.x));
-      const y = Math.min(maxY, Math.max(-maxY, prev.y));
-      return x === prev.x && y === prev.y ? prev : { x, y };
-    });
-  }, [displayedPairWidth, displayedPairHeight, viewport.w, viewport.h]);
-
-  // 换页或换适配模式时回到居中。
-  useEffect(() => {
-    setPan({ x: 0, y: 0 });
-  }, [pageIndex, settings.comicFit, spread]);
+  // 页面直接读取自己的视图，避免新页先使用上一页的缩放闪一帧；跨页时结束旧拖动。
+  useLayoutEffect(() => { dragRef.current = null; }, [pageViewKey]);
 
   // 配对规则变了（开/关双页、改偏移量）→ 把当前页重新归到它所属的跨页。
   // 不做这一步的话，改偏移量之后当前页会停在「第二个半页」上，画面看着像跳了一页。
@@ -575,7 +565,7 @@ export function ComicReader({
 
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [canPan]);
+  }, [canPan, setZoom, setPan]);
 
   // ------------------------------------------------------------------
   // 拖动平移
@@ -605,7 +595,7 @@ export function ComicReader({
     drag.moved = true;
     suppressClickRef.current = true;
     setPan({ x: drag.px + dx, y: drag.py + dy });
-  }, []);
+  }, [setPan]);
 
   const onPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = null;
@@ -753,7 +743,7 @@ export function ComicReader({
         setZoom((current) => clamp(current / ZOOM_STEP, MIN_ZOOM, MAX_ZOOM));
       } else if (event.key === '0') {
         event.preventDefault();
-        setZoom(1);
+        resetView();
       } else if (event.key === 's' || event.key === 'S') {
         event.preventDefault();
         applySpreadConfig(!spreadRef.current, spreadOffsetRef.current);
@@ -766,7 +756,7 @@ export function ComicReader({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total, annotations, annotationPage, annotationMenu, pages]);
+  }, [applySpreadConfig, closeUnpinned, goTo, next, prev, rtl, total, annotations, annotationPage, annotationMenu, pages, setZoom, resetView]);
 
   useShellCommand((command) => {
     if (document.querySelector('dialog[open]')) return;
@@ -784,7 +774,7 @@ export function ComicReader({
         setZoom((current) => clamp(current / ZOOM_STEP, MIN_ZOOM, MAX_ZOOM));
         break;
       case 'zoomReset':
-        setZoom(1);
+        resetView();
         break;
       default:
         break;
@@ -1039,7 +1029,7 @@ export function ComicReader({
         >
           ＋
         </button>
-        <button type="button" className="btn btn-sm" onClick={() => setZoom(1)} title="重置缩放（0）">
+        <button type="button" className="btn btn-sm" onClick={resetView} title="重置当前页缩放和位置（0）">
           1:1
         </button>
 
