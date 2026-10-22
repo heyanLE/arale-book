@@ -1,0 +1,42 @@
+{
+  "verifiedOn": "2026-10-22",
+  "sourceCommit": "7713c63377c8c407b77f340eea34469841cf0da5",
+  "deployment": {
+    "id": 39722408247,
+    "status": "completed",
+    "conclusion": "success",
+    "head_sha": "7713c63377c8c407b77f340eea34469841cf0da5",
+    "html_url": "https://github.com/heyanLE/arale-book/actions/runs/39722408247",
+    "created_at": "2026-10-22T04:26:43Z",
+    "updated_at": "2026-10-22T04:27:21Z"
+  },
+  "liveSite": {
+    "page": "https://heyanle.github.io/arale-book/",
+    "script": "https://heyanle.github.io/arale-book/assets/index-C3GqKYZy.js",
+    "tags": [
+      "nightly-2026.10.22"
+    ],
+    "sha256": "b8285686c203cd41e55d5c3edb7762bc6baebc8349519d1c824b49f9bf3ac2a8",
+    "status": 200,
+    "lastModified": "Thu, 22 Oct 2026 04:27:14 GMT",
+    "cacheControl": "max-age=600"
+  },
+  "scriptFallbackVerification": {
+    "publicBundleMatchesLocalBuild": true,
+    "simulatedGithubApiFailure": true,
+    "visibleNightlyVersion": "2026.10.22",
+    "nightlyUrl": "https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.22",
+    "fallbackNotice": "暂时无法检查新版本，当前展示 2026-10-22 核对的发布信息。最新版本请以 GitHub Release 页面为准。"
+  },
+  "localValidation": {
+    "releaseMetadataTests": "6/6",
+    "combinedNodeTests": "455/455",
+    "websiteBuild": "passed",
+    "javascriptSyntax": "passed",
+    "workflowYamlAndGuards": "passed"
+  },
+  "notVerified": [
+    "full browser visual behavior after this deployment",
+    "next scheduled Nightly-to-Website workflow_run event"
+  ]
+}

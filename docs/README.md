@@ -1,6 +1,6 @@
 # 开发文档入口
 
-最后核对：2026-10-21。新上下文按以下顺序阅读即可继续工作。
+最后核对：2026-10-22。新上下文按以下顺序阅读即可继续工作。
 
 Arale Server 首版已接入服务器 URL 配置、本地／远程书源切换、远程漫画阅读、进度同步与后台 OCR；运行命令、数据归属与兼容范围见[服务端与远程书库](server.md)；容器、Linux OCR、NAS Compose 配置和验证边界见[Docker 部署](server-docker.md)。
 
@@ -11,7 +11,7 @@ Arale Server 首版已接入服务器 URL 配置、本地／远程书源切换�
 
 日期版本的 Windows x64 / macOS arm64 每夜构建、GitHub 发布和设置更新检查见[每夜构建](nightly.md)；首次 [Nightly 2026.10.6](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.6) 已通过两平台 CI 并公开发布，下载后安装和 macOS 实际运行尚未验收，正式版发布暂未实现。
 
-官网首版位于 `site/`，运行 `npm run site:dev` 本地预览；每夜/正式构建分别跳转 GitHub Release，正式版缺失和联网失败都有明确状态。[官网](https://heyanle.github.io/arale-book/) 已部署 GitHub Pages，官网源码更新自动部署；账户主页旧域名绑定已按用户确认解除，公开入口与资源通过 Windows Chrome 验证。页面、命令与验证边界见[官网与部署](website.md)。
+官网首版位于 `site/`，运行 `npm run site:dev` 本地预览；每夜/正式构建分别跳转 GitHub Release，正式版缺失和联网失败都有明确状态。[官网](https://heyanle.github.io/arale-book/) 已部署 GitHub Pages，官网源码更新和成功 Nightly 后自动部署，2026-10-22 已刷新发布快照；账户主页旧域名绑定已按用户确认解除，公开入口与资源通过 Windows Chrome 验证。页面、命令与验证边界见[官网与部署](website.md)。
 
 1. [当前状态](current-state.md)：已完成的决策、验证边界、当前优先任务。
 2. [Windows 迁移与待修事项](windows-handoff.md)：下一台设备恢复材料、启动与验收顺序。

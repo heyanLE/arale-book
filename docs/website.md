@@ -2,7 +2,7 @@
 
 核对日期：2026-10-22。[官网](https://heyanle.github.io/arale-book/) 已公开部署到 GitHub Pages，首页与静态资源访问通过；个人主页旧域名绑定已按用户确认解除。
 
-2026-10-22 已在本地补齐 Nightly 成功后的官网部署触发与构建时发布快照刷新，尚未推送／部署。线上核对发现：Nightly 2026.10.22 已于北京时间 06:28 发布，官网最后部署于 2026-10-21 12:39，线上 JS 的内置快照仍为 2026.10.7。浏览器 API 请求成功时能读取新版本；失败或超过 6 秒时会保留旧快照。下方新机制需合入 `main` 后生效。
+2026-10-22 已补齐并上线 Nightly 成功后的官网部署触发与构建时发布快照刷新。[本次 Website 部署](https://github.com/heyanLE/arale-book/actions/runs/39722408247)于北京时间 12:27 成功，公开首页已内置 2026.10.22。排查时 Nightly 已于当天 06:28 发布，而官网上一版部署在 2026-10-21 12:39，仍内置 2026.10.7，导致浏览器 API 请求失败或超过 6 秒时显示旧版本。
 
 ## 页面与使用路径
 
@@ -51,4 +51,12 @@ Ubuntu 24.04 / Node 22.19.0 执行 `npm ci`、发布元数据测试、`scripts/u
 
 macOS arm64 / Node 22.22.2：`node --test tests/website-releases.test.mjs` 6/6 通过，覆盖新旧发布选择、草稿／缺包／无效日期／外部地址排除、两渠道快照、部分正式版状态、分页 API 生成与失败保留旧文件；该测试已接入 `npm test`。`npm run site:build`、相关 JavaScript 语法检查、YAML 解析和触发条件／构建步骤检查、`git diff --check` 通过。构建 JS 只嵌入 `nightly-2026.10.22`，没有旧的 2026.10.7 回退记录。
 
-公开 API 确认 [Nightly 运行成功](https://github.com/heyanLE/arale-book/actions/runs/39685791927)、[2026.10.22 两平台安装包](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.22)完整；[官网最后部署](https://github.com/heyanLE/arale-book/actions/runs/39545197587)发生在 Nightly 之前。官网 HTTP 返回 200、缓存头 `max-age=600`，线上 JS 内置旧快照已实际核对。本轮浏览器检查工具两次未完成连接，未验证用户浏览器的具体 API 失败原因；新 workflow 尚未在 GitHub 执行，不能将本地构建写成已上线。
+修复前的公开 API 核对确认 [Nightly 运行成功](https://github.com/heyanLE/arale-book/actions/runs/39685791927)、[2026.10.22 两平台安装包](https://github.com/heyanLE/arale-book/releases/tag/nightly-2026.10.22)完整；[官网上一版部署](https://github.com/heyanLE/arale-book/actions/runs/39545197587)发生在 Nightly 之前。官网 HTTP 返回 200、缓存头 `max-age=600`，线上 JS 内置旧快照已实际核对。初稿阶段浏览器检查工具两次未完成连接，未验证用户浏览器的具体 API 失败原因；随后实际部署结果如下。
+
+## 2026-10-22 本次即时部署
+
+已推送官网修复 `7713c63`，通过本次推送立即触发 [Website 39722408247](https://github.com/heyanLE/arale-book/actions/runs/39722408247)。GitHub Actions 的构建与部署成功，线上首页 HTTP 200，`Last-Modified` 为 `2026-10-22T04:27:14Z`（北京时间 12:27:14）。线上 JS 为 `assets/index-C3GqKYZy.js`，包含且仅包含 `nightly-2026.10.22` 回退记录，并与本机已验收构建逐字节一致。
+
+本机以受限 DOM 适配器执行线上实际脚本，模拟 GitHub API 请求失败，验证下载卡片版本为 `2026.10.22`、链接指向对应 Release、回退提示核对日期为 `2026-10-22`；这是脚本运行检查，不代表完整浏览器视觉验收。统一 `npm test` 455/455 通过。公开部署与回退证据见[上线记录](validation/site-release-sync-2026-10-22/report.json)。
+
+后续本仓库 `main` 的 Nightly 成功完成会触发 Website 并重新取得最新发布记录；触发机制已随本次部署合入，下一次定时运行仍以实际 Actions 结果为准。已打开的旧页面需要重新加载，若浏览器仍保留旧资源可强制刷新；首页缓存头为 `max-age=600`。
