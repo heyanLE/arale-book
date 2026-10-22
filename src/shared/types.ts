@@ -406,6 +406,7 @@ export interface LibraryPage {
 export interface OpenBookResult {
   book: BookRecord;
   position: ReadingPosition | null;
+  textLayerPending?: boolean;
 }
 
 // ---------------------------------------------------------------------------

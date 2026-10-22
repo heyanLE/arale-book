@@ -68,3 +68,5 @@ Windows smoke 已按新入口、工具切换、图层复用和直接删除更新
 使用 `node node_modules/vite/bin/vite.js --config .tmp/page-view-2026-10-19/vite.config.mjs` 启动实际 ReaderView／ComicReader 的临时浏览器夹具，内存 IPC、隔离书 ID 和样本页图，不写用户书库。已验证第 1 页 144%／y=-120.74 与第 2 页 120%／y=52.7 各自恢复、未调整页默认、跨书隔离、重开／刷新恢复、双页组合恢复与切回单页、适配方式切换、按钮与键盘缩放／重置且其他页不受影响。截图：`.tmp/page-view-2026-10-19/restored-page.png`；完整 Node 日志：`.tmp/page-view-2026-10-19/node-tests.log`。沙盒内首次监听端口返回 EPERM，获准在沙盒外启动后完成浏览器验证。
 
 本轮未验收原生 Tauri/WKWebView、Windows WebView2、安装包、触控／多 DPI、真实远程资源版本变化及强退时最后 250ms 的写入；未改 Rust／OCR 引擎，未重跑对应原生测试。
+
+2026-10-21 远程阅读打开时，开始／继续阅读按钮立即显示打开状态并阻止重复请求；先进入同步后的阅读位置，再加载 OCR 文字层。文字层完成或 OCR 更新只刷新文字缓存，不重建整页阅读器，因此不改变当前页、缩放与批注编辑状态。慢网组件验证与平台范围见[远程阅读打开](server.md#远程阅读打开与文字层加载2026-10-21)。

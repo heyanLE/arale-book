@@ -280,12 +280,31 @@ impl Remote {
         b.remote_books = next;
         Ok(())
     }
+    fn layer_current(&self, book: &Value) -> Result<bool> {
+        let dir = self.dir(text(book, "id")?)?;
+        Ok(dir.join("content/manga.json").is_file()
+            && storage::read(&dir.join("layer-version.json"), Value::Null)?
+                == json!([book["remote"]["revision"], book["remote"]["ocrRevision"]]))
+    }
     async fn layer(&self, book: &Value, c: &Value) -> Result<()> {
         let id = text(book, "id")?;
         let origin = &book["remote"];
         let path = self.dir(id)?.join("content/manga.json");
-        let cached = storage::read(&self.dir(id)?.join("layer-version.json"), Value::Null)?;
-        if cached == json!([origin["revision"], origin["ocrRevision"]]) && path.is_file() {
+        if self.layer_current(book)? {
+            return Ok(());
+        }
+        if origin["ocrRevision"].as_u64() == Some(0) {
+            let pages: Vec<_> = book["pages"]
+                .as_array()
+                .context("无页面")?
+                .iter()
+                .map(|page| json!({"url":page["url"],"width":page["width"],"height":page["height"],"blocks":[]}))
+                .collect();
+            storage::write(&path, &json!({"pages":pages}))?;
+            storage::write(
+                &self.dir(id)?.join("layer-version.json"),
+                &json!([origin["revision"], 0]),
+            )?;
             return Ok(());
         }
         let response = self
@@ -417,12 +436,16 @@ impl Remote {
         Ok(())
     }
     async fn flush(&self, book: &Value, c: &Value) -> Result<Value> {
-        self.info(c).await?;
         let id = text(book, "id")?;
         let mut s = self.progress(id)?;
         if !s["conflict"].is_null() {
             return Ok(s);
         }
+        if s["pending"].is_null() && s["next"].is_null() {
+            self.track(id, false)?;
+            return Ok(s);
+        }
+        self.info(c).await?;
         for _ in 0..2 {
             if s["pending"].is_null() {
                 if s["next"].is_null() {
@@ -608,6 +631,10 @@ impl Remote {
             "remote:open" => {
                 let id = arg()?;
                 let book = self.snapshot(backend, id)?;
+                // Interactive reading can render before downloading the whole text layer.
+                // Other callers retain the existing ready-to-read text contract.
+                let defer_layer = args.get(1).and_then(Value::as_bool).unwrap_or(false);
+                let mut text_layer_pending = false;
                 let mut s = self.progress(id)?;
                 if s["discardUntilOpen"] == true {
                     s["discardUntilOpen"] = json!(false);
@@ -616,7 +643,11 @@ impl Remote {
                 if let Ok(c) = self.connection(text(&book["remote"], "connectionId")?) {
                     let online = self.info(&c).await.is_ok();
                     if online {
-                        self.layer(&book, &c).await?;
+                        if defer_layer && book["remote"]["ocrRevision"].as_u64().unwrap_or(0) > 0 {
+                            text_layer_pending = !self.layer_current(&book)?;
+                        } else {
+                            self.layer(&book, &c).await?;
+                        }
                         if let Ok(next) = self.flush(&book, &c).await {
                             s = next;
                         }
@@ -651,7 +682,7 @@ impl Remote {
                 } else {
                     Self::display_position(&s, id)
                 };
-                Ok(json!({"book":book,"position":position}))
+                Ok(json!({"book":book,"position":position,"textLayerPending":text_layer_pending}))
             }
             "remote:savePosition" => {
                 let id = text(first, "bookId")?;
@@ -839,8 +870,36 @@ impl Remote {
             "remote:refreshLayer" => {
                 let book = self.snapshot(backend, arg()?)?;
                 let c = self.connection(text(&book["remote"], "connectionId")?)?;
-                self.catalog(backend, &c).await?;
-                self.layer(&self.snapshot(backend, arg()?)?, &c).await?;
+                // A single book refresh must not download every page manifest in the library.
+                self.info(&c).await?;
+                let manifest = self.json(
+                    &c,
+                    Method::GET,
+                    &format!("api/v1/books/{}", text(&book["remote"], "bookId")?),
+                    None,
+                ).await?;
+                let expected = args.get(1).and_then(Value::as_str)
+                    .unwrap_or(text(&book["remote"], "revision")?);
+                if manifest["revision"] != expected {
+                    bail!("书籍内容已变更，请返回书库刷新后重新打开");
+                }
+                let fresh = self.materialize(&c, &manifest)?;
+                if fresh["id"] != book["id"] {
+                    bail!("服务端返回了其他书籍");
+                }
+                {
+                    let mut b = lock(backend)?;
+                    let mut next = b.remote_books.clone();
+                    let entry = next.iter_mut()
+                        .find(|item| item["id"] == fresh["id"])
+                        .context("远程书籍已移除")?;
+                    *entry = fresh.clone();
+                    storage::write(&b.dir(arg()?)?.join("book.json"), &fresh)?;
+                    storage::write(&self.root.join("remote/catalog.json"), &json!(next))?;
+                    b.remote_books = next;
+                }
+                let updated = !self.layer_current(&fresh)?;
+                self.layer(&fresh, &c).await?;
                 let layer =
                     storage::read(&self.dir(arg()?)?.join("content/manga.json"), json!({}))?;
                 let blocks: usize = layer["pages"]
@@ -849,7 +908,7 @@ impl Remote {
                     .flatten()
                     .map(|p| p["blocks"].as_array().map_or(0, Vec::len))
                     .sum();
-                Ok(json!({"blocks":blocks}))
+                Ok(json!({"blocks":blocks,"updated":updated}))
             }
             "remote:capability" => {
                 let c = self.connection(
@@ -929,6 +988,15 @@ mod tests {
         assert!(qualified("00000000-0000-4000-8000-000000000001", "../x").is_err());
     }
     #[tokio::test]
+    async fn idle_progress_needs_no_network_request() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let remote = Remote::new(root.path().into())?;
+        let state = remote.flush(&json!({"id":"rs_idle"}), &json!({})).await?;
+        assert!(state["pending"].is_null());
+        assert!(state["next"].is_null());
+        Ok(())
+    }
+    #[tokio::test]
     #[ignore = "requires isolated live server; run npm run server:test -- --native"]
     async fn remote_round_trip() -> Result<()> {
         let url = std::env::var("ARALE_TEST_SERVER_URL")?;
@@ -961,9 +1029,16 @@ mod tests {
         let books = ra.handle(&ba, "remote:list", &[json!({})]).await?;
         let book = &books["books"][0];
         let id = text(book, "id")?;
-        let oa = ra.handle(&ba, "remote:open", &[json!(id)]).await?;
+        let oa = ra.handle(&ba, "remote:open", &[json!(id), json!(true)]).await?;
+        assert_eq!(oa["textLayerPending"], true);
+        assert!(crate::page_text(&*lock(&ba)?, id, 0)?["blocks"].as_array().unwrap().is_empty());
         let ob = rb.handle(&bb, "remote:open", &[json!(id)]).await?;
         assert_eq!(oa["position"], ob["position"]);
+        ra.handle(&ba, "remote:refreshLayer", &[json!(id), book["remote"]["revision"].clone()]).await?;
+        assert_eq!(ra.handle(&ba, "remote:open", &[json!(id), json!(true)]).await?["textLayerPending"], false);
+        let cached = fs::read(ra.dir(id)?.join("content/manga.json"))?;
+        assert!(ra.handle(&ba, "remote:refreshLayer", &[json!(id), json!("0".repeat(64))]).await.is_err());
+        assert_eq!(fs::read(ra.dir(id)?.join("content/manga.json"))?, cached);
         assert!(!crate::segments::input(&*lock(&ba)?, id)?["units"]
             .as_array()
             .unwrap()

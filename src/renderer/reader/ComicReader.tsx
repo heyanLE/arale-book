@@ -67,6 +67,8 @@ export interface ComicReaderProps extends ReaderJournalProps {
   ocrProgress?: OcrProgress | null;
   /** 本书最近一次 OCR 结果（用来决定按钮文案：识别 / 重新识别）。 */
   ocrResult?: OcrJobResult | null;
+  textLayerVersion?: number;
+  textLayerLoading?: boolean;
   onStartOcr?: (bookId: string, force?: boolean, provider?: OcrProviderId) => void;
   onCancelOcr?: (bookId: string) => void;
   /** 各 OCR 引擎的可用性。只有 ≥2 个可用时才显示引擎选择器。 */
@@ -97,6 +99,8 @@ export function ComicReader({
   onProgress,
   ocrProgress = null,
   ocrResult = null,
+  textLayerVersion = 0,
+  textLayerLoading = false,
   onStartOcr,
   onCancelOcr,
   ocrCapability = null,
@@ -285,6 +289,12 @@ export function ComicReader({
   // ------------------------------------------------------------------
 
   useEffect(() => {
+    // Refresh only text: remounting the reader would reset the current page and annotations.
+    cacheRef.current.clear();
+    setTextVersion(value => value + 1);
+  }, [book.id, textLayerVersion, ocrResult]);
+
+  useEffect(() => {
     let alive = true;
     const wanted = spreadPages(pageIndex, total, spreadOffset, spread).filter(
       (index) => pages[index] !== undefined,
@@ -306,7 +316,7 @@ export function ComicReader({
     return () => {
       alive = false;
     };
-  }, [book.id, pageIndex, pages, spreadOffset, spread, total]);
+  }, [book.id, pageIndex, pages, spreadOffset, spread, total, textLayerVersion, ocrResult]);
 
   // textVersion 只作为依赖用：缓存是 ref，需要一次 setState 把新内容带进这一帧。
   const texts = useMemo(() => new Map(cacheRef.current), [textVersion]);
@@ -1099,7 +1109,8 @@ export function ComicReader({
           文字层
         </button>
 
-        {textLayerOn && noOcrData && <span className="comic-text-hint">本页无 OCR 数据</span>}
+        {textLayerOn && textLayerLoading && <span className="comic-text-hint" role="status">正在载入文字层…</span>}
+        {textLayerOn && noOcrData && !textLayerLoading && <span className="comic-text-hint">本页无 OCR 数据</span>}
       </div>
 
       <ComicAnnotationControls controller={annotations} page={pages[annotationPage]} />

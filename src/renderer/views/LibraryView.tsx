@@ -17,6 +17,7 @@ import { capturePointer } from '../lib/pointer';
 
 export interface LibraryViewProps {
   remoteSource?: boolean;
+  openingBookId?: string | null;
   query: LibraryQuery;
   onQueryChange: (patch: Partial<LibraryQuery>) => void;
   selectedIds: string[];
@@ -364,6 +365,7 @@ export function LibraryView(props: LibraryViewProps): JSX.Element {
           />
           <div className="library-detail" style={{ width: detailWidth }}>
             <BookDetail
+              openingBookId={props.openingBookId}
               book={lastOf(books, selectedIds)}
               selectedIds={selectedIds}
               onOpen={onOpenBook}

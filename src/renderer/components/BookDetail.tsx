@@ -17,6 +17,7 @@ export type BookMetaPatch = Partial<
 
 export interface BookDetailProps {
   book: BookRecord | null;
+  openingBookId?: string | null;
   /** 当前选中的全部 id（真相源在 App）。长度 > 1 时面板切换成多选形态。 */
   selectedIds: string[];
   onOpen: (bookId: string) => void;
@@ -112,7 +113,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
     <aside className="detail">
       <DetailHeader title={book.title} onClose={onClose} />
 
-      <div className="detail-primary-actions"><button type="button" className="btn btn-primary btn-block" onClick={() => onOpen(book.id)}>{book.lastOpenedAt ? '继续阅读' : '开始阅读'}</button>
+      <div className="detail-primary-actions"><button type="button" className="btn btn-primary btn-block" disabled={!!props.openingBookId} aria-busy={props.openingBookId === book.id} onClick={() => onOpen(book.id)}>{props.openingBookId === book.id ? '打开中…' : book.lastOpenedAt ? '继续阅读' : '开始阅读'}</button>
         <button type="button" className="btn btn-block" disabled={!!book.remote} onClick={beginEdit}>编辑元数据</button></div>
       <div className="detail-body">
         <div className="detail-cover-wrap">

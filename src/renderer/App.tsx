@@ -68,6 +68,9 @@ export function App(): JSX.Element {
   const [banner, setBanner] = useState<string | null>(null);
   const [status, setStatus] = useState('就绪');
   const [busy, setBusy] = useState(false);
+  const [openingBookId, setOpeningBookId] = useState<string | null>(null);
+  const openingBookRef = useRef<string | null>(null);
+  const [textLayers, setTextLayers] = useState<Record<string, { version: number; loading: boolean }>>({});
   const [journal, setJournal] = useState<{ bookId?: string; draft?: ReadingEntryDraft } | null>(null);
   const [journalJump, setJournalJump] = useState<{ token: number; entry: ReadingEntry } | null>(null);
   const jumpToJournalEntry = async (entry: ReadingEntry) => {
@@ -210,6 +213,14 @@ export function App(): JSX.Element {
           : `文字识别完成：${result.pages} 页 / ${result.blocks} 个文字块`
         : `文字识别失败：${result.error ?? '未知原因'}`,
     );
+  });
+
+  useIpcEvent('book:textLayer', result => {
+    setTextLayers(previous => ({ ...previous, [result.bookId]: {
+      version: (previous[result.bookId]?.version ?? 0) + (result.state === 'ready' ? 1 : 0),
+      loading: result.state === 'loading',
+    } }));
+    if (result.state === 'failed') setBanner(`文字层加载失败：${result.error ?? '请检查连接后重新打开书籍'}`);
   });
 
   const reloadSegments = useCallback(async (bookId: string) => {
@@ -483,10 +494,16 @@ export function App(): JSX.Element {
   }, [bumpLibrary]);
 
   const openBook = useCallback(async (bookId: string) => {
+    if (openingBookRef.current) return;
+    openingBookRef.current = bookId;
+    setOpeningBookId(bookId);
+    setStatus('正在打开书籍…');
     setBusy(true);
     const result = await call('打开书籍', () => api.library.open(bookId));
+    openingBookRef.current = null;
+    setOpeningBookId(null);
     setBusy(false);
-    if (!result) return;
+    if (!result) { setStatus('打开书籍失败'); return; }
     setOpen(result);
     setView('reader');
     setStatus(`正在阅读《${result.book.title}》`);
@@ -715,6 +732,7 @@ export function App(): JSX.Element {
         {view === 'library' && (
           <LibraryView
             remoteSource={!!sources.activeId}
+            openingBookId={openingBookId}
             query={query}
             onQueryChange={patchQuery}
             selectedIds={selectedIds}
@@ -742,6 +760,8 @@ export function App(): JSX.Element {
               onStatus={setStatus}
               ocrProgress={ocrProgress[open.book.id] ?? null}
               ocrResult={ocrResult[open.book.id] ?? null}
+              textLayerVersion={textLayers[open.book.id]?.version ?? 0}
+              textLayerLoading={textLayers[open.book.id]?.loading ?? false}
               onStartOcr={startOcr}
               onCancelOcr={cancelOcr}
               ocrCapability={ocrCapability}

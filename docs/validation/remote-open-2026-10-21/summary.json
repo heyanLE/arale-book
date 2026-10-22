@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-21",
+  "platform": "macOS arm64 / Node 22.22.2, actual NAS via EasyTier",
+  "measurement": "isolated cold client, time for remote open to return its reading position; excludes page image transfer and later OCR download",
+  "samples": [
+    {
+      "sample": 1,
+      "beforeOpenMs": 1869,
+      "afterOpenMs": 349,
+      "savedPositionUnchanged": true,
+      "ocrBlocksUnchanged": true
+    },
+    {
+      "sample": 2,
+      "beforeOpenMs": 1172,
+      "afterOpenMs": 337,
+      "savedPositionUnchanged": true,
+      "ocrBlocksUnchanged": true
+    },
+    {
+      "sample": 3,
+      "beforeOpenMs": 1078,
+      "afterOpenMs": 345,
+      "savedPositionUnchanged": true,
+      "ocrBlocksUnchanged": true
+    }
+  ],
+  "singleRunPerSample": true,
+  "nasReadsOnly": true,
+  "nonGetRequests": 0,
+  "browserFixture": [
+    "Open button changes immediately to disabled opening state",
+    "Reader opens at saved page 3 while OCR is still pending",
+    "Turning to page 4 before text arrives records only page index 3",
+    "Text arrival creates a text hit region while staying at page 4"
+  ],
+  "validation": {
+    "typecheck": "passed",
+    "nodeTests": {
+      "passed": 449,
+      "failed": 0
+    },
+    "rustTests": {
+      "passed": 46,
+      "ignored": 2,
+      "failed": 0
+    },
+    "isolatedServerWithNativeClients": "19/19"
+  },
+  "notVerified": [
+    "native WebView GUI after recompilation",
+    "Windows runtime",
+    "NAS write operations in this timing comparison",
+    "large multi-client load or unstable network"
+  ]
+}

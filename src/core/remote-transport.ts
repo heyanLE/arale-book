@@ -9,6 +9,19 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
     const completed = new Set<string>();
     const scans=new Map<string,number>();
     let polling: Promise<ServerPoll> | null = null;
+    const textLoads = new Map<string, Promise<unknown>>();
+    const loadText = (bookId: string, revision: string | undefined) => {
+        if (textLoads.has(bookId)) return;
+        deliver('book:textLayer', { bookId, state: 'loading' });
+        const work = invoke('remote:refreshLayer', bookId, revision).then(() => {
+            deliver('book:textLayer', { bookId, state: 'ready' });
+        }).catch(error => {
+            deliver('book:textLayer', { bookId, state: 'failed', error: error instanceof Error ? error.message : String(error) });
+            throw error;
+        }).finally(() => { textLoads.delete(bookId); });
+        textLoads.set(bookId, work);
+        void work.catch(() => {});
+    };
     const queue = (): OcrQueueState => ({ active: local.active ?? remote.active, pending: [...(local.active && remote.active ? [remote.active] : []), ...local.pending, ...remote.pending] });
     const poll = (): Promise<ServerPoll> => polling ??= invoke('remote:poll').then(async (state: ServerPoll) => {
         for(const scan of state.scans??[]){
@@ -69,7 +82,14 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
             }
             const id = channel === 'library:savePosition' ? args[0]?.bookId : args[0];
             if (typeof id === 'string' && id.startsWith('rs_')) {
-                const route: Record<string, string> = { 'library:open': 'remote:open', 'library:savePosition': 'remote:savePosition', 'ocr:start': 'remote:ocrStart', 'ocr:cancel': 'remote:ocrCancel', 'ocr:status': 'remote:ocrStatus' };
+                if (channel === 'library:open') {
+                    const result = await invoke('remote:open', id, true);
+                    if (result?.textLayerPending) loadText(id, result.book?.remote?.revision);
+                    return result;
+                }
+                if (channel.startsWith('segment:') || channel.startsWith('study:'))
+                    await textLoads.get(id);
+                const route: Record<string, string> = { 'library:savePosition': 'remote:savePosition', 'ocr:start': 'remote:ocrStart', 'ocr:cancel': 'remote:ocrCancel', 'ocr:status': 'remote:ocrStatus' };
                 if (route[channel]) {
                     const result = await invoke(route[channel]!, ...args);
                     if (channel.startsWith('ocr:'))

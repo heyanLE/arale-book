@@ -17,7 +17,7 @@ test('sources coexist: local behavior stays unchanged and book identity wins ove
     await router.invoke('library:open', 'bk_local');
     assert.deepEqual(calls.at(-1), ['library:open', 'bk_local']);
     await router.invoke('library:open', 'rs_server_bk_one');
-    assert.deepEqual(calls.at(-1), ['remote:open', 'rs_server_bk_one']);
+    assert.deepEqual(calls.at(-1), ['remote:open', 'rs_server_bk_one', true]);
     await router.invoke('remote:activate', null);
     await router.invoke('library:savePosition', { bookId: 'rs_server_bk_one', pageIndex: 2 });
     assert.equal(calls.at(-1)[0], 'remote:savePosition');
@@ -61,4 +61,65 @@ test('remote reading direction stays a per-client preference while server metada
  const calls:any[]=[];const router=createSourceTransport(async(c,...args)=>{calls.push([c,...args]);return {};},()=>{});
  await router.invoke('library:updateMeta','rs_server_book',{direction:'ltr'});assert.equal(calls[0][0],'remote:preferences');
  await assert.rejects(()=>router.invoke('library:updateMeta','rs_server_book',{title:'Replacement'}),/服务器/);
+});
+
+test('remote reader opens at the saved position while text downloads, then publishes a text-only refresh', { timeout: 2000 }, async () => {
+    const events: any[] = [];
+    const calls: any[] = [];
+    let finish!: (value: unknown) => void;
+    const layer = new Promise(resolve => { finish = resolve; });
+    const id = 'rs_server_book';
+    const opened = { book: { id, remote: { revision: 'content-v1' } }, position: { pageIndex: 42 }, textLayerPending: true };
+    const router = createSourceTransport(async (channel, ...args) => {
+        calls.push([channel, ...args]);
+        if (channel === 'remote:open') return opened;
+        if (channel === 'remote:refreshLayer') return layer;
+        return { blocks: [] };
+    }, (channel, value) => events.push([channel, value]));
+    assert.equal(await router.invoke('library:open', id), opened);
+    assert.deepEqual(calls[0], ['remote:open', id, true]);
+    assert.deepEqual(calls[1], ['remote:refreshLayer', id, 'content-v1']);
+    assert.deepEqual(events, [['book:textLayer', { bookId: id, state: 'loading' }]]);
+    await router.invoke('library:open', id);
+    assert.equal(calls.filter(([channel]) => channel === 'remote:refreshLayer').length, 1);
+    await router.invoke('comic:pageText', id, 42);
+    const study = router.invoke('segment:input', id);
+    await Promise.resolve();
+    assert.equal(calls.some(([channel]) => channel === 'segment:input'), false);
+    finish({ updated: true, blocks: 9 });
+    await study;
+    assert.deepEqual(events.at(-1), ['book:textLayer', { bookId: id, state: 'ready' }]);
+    assert.equal(events.some(([channel]) => channel === 'ocr:done'), false);
+    assert.equal(calls.some(([channel]) => channel === 'remote:savePosition'), false);
+});
+
+test('failed deferred text keeps the reader usable and can retry on the next open', { timeout: 2000 }, async () => {
+    const events: any[] = [];
+    let reject!: (error: Error) => void;
+    let attempts = 0;
+    const first = new Promise((_, fail) => { reject = fail; });
+    const router = createSourceTransport(async channel => {
+        if (channel === 'remote:open') return { book: {}, position: { pageIndex: 3 }, textLayerPending: true };
+        if (channel === 'remote:refreshLayer') return ++attempts === 1 ? first : { updated: true };
+    }, (channel, value) => events.push([channel, value]));
+    const opened = await router.invoke('library:open', 'rs_book');
+    assert.equal(opened.position.pageIndex, 3);
+    const pendingStudy = router.invoke('study:read', 'rs_book');
+    reject(new Error('offline'));
+    await assert.rejects(pendingStudy, /offline/);
+    assert.deepEqual(events.at(-1), ['book:textLayer', { bookId: 'rs_book', state: 'failed', error: 'offline' }]);
+    await router.invoke('library:open', 'rs_book');
+    await router.invoke('study:read', 'rs_book');
+    assert.equal(attempts, 2);
+    assert.equal(events.at(-1)[1].state, 'ready');
+});
+
+test('a current cached text layer does not start another background download', async () => {
+    const calls: string[] = [];
+    const router = createSourceTransport(async channel => {
+        calls.push(channel);
+        return { book: {}, position: { pageIndex: 8 }, textLayerPending: false };
+    }, () => { throw new Error('No text event expected'); });
+    assert.equal((await router.invoke('library:open', 'rs_cached')).position.pageIndex, 8);
+    assert.deepEqual(calls, ['remote:open']);
 });

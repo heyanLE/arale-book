@@ -39,6 +39,8 @@ export interface ReaderViewProps {
   ocrProgress?: OcrProgress | null;
   /** 当前这本书最近一次 OCR 结果。 */
   ocrResult?: OcrJobResult | null;
+  textLayerVersion?: number;
+  textLayerLoading?: boolean;
   onStartOcr: (bookId: string, force?: boolean, provider?: OcrProviderId) => void;
   onCancelOcr: (bookId: string) => void;
   /** 各 OCR 引擎的状态（漫画阅读器里选择用）。 */
@@ -60,6 +62,8 @@ export function ReaderView({
   onSystemBarsChange,
   ocrProgress = null,
   ocrResult = null,
+  textLayerVersion = 0,
+  textLayerLoading = false,
   onStartOcr,
   onCancelOcr,
   ocrCapability = null,
@@ -194,9 +198,7 @@ export function ReaderView({
           />
         ) : (
           <ComicReader
-            // `ocrResult` 参与 key：识别完成后整卷文字层换了，必须重建阅读器
-            // 才能丢掉页文字缓存（否则弹窗查的还是「没有文字层」）。
-            key={`${book.id}:${ocrResult?.ok ? ocrResult.blocks : 0}`}
+            key={book.id}
             book={book}
             initialPosition={position}
             onProgress={handleProgress}
@@ -205,6 +207,8 @@ export function ReaderView({
             jump={journalJump}
             ocrProgress={ocrProgress}
             ocrResult={ocrResult}
+            textLayerVersion={textLayerVersion}
+            textLayerLoading={textLayerLoading}
             onStartOcr={onStartOcr}
             onCancelOcr={onCancelOcr}
             ocrCapability={ocrCapability}

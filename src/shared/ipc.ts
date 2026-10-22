@@ -399,6 +399,8 @@ export interface AraleEvents {
   /** 导入进度 / 结果播报。 */
   'sources:changed': ServerConnections;
   'sources:status': ServerPoll;
+  /** Remote text loads independently of opening the reader. */
+  'book:textLayer': { bookId: string; state: 'loading' | 'ready' | 'failed'; error?: string };
   'library:changed': { reason: 'import' | 'remove' | 'update' };
   'library:importQueue': ImportQueueState;
   /** 词典索引在后台载入完成。 */
