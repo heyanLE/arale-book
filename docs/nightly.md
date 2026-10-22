@@ -2,6 +2,8 @@
 
 当前实现：2026-10-06。只提供 Windows x64 NSIS `.exe` 和 macOS Apple Silicon（arm64）`.dmg`。正式版发布流程暂未实现。
 
+2026-10-22 官网联动修复已在本地完成，尚未推送：Website 使用 `workflow_run` 监听本仓库 `main` 上成功结束的 Nightly，在构建时通过 GitHub API 生成最新发布快照；生成文件不提交 Git，不改变 Nightly 的源码比较基准。线上问题与验证见[官网文档](website.md)。
+
 ## 版本与渠道
 
 - Nightly 使用北京时间的日期版本 `YYYY.M.D`，例如 `2026.10.5`，不包含基础版本、前导零或提交号。

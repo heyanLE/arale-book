@@ -1,7 +1,6 @@
 import snapshot from './release-snapshot.json';
 
-const repository = 'https://github.com/heyanLE/arale-book';
-const releaseList = `${repository}/releases`;
+import { releaseList, safeReleaseUrl, selectReleases } from './releases.mjs';
 const root = document.documentElement;
 const themeToggle = document.getElementById('theme-toggle');
 const updateThemeLabel = () => themeToggle.setAttribute('aria-label', root.dataset.theme === 'dark' ? '切换到浅色主题' : '切换到深色主题');
@@ -43,22 +42,9 @@ const dateLabel = value => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'long', day: 'numeric' }).format(date);
 };
-const safeReleaseUrl = release => {
-  try {
-    const url = new URL(release.html_url);
-    if (url.origin === 'https://github.com' && url.pathname.startsWith('/heyanLE/arale-book/releases/tag/')) return url.href;
-  } catch { /* Invalid data falls back to the release list. */ }
-  return releaseList;
-};
-const hasInstallers = release => Array.isArray(release.assets) &&
-  release.assets.some(asset => asset.size > 0 && /^ARaLeBook_.*windows-x64-setup\.exe$/i.test(asset.name)) &&
-  release.assets.some(asset => asset.size > 0 && /^ARaLeBook_.*macos-arm64\.dmg$/i.test(asset.name));
 
 function renderReleases(releases, { isSnapshot = false } = {}) {
-  const sorted = releases.filter(release => !release.draft && release.published_at && hasInstallers(release))
-    .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
-  const nightly = sorted.find(release => release.prerelease && /^nightly-\d{4}\.\d{1,2}\.\d{1,2}$/.test(release.tag_name));
-  const stable = sorted.find(release => !release.prerelease);
+  const { nightly, stable } = selectReleases(releases);
   if (nightly) {
     document.getElementById('nightly-version').textContent = nightly.tag_name.replace('nightly-', '');
     document.getElementById('nightly-status').textContent = `${dateLabel(nightly.published_at)}发布 · Windows / macOS`;

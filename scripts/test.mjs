@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 rmSync(resolve(root, 'dist-test'), {recursive:true, force:true});
-for (const args of [[resolve(root, 'node_modules/typescript/bin/tsc'), '-p', 'tsconfig.test.json'], ['--test', '--test-concurrency=1', 'dist-test/tests/*.test.js', 'tests/nightly.test.mjs']]) {
+for (const args of [[resolve(root, 'node_modules/typescript/bin/tsc'), '-p', 'tsconfig.test.json'], ['--test', '--test-concurrency=1', 'dist-test/tests/*.test.js', 'tests/nightly.test.mjs', 'tests/website-releases.test.mjs']]) {
   const result = spawnSync(process.execPath, args, {cwd:root, stdio:'inherit'});
   if (result.error) throw result.error;
   if (result.status) process.exit(result.status);

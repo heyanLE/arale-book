@@ -8,6 +8,12 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/pages.yml'
+      - 'scripts/update-site-releases.mjs'
+      - 'tests/website-releases.test.mjs'
+  workflow_run:
+    workflows: [Nightly]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +25,10 @@ concurrency:
 
 jobs:
   build:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -26,6 +36,8 @@ jobs:
       pages: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: '22.19.0'
@@ -33,6 +45,16 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - run: npm ci
+      - name: Test release metadata
+        run: node --test tests/website-releases.test.mjs
+      - name: Refresh public release snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { updateSiteReleases } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/update-site-releases.mjs`);
+            const snapshot = await updateSiteReleases({github, ...context.repo,
+              destination: `${process.env.GITHUB_WORKSPACE}/site/release-snapshot.json`});
+            core.info(`Release snapshot ${snapshot.checkedAt}: ${snapshot.releases.map(r => r.tag_name).join(', ')}`);
       - name: Build website
         run: npm run site:build
       - name: Upload website
