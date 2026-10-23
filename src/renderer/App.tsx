@@ -44,6 +44,7 @@ import {
 } from './lib/api';
 import { updateSettings, useApplyTheme, useSettings } from './lib/reader-settings';
 import { Toolbar } from './components/Toolbar';
+import { ServerSync } from './components/ServerSync';
 import { StatusBar } from './components/StatusBar';
 import { OcrQueueDock } from './components/OcrQueueDock';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -301,7 +302,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     void loadOcrCapability();
   }, [loadOcrCapability]);
-  useEffect(()=>{void api.sources?.connections().then(setSources).catch(()=>{});},[]);
+  useEffect(()=>{void api.sources?.connections().then(setSources).catch(()=>{});void api.sources?.status().then(setServerStatus).catch(()=>{});},[]);
   useIpcEvent('sources:changed', value => {
     setSources(value);
     if (value.activeId !== sources.activeId) {
@@ -621,7 +622,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing) return;
+      if (event.defaultPrevented || event.isComposing || document.querySelector('dialog[open]')) return;
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (mod && key === 'f') {
@@ -700,14 +701,9 @@ export function App(): JSX.Element {
         </div>
       )}
 
-      {serverStatus.conflicts.length>0 && <div className="server-sync-banner" role="status">{serverStatus.conflicts.map(c=><div key={c.bookId}>「{c.title}」进度冲突：本机第 {(c.local.pageIndex??0)+1} 页，服务器{c.remote?`第 ${(c.remote.pageIndex??0)+1} 页`:'尚未阅读'}。
-        {c.contentChanged && <span>内容版本已变化，请刷新书库后重新定位；旧位置保存在冲突历史中。</span>}
-        {(c.contentChanged ? ['restart'] as const : ['local','remote'] as const).map(choice=><button type="button" className="btn btn-sm" key={choice} onClick={()=>{void call('解决进度冲突',async()=>{await api.sources.resolve(c.bookId,choice);setServerStatus(await api.sources.poll());if(open?.book.id===c.bookId && choice!=='local') { setOpen(null);setView('library');setStatus('位置已更新，请重新打开书籍'); }});}}>{choice==='restart'?'从新版第一页开始':choice==='local'?'采用本机位置':'采用服务器位置'}</button>)}
-      </div>)}</div>}
-      {sources.activeId && serverStatus.offline.includes(sources.activeId) && <div className="server-sync-banner" role="status">服务器暂不可用，已缓存页面可继续阅读；进度将在重连后同步。</div>}
       <Toolbar
         remoteSource={!!sources.activeId}
-        sourceSlot={<label className="source-picker">书源 <select aria-label="选择书源" value={sources.activeId??''} onChange={e=>{void call('切换书源',()=>api.sources.activate(e.target.value||null));}}><option value="">本地书库</option>{sources.connections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><button type="button" className="tool-btn" onClick={bumpLibrary} title="刷新当前书库">刷新</button></label>}
+        sourceSlot={<label className="source-picker">书源 <select aria-label="选择书源" value={sources.activeId??''} onChange={e=>{void call('切换书源',()=>api.sources.activate(e.target.value||null));}}><option value="">本地书库</option>{sources.connections.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><button type="button" className="tool-btn" onClick={()=>{if(sources.activeId) void api.sources.sync(sources.activeId).catch(()=>{});else bumpLibrary();}} title={sources.activeId ? "同步远程书架与阅读进度" : "刷新当前书库"}>{sources.activeId ? "同步" : "刷新"}</button></label>}
         view={view}
         bookTitle={open?.book.title ?? null}
         libraryDir={info.data?.dir ?? null}
@@ -839,6 +835,7 @@ export function App(): JSX.Element {
         shown={counts.shown}
         total={counts.total}
         selectionCount={counts.selected}
+        syncSlot={<ServerSync sources={sources} state={serverStatus} onResolved={async (id,choice)=>{await api.sources.resolve(id,choice);setServerStatus(await api.sources.status());if(open?.book.id===id && choice!=='local'){setOpen(null);setView('library');setStatus('位置已更新，请重新打开书籍');}}} />}
         ocrSlot={
           <OcrQueueDock
             queue={ocrQueue}

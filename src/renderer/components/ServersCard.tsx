@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
-import type { ServerConnectionInput, ServerConnections, ServerScanStatus } from '@shared/server';
+import type { ServerConnectionInput, ServerConnections, ServerScanStatus, ServerSyncStatus } from '@shared/server';
 import { api, useIpcEvent } from '../lib/api';
+import { SyncConnection } from './ServerSync';
 const empty = { name: 'Arale Server', url: 'http://127.0.0.1:3737', token: '' };
 export function ServersCard(): JSX.Element {
     const [sources, setSources] = useState<ServerConnections>({ activeId: null, connections: [] });
     const [draft, setDraft] = useState<ServerConnectionInput>(empty);
     const [busy, setBusy] = useState(false);
     const [scans,setScans]=useState<ServerScanStatus[]>([]);
+    const [sync,setSync]=useState<ServerSyncStatus[]>([]);
     const [message, setMessage] = useState('');
     useEffect(() => { void api.sources?.connections().then(setSources).catch(e => setMessage(String(e))); }, []);
     useIpcEvent('sources:changed', setSources);
-    useIpcEvent('sources:status',value=>setScans(value.scans??[]));
+    useIpcEvent('sources:status',value=>{setScans(value.scans??[]);setSync(value.connections??[]);});
+    useEffect(()=>{void api.sources.status().then(value=>{setScans(value.scans??[]);setSync(value.connections??[]);}).catch(()=>{});},[]);
     async function action(run: () => Promise<unknown>, success: string) { setBusy(true); setMessage('连接中…'); try {
         await run();
         setMessage(success);
@@ -29,10 +32,11 @@ export function ServersCard(): JSX.Element {
       <strong>{c.name}{sources.activeId === c.id ? ' · 当前书源' : ''}</strong><span className="mono">{c.url}</span>
       {scans.find(s=>s.connectionId===c.id)?.running && <p role="status">正在扫描服务器书库…</p>}
       {scans.find(s=>s.connectionId===c.id)?.errors.map((error,index)=><p role="alert" key={index}>扫描失败：{error}</p>)}
+      <SyncConnection connection={c} status={sync.find(s=>s.connectionId===c.id)} />
       <div className="settings-row">
         <button className="btn btn-sm" disabled={busy || sources.activeId === c.id} onClick={() => void action(() => api.sources.activate(c.id), '已切换服务器书库')}>使用此书库</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => setDraft({ id: c.id, name: c.name, url: c.url, token: '' })}>编辑连接</button>
-        <button className="btn btn-sm" disabled={busy} onClick={() => void action(() => api.sources.scan(c.id), '已提交扫描，稍后刷新书库查看结果')}>扫描服务端书库</button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => void action(() => api.sources.scan(c.id), '已提交扫描，完成后点击同步获取新书')}>扫描服务器文件</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void action(() => api.sources.remove(c.id), '连接已移除，缓存与本机学习资料保留')}>移除连接</button>
       </div>
     </div>)}

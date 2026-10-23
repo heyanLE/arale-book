@@ -19,6 +19,11 @@ export function createAraleApi(transport: ApiTransport): AraleApi {
       remove: id => transport.invoke(IPC.sourcesRemove, id),
       scan: id => transport.invoke(IPC.sourcesScan, id),
       poll: () => transport.invoke(IPC.sourcesPoll),
+      status: () => transport.invoke(IPC.sourcesStatus),
+      sync: id => transport.invoke(IPC.sourcesSync, id),
+      autoSync: (id, enabled) => transport.invoke(IPC.sourcesAutoSync, id, enabled),
+      prefetch: (id, pages) => transport.invoke(IPC.sourcesPrefetch, id, pages),
+      readerClosed: id => transport.invoke(IPC.sourcesReaderClosed, id),
       resolve: (bookId, choice) => transport.invoke(IPC.sourcesResolve, bookId, choice),
     },
     app: {

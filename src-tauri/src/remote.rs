@@ -5,13 +5,29 @@ use anyhow::{bail, Context, Result};
 use reqwest::{Client, Method};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+mod assets;
+mod sync;
 
 pub struct Remote {
     root: PathBuf,
     client: Client,
     gate: tokio::sync::Mutex<()>,
     config_gate: Mutex<()>,
+    state_gate: Mutex<()>,
+    active_book: Mutex<Option<String>>,
+    sync_meta: Mutex<Value>,
+    asset_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    asset_slots: tokio::sync::Semaphore,
+    cover_slots: tokio::sync::Semaphore,
+    prefetch_slots: tokio::sync::Semaphore,
+    prefetch_epochs: Mutex<HashMap<String, u64>>,
 }
 fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().with_context(|| format!("服务端数据缺少 {k}"))
@@ -25,7 +41,10 @@ fn qualified(server: &str, book: &str) -> Result<String> {
 }
 fn content_changed(state: &Value, book: &Value) -> bool {
     let revision = &book["remote"]["revision"];
-    (!state["pending"].is_null() && state["pending"]["contentRevision"] != *revision)
+    (!state["next"].is_null()
+        && state["nextContentRevision"].is_string()
+        && state["nextContentRevision"] != *revision)
+        || (!state["pending"].is_null() && state["pending"]["contentRevision"] != *revision)
         || (state["conflict"]["bookRevision"].is_string()
             && state["conflict"]["bookRevision"] != *revision)
         || (!state["conflict"].is_null() && state["conflict"]["contentRevision"] != *revision)
@@ -40,6 +59,7 @@ fn public_config(config: &Value) -> Value {
     let mut value = config.clone();
     for c in value["connections"].as_array_mut().unwrap() {
         c["hasToken"] = json!(!c["token"].as_str().unwrap_or("").is_empty());
+        c["autoSync"] = json!(c["autoSync"] != false);
         c.as_object_mut().unwrap().remove("token");
     }
     value.as_object_mut().unwrap().remove("deviceId");
@@ -64,6 +84,16 @@ fn normalize_url(value: &str) -> Result<String> {
 }
 impl Remote {
     pub fn new(root: PathBuf) -> Result<Self> {
+        let mut sync_meta = storage::read(&root.join("remote/sync-status.json"), json!({}))?;
+        if let Some(states) = sync_meta.as_object_mut() {
+            for state in states.values_mut() {
+                if state["phase"] == "syncing" {
+                    state["phase"] = json!("idle");
+                }
+            }
+        } else {
+            bail!("同步状态缓存格式错误");
+        }
         let this = Self {
             root,
             client: Client::builder()
@@ -73,6 +103,14 @@ impl Remote {
                 .build()?,
             gate: tokio::sync::Mutex::new(()),
             config_gate: Mutex::new(()),
+            state_gate: Mutex::new(()),
+            active_book: Mutex::new(None),
+            sync_meta: Mutex::new(sync_meta),
+            asset_locks: Mutex::new(HashMap::new()),
+            asset_slots: tokio::sync::Semaphore::new(4),
+            cover_slots: tokio::sync::Semaphore::new(2),
+            prefetch_slots: tokio::sync::Semaphore::new(1),
+            prefetch_epochs: Mutex::new(HashMap::new()),
         };
         if !this.config_path().exists() {
             storage::write(
@@ -253,31 +291,81 @@ impl Remote {
         Ok(book)
     }
     async fn catalog(&self, backend: &Mutex<Backend>, c: &Value) -> Result<()> {
-        self.info(c).await?;
-        let data = self.json(c, Method::GET, "api/v1/books", None).await?;
-        let books = data["books"]
-            .as_array()
-            .context("服务端书库清单无效")?
+        let info = self.info(c).await?;
+        let cid = text(c, "id")?;
+        let compact = info["capabilities"]["catalog"] == true;
+        let old_revision = self.meta(cid)["catalogRevision"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let path = if compact {
+            format!("api/v1/catalog?revision={old_revision}")
+        } else {
+            "api/v1/books".into()
+        };
+        let data = self.json(c, Method::GET, &path, None).await?;
+        if data["unchanged"] != true {
+            let rows = data["books"].as_array().context("服务端书库清单无效")?;
+            let old = lock(backend)?.remote_books.clone();
+            let books = rows
+                .iter()
+                .map(|row| {
+                    if compact {
+                        self.materialize_summary(c, row, &old)
+                    } else {
+                        self.materialize(c, row)
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut b = lock(backend)?;
+            let mut next = b.remote_books.clone();
+            for book in &mut next {
+                if book["remote"]["connectionId"] == c["id"] {
+                    book["remote"]["available"] = json!(false);
+                }
+            }
+            for book in books {
+                if !old.iter().any(|value| value == &book) {
+                    self.cache_book(&book)?;
+                }
+                if let Some(entry) = next.iter_mut().find(|entry| entry["id"] == book["id"]) {
+                    *entry = book;
+                } else {
+                    next.push(book);
+                }
+            }
+            if next != b.remote_books {
+                storage::write(&self.root.join("remote/catalog.json"), &json!(next))?;
+                b.remote_books = next;
+            }
+        }
+        let books = lock(backend)?
+            .remote_books
             .iter()
-            .map(|b| self.materialize(c, b))
-            .collect::<Result<Vec<_>>>()?;
-        let mut b = lock(backend)?;
-        let mut next = b.remote_books.clone();
-        for old in &mut next {
-            if old["remote"]["connectionId"] == c["id"] {
-                old["remote"]["available"] = json!(false);
+            .filter(|b| b["remote"]["connectionId"] == c["id"])
+            .cloned()
+            .collect::<Vec<_>>();
+        if compact {
+            for book in &books {
+                if let Some(position) = data["progress"].get(text(&book["remote"], "bookId")?) {
+                    self.receive_position(book, position.clone(), false)?;
+                } else {
+                    self.receive_position(book, json!({"revision":0,"contentRevision":book["remote"]["revision"],"position":null,"deviceId":""}), false)?;
+                }
             }
         }
-        for book in books {
-            storage::write(&b.dir(text(&book, "id")?)?.join("book.json"), &book)?;
-            if let Some(old) = next.iter_mut().find(|old| old["id"] == book["id"]) {
-                *old = book;
-            } else {
-                next.push(book);
-            }
+        let revision = if compact {
+            text(&data, "revision")?.to_owned()
+        } else {
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&data)?))
+        };
+        if !digest(&revision) {
+            bail!("书库版本无效");
         }
-        storage::write(&self.root.join("remote/catalog.json"), &json!(next))?;
-        b.remote_books = next;
+        self.update_meta(
+            cid,
+            json!({"catalogRevision":revision,"compact":compact,"lastCatalogAt":storage::now()}),
+        )?;
         Ok(())
     }
     fn layer_current(&self, book: &Value) -> Result<bool> {
@@ -349,65 +437,6 @@ impl Remote {
         )?;
         Ok(())
     }
-    pub async fn ensure_asset(
-        &self,
-        backend: &Mutex<Backend>,
-        id: &str,
-        relative: &str,
-    ) -> Result<()> {
-        if !id.starts_with("rs_") {
-            return Ok(());
-        }
-        let book = self.snapshot(backend, id)?;
-        let page = book["pages"]
-            .as_array()
-            .context("无页面")?
-            .iter()
-            .find(|p| p["url"] == relative)
-            .context("资源不在远程页面清单中")?;
-        let dir = self.dir(id)?.join("content");
-        let target = dir.join(relative);
-        if target.is_file() {
-            storage::inside(&dir, relative)?;
-            return Ok(());
-        }
-        let c = self.connection(text(&book["remote"], "connectionId")?)?;
-        let (_, bytes) = self
-            .request(
-                &c,
-                Method::GET,
-                &format!(
-                    "api/v1/books/{}/pages/{}?revision={}",
-                    text(&book["remote"], "bookId")?,
-                    text(page, "id")?,
-                    text(&book["remote"], "revision")?
-                ),
-                None,
-                64 * 1024 * 1024,
-            )
-            .await?;
-        if bytes.len() as u64 != page["bytes"].as_u64().unwrap()
-            || format!("{:x}", Sha256::digest(&bytes)) != text(page, "sha256")?
-        {
-            bail!("页面校验失败，缓存未写入");
-        }
-        fs::create_dir_all(target.parent().unwrap())?;
-        // Guard even pre-existing cache directories against symlink escapes.
-        if !target
-            .parent()
-            .unwrap()
-            .canonicalize()?
-            .starts_with(self.dir(id)?.canonicalize()?)
-        {
-            bail!("缓存目录越界");
-        }
-        use std::io::Write;
-        let mut temp = tempfile::NamedTempFile::new_in(target.parent().unwrap())?;
-        temp.write_all(&bytes)?;
-        temp.as_file().sync_all()?;
-        temp.persist(&target).map_err(|e| e.error)?;
-        Ok(())
-    }
     fn progress_path(&self, id: &str) -> Result<PathBuf> {
         Ok(self.dir(id)?.join("progress-state.json"))
     }
@@ -437,45 +466,66 @@ impl Remote {
     }
     async fn flush(&self, book: &Value, c: &Value) -> Result<Value> {
         let id = text(book, "id")?;
-        let mut s = self.progress(id)?;
-        if !s["conflict"].is_null() {
-            return Ok(s);
-        }
-        if s["pending"].is_null() && s["next"].is_null() {
-            self.track(id, false)?;
-            return Ok(s);
+        let state = self.progress(id)?;
+        if !state["conflict"].is_null() || (state["pending"].is_null() && state["next"].is_null()) {
+            return Ok(state);
         }
         self.info(c).await?;
         for _ in 0..2 {
-            if s["pending"].is_null() {
-                if s["next"].is_null() {
+            let pending = {
+                let _local = self.state_gate.lock().unwrap();
+                let mut state = self.progress(id)?;
+                if !state["conflict"].is_null() {
                     break;
                 }
-                s["pending"] = json!({"operationId":uuid::Uuid::new_v4().to_string(),"deviceId":self.config()?["deviceId"],"baseRevision":s["current"]["revision"].as_u64().unwrap_or(0),"contentRevision":book["remote"]["revision"],"position":s["next"]});
-                s["next"] = Value::Null;
-                storage::write(&self.progress_path(id)?, &s)?;
-            }
+                if state["pending"].is_null() {
+                    if state["next"].is_null() {
+                        break;
+                    }
+                    state["pending"] = json!({"operationId":uuid::Uuid::new_v4().to_string(),"deviceId":self.config()?["deviceId"],
+                        "baseRevision":state["current"]["revision"].as_u64().unwrap_or(0),
+                        "contentRevision":state["nextContentRevision"].as_str().unwrap_or(text(&book["remote"],"revision")?),"position":state["next"]});
+                    state["next"] = Value::Null;
+                    state["nextContentRevision"] = Value::Null;
+                    storage::write(&self.progress_path(id)?, &state)?;
+                }
+                state["pending"].clone()
+            };
             let result = self
                 .json(
                     c,
                     Method::PUT,
                     &format!("api/v1/books/{}/progress", text(&book["remote"], "bookId")?),
-                    Some(s["pending"].clone()),
+                    Some(pending.clone()),
                 )
                 .await?;
-            if result["_conflict"] == true {
-                s["conflict"] = result["current"].clone();
-                storage::write(&self.progress_path(id)?, &s)?;
-                break;
+            {
+                let _local = self.state_gate.lock().unwrap();
+                // A reader may have queued a newer position while the request was in flight.
+                let mut state = self.progress(id)?;
+                if state["pending"]["operationId"] != pending["operationId"] {
+                    break;
+                }
+                if result["_conflict"] == true {
+                    state["conflict"] = result["current"].clone();
+                } else {
+                    state["current"] = result;
+                    state["pending"] = Value::Null;
+                    state["remoteCurrent"] = Value::Null;
+                }
+                storage::write(&self.progress_path(id)?, &state)?;
+                self.track(
+                    id,
+                    !state["pending"].is_null()
+                        || !state["next"].is_null()
+                        || !state["conflict"].is_null(),
+                )?;
+                if !state["conflict"].is_null() {
+                    break;
+                }
             }
-            s["current"] = result;
-            s["pending"] = Value::Null;
-            storage::write(&self.progress_path(id)?, &s)?;
         }
-        if s["pending"].is_null() && s["next"].is_null() && s["conflict"].is_null() {
-            self.track(id, false)?;
-        }
-        Ok(s)
+        self.progress(id)
     }
     fn display_position(s: &Value, id: &str) -> Value {
         let mut p = if !s["next"].is_null() {
@@ -511,8 +561,49 @@ impl Remote {
                 self.connection(first.as_str().context("无效书源 ID")?)?;
             }
             config["activeId"] = first.clone();
+            *self.active_book.lock().unwrap() = None;
             storage::write(&self.config_path(), &config)?;
             return Ok(public_config(&config));
+        }
+        if channel == "remote:autoSync" {
+            return self.set_auto_sync(first, args.get(1));
+        }
+        if channel == "remote:status" {
+            return self.sync_snapshot(backend);
+        }
+        if channel == "remote:readerClosed" {
+            let mut active = self.active_book.lock().unwrap();
+            if active.as_deref() == first.as_str() {
+                *active = None;
+            }
+            return Ok(Value::Null);
+        }
+        if channel == "remote:savePosition" {
+            return self.save_local_position(backend, first);
+        }
+        if channel == "remote:prefetch" {
+            return self
+                .prefetch(backend, first.as_str().context("缺少书籍 ID")?, args.get(1))
+                .await;
+        }
+        if channel == "remote:open" && args.get(1) == Some(&json!(true)) {
+            let book = self.snapshot(backend, first.as_str().context("缺少书籍 ID")?)?;
+            if Self::has_manifest(&book) {
+                return self.open_book(backend, first.as_str().unwrap(), true).await;
+            }
+        }
+        if channel == "remote:info" || channel == "remote:list" {
+            let c = self.selected_connection()?;
+            if channel == "remote:info" || self.catalog_cached(backend, &c)? {
+                return self.cached_view(backend, &c, channel, first);
+            }
+        }
+        if channel == "remote:poll" {
+            let Ok(_guard) = self.gate.try_lock() else {
+                return self.sync_snapshot(backend);
+            };
+            self.background_sync(backend).await;
+            return self.sync_snapshot(backend);
         }
         let _guard = self.gate.lock().await;
         let arg = || first.as_str().context("缺少服务器或书籍 ID");
@@ -544,6 +635,10 @@ impl Remote {
                 let info = self.info(&c).await?;
                 c["serverId"] = info["serverId"].clone();
                 c["userId"] = info["userId"].clone();
+                c["autoSync"] = old
+                    .map(|value| value["autoSync"] != false)
+                    .unwrap_or(true)
+                    .into();
                 if channel == "remote:probe" {
                     return Ok(info);
                 }
@@ -594,123 +689,38 @@ impl Remote {
             }
             "remote:scan" => {
                 let c = self.connection(arg()?)?;
+                self.update_meta(arg()?, json!({"retryAt":0,"lastAttemptAt":0}))?;
                 self.json(&c, Method::POST, "api/v1/library/scan", Some(json!({})))
                     .await
             }
             "remote:list" | "remote:info" => {
-                let config = self.config()?;
-                let cid = config["activeId"].as_str().context("未选择服务器")?;
-                let c = self.connection(cid)?;
-                let error = self.catalog(backend, &c).await.err().map(|e| e.to_string());
-                let b = lock(backend)?;
-                let books = b
-                    .remote_books
-                    .iter()
-                    .filter(|book| {
-                        book["remote"]["connectionId"] == cid
-                            && book["remote"]["available"] != false
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if error.is_some() && books.is_empty() {
-                    bail!("服务器无法连接，尚无书库缓存");
+                let c = self.selected_connection()?;
+                if !self.catalog_cached(backend, &c)? {
+                    self.synchronize(backend, &c, true).await?;
                 }
-                if channel == "remote:info" {
-                    Ok(
-                        json!({"dir":format!("{}{}",text(&c,"url")?,if error.is_some(){" · 离线缓存"}else{""}),"bookCount":books.len(),"comicCount":books.len(),"epubCount":0}),
-                    )
+                self.cached_view(backend, &c, channel, first)
+            }
+            "remote:sync" => {
+                let c = if first.is_string() {
+                    self.connection(arg()?)?
                 } else {
-                    Ok(Backend {
-                        root: self.root.clone(),
-                        books,
-                        remote_books: vec![],
-                    }
-                    .list(first))
-                }
+                    self.selected_connection()?
+                };
+                let _ = self.synchronize(backend, &c, true).await;
+                self.sync_snapshot(backend)
             }
             "remote:open" => {
-                let id = arg()?;
-                let book = self.snapshot(backend, id)?;
-                // Interactive reading can render before downloading the whole text layer.
-                // Other callers retain the existing ready-to-read text contract.
-                let defer_layer = args.get(1).and_then(Value::as_bool).unwrap_or(false);
-                let mut text_layer_pending = false;
-                let mut s = self.progress(id)?;
-                if s["discardUntilOpen"] == true {
-                    s["discardUntilOpen"] = json!(false);
-                    storage::write(&self.progress_path(id)?, &s)?;
-                }
-                if let Ok(c) = self.connection(text(&book["remote"], "connectionId")?) {
-                    let online = self.info(&c).await.is_ok();
-                    if online {
-                        if defer_layer && book["remote"]["ocrRevision"].as_u64().unwrap_or(0) > 0 {
-                            text_layer_pending = !self.layer_current(&book)?;
-                        } else {
-                            self.layer(&book, &c).await?;
-                        }
-                        if let Ok(next) = self.flush(&book, &c).await {
-                            s = next;
-                        }
-                        if s["pending"].is_null() && s["next"].is_null() && s["conflict"].is_null()
-                        {
-                            s["current"] = self
-                                .json(
-                                    &c,
-                                    Method::GET,
-                                    &format!(
-                                        "api/v1/books/{}/progress",
-                                        text(&book["remote"], "bookId")?
-                                    ),
-                                    None,
-                                )
-                                .await?;
-                            storage::write(&self.progress_path(id)?, &s)?;
-                        }
-                    }
-                }
-                // Empty text layer keeps local parsing/segmentation behavior consistent offline.
-                let layer = self.dir(id)?.join("content/manga.json");
-                if !layer.exists() {
-                    storage::write(&layer, &json!({"pages":[]}))?;
-                }
-                let position = if content_changed(&s, &book)
-                    || (s["pending"].is_null()
-                        && s["next"].is_null()
-                        && s["current"]["contentRevision"] != book["remote"]["revision"])
-                {
-                    Value::Null
-                } else {
-                    Self::display_position(&s, id)
-                };
-                Ok(json!({"book":book,"position":position,"textLayerPending":text_layer_pending}))
-            }
-            "remote:savePosition" => {
-                let id = text(first, "bookId")?;
-                let book = self.snapshot(backend, id)?;
-                let index = first["pageIndex"].as_u64().context("缺少漫画页码")?;
-                if index >= book["pageCount"].as_u64().unwrap_or(0) {
-                    bail!("页码越界");
-                }
-                let mut s = self.progress(id)?;
-                if s["discardUntilOpen"] == true {
-                    return Ok(Value::Null);
-                }
-                self.track(id, true)?;
-                let mut p = first.clone();
-                p["bookId"] = book["remote"]["bookId"].clone();
-                p["updatedAt"] = json!(storage::now());
-                s["next"] = p;
-                storage::write(&self.progress_path(id)?, &s)?;
-                if let Ok(c) = self.connection(text(&book["remote"], "connectionId")?) {
-                    let _ = self.flush(&book, &c).await;
-                }
-                Ok(Value::Null)
+                self.open_book(
+                    backend,
+                    arg()?,
+                    args.get(1).and_then(Value::as_bool).unwrap_or(false),
+                )
+                .await
             }
             "remote:resolve" => {
                 let id = arg()?;
                 let book = self.snapshot(backend, id)?;
                 let c = self.connection(text(&book["remote"], "connectionId")?)?;
-                let mut s = self.progress(id)?;
                 let current = self
                     .json(
                         &c,
@@ -737,37 +747,43 @@ impl Remote {
                 if manifest["revision"] != book["remote"]["revision"] {
                     bail!("书籍内容已变更，请返回书库刷新后重新打开");
                 }
-                if choice != "restart"
-                    && (content_changed(&s, &book)
-                        || current["contentRevision"] != book["remote"]["revision"])
                 {
-                    bail!("内容版本不匹配，请从新版第一页重新定位");
+                    let _local = self.state_gate.lock().unwrap();
+                    let mut s = self.progress(id)?;
+                    if choice != "restart"
+                        && (content_changed(&s, &book)
+                            || current["contentRevision"] != book["remote"]["revision"])
+                    {
+                        bail!("内容版本不匹配，请从新版第一页重新定位");
+                    }
+                    let history_path = self.dir(id)?.join("progress-conflict-history.json");
+                    let mut history = storage::read(&history_path, json!([]))?
+                        .as_array()
+                        .cloned()
+                        .context("进度冲突历史格式错误")?;
+                    history.push(
+                        json!({"at":storage::now(),"choice":choice,"previous":s,"server":current}),
+                    );
+                    storage::write(&history_path, &json!(history))?;
+                    let mut next = if choice == "restart" {
+                        json!({"pageIndex":0,"updatedAt":storage::now()})
+                    } else {
+                        Self::display_position(&s, id)
+                    };
+                    next["bookId"] = book["remote"]["bookId"].clone();
+                    s["discardUntilOpen"] = json!(choice != "local");
+                    s["current"] = current;
+                    s["pending"] = Value::Null;
+                    s["conflict"] = Value::Null;
+                    s["next"] = if choice == "local" || choice == "restart" {
+                        next
+                    } else {
+                        Value::Null
+                    };
+                    s["nextContentRevision"] = book["remote"]["revision"].clone();
+                    storage::write(&self.progress_path(id)?, &s)?;
+                    self.track(id, !s["next"].is_null())?;
                 }
-                let history_path = self.dir(id)?.join("progress-conflict-history.json");
-                let mut history = storage::read(&history_path, json!([]))?
-                    .as_array()
-                    .cloned()
-                    .context("进度冲突历史格式错误")?;
-                history.push(
-                    json!({"at":storage::now(),"choice":choice,"previous":s,"server":current}),
-                );
-                storage::write(&history_path, &json!(history))?;
-                let mut next = if choice == "restart" {
-                    json!({"pageIndex":0,"updatedAt":storage::now()})
-                } else {
-                    Self::display_position(&s, id)
-                };
-                next["bookId"] = book["remote"]["bookId"].clone();
-                s["discardUntilOpen"] = json!(choice != "local");
-                s["current"] = current;
-                s["pending"] = Value::Null;
-                s["conflict"] = Value::Null;
-                s["next"] = if choice == "local" || choice == "restart" {
-                    next
-                } else {
-                    Value::Null
-                };
-                storage::write(&self.progress_path(id)?, &s)?;
                 self.flush(&book, &c).await?;
                 Ok(Value::Null)
             }
@@ -777,74 +793,6 @@ impl Remote {
                 let p = book["pages"].get(i).context("页码越界")?;
                 self.ensure_asset(backend, arg()?, text(p, "url")?).await?;
                 Ok(Value::Null)
-            }
-            "remote:poll" => {
-                let mut jobs = vec![];
-                let mut conflicts = vec![];
-                let mut offline = vec![];
-                let mut scans = vec![];
-                let mut job_cache = storage::read(&self.root.join("remote/jobs.json"), json!({}))?;
-                let previous_jobs = job_cache.clone();
-                let tracked = self.tracked()?;
-                for c in self.config()?["connections"].as_array().unwrap() {
-                    let result = self.json(c, Method::GET, "api/v1/state", None).await;
-                    let state = match result {
-                        Ok(v) if v["serverId"] == c["serverId"] => v,
-                        _ => {
-                            offline.push(c["id"].clone());
-                            if let Some(old) = job_cache[text(c, "id")?].as_array() {
-                                jobs.extend(old.iter().cloned());
-                            }
-                            continue;
-                        }
-                    };
-                    scans.push(json!({"connectionId":c["id"],"running":state["scan"]["running"],"completedAt":state["scan"]["completedAt"],"errors":state["scan"]["errors"]}));
-                    let books = lock(backend)?
-                        .remote_books
-                        .iter()
-                        .filter(|b| b["remote"]["connectionId"] == c["id"])
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    for b in &books {
-                        let id = text(b, "id")?;
-                        if !tracked.contains(&json!(id)) {
-                            continue;
-                        }
-                        let s = self.progress(id)?;
-                        if !s["next"].is_null() || !s["pending"].is_null() {
-                            let _ = self.flush(b, c).await;
-                        }
-                    }
-                    if let Some(list) = state["jobs"].as_array() {
-                        let mut connection_jobs = vec![];
-                        for job in list {
-                            let mut job = job.clone();
-                            job["bookId"] =
-                                json!(qualified(text(c, "serverId")?, text(&job, "bookId")?)?);
-                            connection_jobs.push(job);
-                        }
-                        job_cache[text(c, "id")?] = json!(connection_jobs);
-                        jobs.extend(connection_jobs);
-                    }
-                }
-                for b in lock(backend)?.remote_books.clone() {
-                    let id = text(&b, "id")?;
-                    if !tracked.contains(&json!(id)) {
-                        continue;
-                    }
-                    let s = self.progress(id)?;
-                    if !s["conflict"].is_null() {
-                        let mut local = Self::display_position(&s, id);
-                        if local.is_null() {
-                            local = json!({});
-                        }
-                        conflicts.push(json!({"bookId":id,"title":b["title"],"local":local,"remote":s["conflict"]["position"],"contentChanged":content_changed(&s,&b)}));
-                    }
-                }
-                if job_cache != previous_jobs {
-                    storage::write(&self.root.join("remote/jobs.json"), &job_cache)?;
-                }
-                Ok(json!({"jobs":jobs,"conflicts":conflicts,"offline":offline,"scans":scans}))
             }
             "remote:preferences" => {
                 let id = arg()?;
@@ -872,13 +820,17 @@ impl Remote {
                 let c = self.connection(text(&book["remote"], "connectionId")?)?;
                 // A single book refresh must not download every page manifest in the library.
                 self.info(&c).await?;
-                let manifest = self.json(
-                    &c,
-                    Method::GET,
-                    &format!("api/v1/books/{}", text(&book["remote"], "bookId")?),
-                    None,
-                ).await?;
-                let expected = args.get(1).and_then(Value::as_str)
+                let manifest = self
+                    .json(
+                        &c,
+                        Method::GET,
+                        &format!("api/v1/books/{}", text(&book["remote"], "bookId")?),
+                        None,
+                    )
+                    .await?;
+                let expected = args
+                    .get(1)
+                    .and_then(Value::as_str)
                     .unwrap_or(text(&book["remote"], "revision")?);
                 if manifest["revision"] != expected {
                     bail!("书籍内容已变更，请返回书库刷新后重新打开");
@@ -890,11 +842,12 @@ impl Remote {
                 {
                     let mut b = lock(backend)?;
                     let mut next = b.remote_books.clone();
-                    let entry = next.iter_mut()
+                    let entry = next
+                        .iter_mut()
                         .find(|item| item["id"] == fresh["id"])
                         .context("远程书籍已移除")?;
                     *entry = fresh.clone();
-                    storage::write(&b.dir(arg()?)?.join("book.json"), &fresh)?;
+                    self.cache_book(&fresh)?;
                     storage::write(&self.root.join("remote/catalog.json"), &json!(next))?;
                     b.remote_books = next;
                 }
@@ -937,6 +890,7 @@ impl Remote {
                 let book = self.snapshot(backend, id)?;
                 let c = self.connection(text(&book["remote"], "connectionId")?)?;
                 if channel == "remote:ocrStart" {
+                    self.update_meta(text(&c, "id")?, json!({"retryAt":0,"lastAttemptAt":0}))?;
                     let r=self.json(&c,Method::POST,&format!("api/v1/books/{}/ocr-jobs",text(&book["remote"],"bookId")?),Some(json!({"operationId":uuid::Uuid::new_v4().to_string(),"force":args.get(1).is_some_and(|a|a["force"]==true)}))).await?;
                     Ok(
                         json!({"bookId":id,"ok":true,"provider":"server","pages":0,"blocks":0,"queued":r["skipped"]!=true,"skipped":r["skipped"]==true}),
@@ -1027,17 +981,47 @@ mod tests {
             r.handle(backend, "remote:list", &[json!({})]).await?;
         }
         let books = ra.handle(&ba, "remote:list", &[json!({})]).await?;
-        let book = &books["books"][0];
+        let summary = &books["books"][0];
+        assert_eq!(
+            summary["pages"].is_null(),
+            std::env::var("ARALE_TEST_LEGACY").as_deref() != Ok("1")
+        );
+        let book_id = text(summary, "id")?;
+        let opened = ra
+            .handle(&ba, "remote:open", &[json!(book_id), json!(true)])
+            .await?;
+        let book = &opened["book"];
         let id = text(book, "id")?;
-        let oa = ra.handle(&ba, "remote:open", &[json!(id), json!(true)]).await?;
+        let oa = ra
+            .handle(&ba, "remote:open", &[json!(id), json!(true)])
+            .await?;
         assert_eq!(oa["textLayerPending"], true);
-        assert!(crate::page_text(&*lock(&ba)?, id, 0)?["blocks"].as_array().unwrap().is_empty());
+        assert!(crate::page_text(&*lock(&ba)?, id, 0)?["blocks"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         let ob = rb.handle(&bb, "remote:open", &[json!(id)]).await?;
         assert_eq!(oa["position"], ob["position"]);
-        ra.handle(&ba, "remote:refreshLayer", &[json!(id), book["remote"]["revision"].clone()]).await?;
-        assert_eq!(ra.handle(&ba, "remote:open", &[json!(id), json!(true)]).await?["textLayerPending"], false);
+        ra.handle(
+            &ba,
+            "remote:refreshLayer",
+            &[json!(id), book["remote"]["revision"].clone()],
+        )
+        .await?;
+        assert_eq!(
+            ra.handle(&ba, "remote:open", &[json!(id), json!(true)])
+                .await?["textLayerPending"],
+            false
+        );
         let cached = fs::read(ra.dir(id)?.join("content/manga.json"))?;
-        assert!(ra.handle(&ba, "remote:refreshLayer", &[json!(id), json!("0".repeat(64))]).await.is_err());
+        assert!(ra
+            .handle(
+                &ba,
+                "remote:refreshLayer",
+                &[json!(id), json!("0".repeat(64))]
+            )
+            .await
+            .is_err());
         assert_eq!(fs::read(ra.dir(id)?.join("content/manga.json"))?, cached);
         assert!(!crate::segments::input(&*lock(&ba)?, id)?["units"]
             .as_array()
@@ -1064,6 +1048,14 @@ mod tests {
             .is_empty());
         ra.handle(
             &ba,
+            "remote:savePosition",
+            &[json!({"bookId":id,"pageIndex":0})],
+        )
+        .await?;
+        ra.handle(&ba, "remote:sync", &[]).await?;
+        // B moves away and back while A has advanced the server revision.
+        rb.handle(
+            &bb,
             "remote:savePosition",
             &[json!({"bookId":id,"pageIndex":0})],
         )
@@ -1109,6 +1101,23 @@ mod tests {
             rb.handle(&bb, "remote:open", &[json!(id)]).await?["position"]["pageIndex"],
             1
         );
+        // Disabling automatic sync survives restart. Manual sync still sends the outbox.
+        let cid = rb.config()?["activeId"].clone();
+        rb.handle(&bb, "remote:autoSync", &[cid, json!(false)])
+            .await?;
+        rb.handle(
+            &bb,
+            "remote:savePosition",
+            &[json!({"bookId":id,"pageIndex":0})],
+        )
+        .await?;
+        rb.handle(&bb, "remote:poll", &[]).await?;
+        assert_eq!(rb.progress(id)?["next"]["pageIndex"], 0);
+        let rb = Remote::new(b.path().into())?;
+        assert_eq!(rb.config()?["connections"][0]["autoSync"], false);
+        rb.handle(&bb, "remote:sync", &[]).await?;
+        assert!(rb.progress(id)?["next"].is_null());
+        assert_eq!(rb.progress(id)?["current"]["position"]["pageIndex"], 0);
         let mut incompatible = ra.progress(id)?;
         incompatible["pending"] = json!({"operationId":uuid::Uuid::new_v4().to_string(),"deviceId":ra.config()?["deviceId"],"baseRevision":0,"contentRevision":"0".repeat(64),"position":{"bookId":book["remote"]["bookId"],"pageIndex":1}});
         ra.track(id, true)?;

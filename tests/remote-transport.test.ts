@@ -20,7 +20,7 @@ test('sources coexist: local behavior stays unchanged and book identity wins ove
     assert.deepEqual(calls.at(-1), ['remote:open', 'rs_server_bk_one', true]);
     await router.invoke('remote:activate', null);
     await router.invoke('library:savePosition', { bookId: 'rs_server_bk_one', pageIndex: 2 });
-    assert.equal(calls.at(-1)[0], 'remote:savePosition');
+    assert.ok(calls.some(call=>call[0] === 'remote:savePosition'));
     await router.invoke('library:import', ['local.cbz']);
     assert.equal(calls.at(-1)[0], 'library:import');
     await assert.rejects(() => router.invoke('library:remove', ['bk_local', 'rs_server_bk_one']), /服务器/);
@@ -122,4 +122,22 @@ test('a current cached text layer does not start another background download', a
     }, () => { throw new Error('No text event expected'); });
     assert.equal((await router.invoke('library:open', 'rs_cached')).position.pageIndex, 8);
     assert.deepEqual(calls, ['remote:open']);
+});
+
+test('queued progress keeps the content revision of the opened reader',async()=>{
+    const calls:any[]=[];const events:any[]=[];
+    const state={jobs:[],conflicts:[],offline:[],connections:[]};
+    const router=createSourceTransport(async(channel,...args)=>{calls.push([channel,...args]);if(channel==='remote:open')return {book:{remote:{revision:'old-content'}},textLayerPending:false};if(channel==='remote:status')return state;return {};},(c,v)=>events.push([c,v]));
+    await router.invoke('library:open','rs_book');
+    await router.invoke('library:savePosition',{bookId:'rs_book',pageIndex:3});
+    assert.deepEqual(calls.find(c=>c[0]==='remote:savePosition'),['remote:savePosition',{bookId:'rs_book',pageIndex:3,contentRevision:'old-content'}]);
+    assert.ok(events.some(e=>e[0]==='sources:status'));
+});
+
+test('manual sync publishes status and a changed catalogue independently of the auto preference',async()=>{
+    const events:any[]=[];const config={activeId:'nas',connections:[{id:'nas',autoSync:false}]};
+    const router=createSourceTransport(async channel=>channel==='remote:connections'?config:{jobs:[],conflicts:[],offline:[],connections:[{connectionId:'nas',catalogRevision:'new',pending:0}]},(c,v)=>events.push([c,v]));
+    await router.invoke('remote:connections');await router.invoke('remote:sync','nas');
+    assert.ok(events.some(e=>e[0]==='library:changed'));
+    assert.equal(events.find(e=>e[0]==='sources:status')[1].connections[0].pending,0);
 });

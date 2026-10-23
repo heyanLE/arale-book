@@ -8,6 +8,8 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
     let remote: OcrQueueState = { active: null, pending: [] };
     const completed = new Set<string>();
     const scans=new Map<string,number>();
+    const revisions = new Map<string, string>();
+    const openedRevisions = new Map<string, string>();
     let polling: Promise<ServerPoll> | null = null;
     const textLoads = new Map<string, Promise<unknown>>();
     const loadText = (bookId: string, revision: string | undefined) => {
@@ -23,7 +25,13 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
         void work.catch(() => {});
     };
     const queue = (): OcrQueueState => ({ active: local.active ?? remote.active, pending: [...(local.active && remote.active ? [remote.active] : []), ...local.pending, ...remote.pending] });
-    const poll = (): Promise<ServerPoll> => polling ??= invoke('remote:poll').then(async (state: ServerPoll) => {
+    const acceptState = async (state: ServerPoll): Promise<ServerPoll> => {
+        deliver('sources:status', state);
+        for (const connection of state.connections ?? []) {
+            const before = revisions.get(connection.connectionId);
+            revisions.set(connection.connectionId, connection.catalogRevision);
+            if (before !== connection.catalogRevision && connection.catalogRevision && sources?.activeId === connection.connectionId) deliver('library:changed', { reason: 'update' });
+        }
         for(const scan of state.scans??[]){
             const previous=scans.get(scan.connectionId);scans.set(scan.connectionId,scan.completedAt);
             if((previous??0)!==scan.completedAt && scan.completedAt>0 && sources?.activeId===scan.connectionId)deliver('library:changed',{reason:'update'});
@@ -59,18 +67,20 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
         deliver('sources:status', state);
         deliver('ocr:queue', queue());
         return state;
-    }).finally(() => { polling = null; });
+    };
+    const poll = (): Promise<ServerPoll> => polling ??= invoke('remote:poll').then(acceptState).finally(() => { polling = null; });
     return {
         poll,
         localQueue(value: OcrQueueState) { local = value; deliver('ocr:queue', queue()); },
         async invoke(channel: string, ...args: any[]): Promise<any> {
-            if (['remote:save', 'remote:activate', 'remote:remove'].includes(channel)) {
+            if (['remote:save', 'remote:activate', 'remote:remove', 'remote:autoSync'].includes(channel)) {
                 sources = await invoke(channel, ...args);
                 deliver('sources:changed', sources);
                 return sources;
             }
             if (channel === 'remote:connections')
                 return sources = await invoke(channel, ...args);
+            if (channel === 'remote:sync') return acceptState(await invoke(channel, ...args));
             if (channel === 'remote:poll')
                 return poll();
             if (channel.startsWith('remote:'))
@@ -84,6 +94,7 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
             if (typeof id === 'string' && id.startsWith('rs_')) {
                 if (channel === 'library:open') {
                     const result = await invoke('remote:open', id, true);
+                    if (result?.book?.remote?.revision) openedRevisions.set(id, result.book.remote.revision);
                     if (result?.textLayerPending) loadText(id, result.book?.remote?.revision);
                     return result;
                 }
@@ -91,7 +102,9 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
                     await textLoads.get(id);
                 const route: Record<string, string> = { 'library:savePosition': 'remote:savePosition', 'ocr:start': 'remote:ocrStart', 'ocr:cancel': 'remote:ocrCancel', 'ocr:status': 'remote:ocrStatus' };
                 if (route[channel]) {
-                    const result = await invoke(route[channel]!, ...args);
+                    const routedArgs = channel === 'library:savePosition' && openedRevisions.has(id) ? [{ ...args[0], contentRevision: openedRevisions.get(id) }] : args;
+                    const result = await invoke(route[channel]!, ...routedArgs);
+                    if (channel === 'library:savePosition') void invoke('remote:status').then(state => deliver('sources:status', state)).catch(() => {});
                     if (channel.startsWith('ocr:'))
                         void poll().catch(() => { });
                     return result;

@@ -57,6 +57,13 @@ export class Store {
         this.serverId = this.db.prepare('SELECT value FROM meta WHERE key=?').get('serverId').value;
     }
     books(): ServerBook[] { return this.db.prepare('SELECT json FROM books WHERE available=1 ORDER BY id').all().map((r: any) => JSON.parse(r.json)); }
+    catalog() {
+        const books = this.db.prepare("SELECT json_remove(json,'$.pages') AS metadata, json_extract(json,'$.pages[0]') AS cover FROM books WHERE available=1 ORDER BY id").all()
+            .map((row: any) => ({ ...JSON.parse(row.metadata), coverPage: JSON.parse(row.cover) }));
+        const progress = Object.fromEntries(this.db.prepare('SELECT p.book_id,p.json FROM progress p JOIN books b ON b.id=p.book_id WHERE b.available=1').all()
+            .map((row: any) => [row.book_id, JSON.parse(row.json)]));
+        return { revision: sha256(JSON.stringify(books)), books, progress };
+    }
     book(id: string): ServerBook {
         const row = this.db.prepare('SELECT json FROM books WHERE id=? AND available=1').get(id);
         if (!row)

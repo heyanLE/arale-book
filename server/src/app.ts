@@ -73,7 +73,7 @@ export async function createServer(options: ServerOptions) {
     let scanWork: Promise<unknown> = Promise.resolve();
     const queue = new OcrQueue(store, runner, () => change++);
     const app = Fastify({ logger: options.logger ? { redact: ['req.headers.authorization'] } : false, bodyLimit: 1024 * 1024, requestTimeout: 30000 });
-    const info = () => ({ apiVersion: SERVER_API_VERSION, serverId: store.serverId, userId: 'owner', name: options.name ?? 'Arale Server', capabilities: { formats: ['comic'], ocr: !!runner, engine: 'arale_onnx_v1', engineVersion: runner?.signature ?? '' } });
+    const info = () => ({ apiVersion: SERVER_API_VERSION, serverId: store.serverId, userId: 'owner', name: options.name ?? 'Arale Server', capabilities: { formats: ['comic'], catalog: true, ocr: !!runner, engine: 'arale_onnx_v1', engineVersion: runner?.signature ?? '' } });
     const scan = () => { if (scanRunning)
         return; scanRunning = true; scanWork = library.scan().then(result => { scanErrors = result.errors; }).catch(error => { scanErrors = [error instanceof Error ? error.message : 'Scan failed']; }).finally(() => { scanRunning = false; scanCompletedAt = Date.now(); change++; }); };
     app.addHook('onRequest', async (request, reply) => {
@@ -102,6 +102,11 @@ export async function createServer(options: ServerOptions) {
     app.get('/api/v1/state', async () => ({ serverId: store.serverId, change, jobs: store.jobs(), scan: { running: scanRunning, completedAt: scanCompletedAt, errors: scanErrors } }));
     app.post('/api/v1/library/scan', async (_request, reply) => { scan(); return reply.code(202).send({ queued: true }); });
     app.get('/api/v1/books', async () => ({ books: store.books() }));
+    app.get<{ Querystring: { revision?: string } }>('/api/v1/catalog', async request => {
+        const catalog = store.catalog();
+        const unchanged = request.query.revision === catalog.revision;
+        return { ...catalog, unchanged, books: unchanged ? undefined : catalog.books };
+    });
     const params = { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,100}$' } }, additionalProperties: false };
     app.get<{
         Params: {

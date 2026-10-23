@@ -348,7 +348,7 @@ export function ComicReader({
           bookId: book.id,
           pageIndex: pageIndexRef.current,
           updatedAt: Date.now(),
-        }),
+        }).then(() => book.remote ? api.sources.readerClosed(book.id) : undefined),
       );
     },
     [book.id],
@@ -373,6 +373,10 @@ export function ComicReader({
     for (const forward of [true, false]) {
       const start = stepSpread(pageIndex, total, spreadOffset, spread, forward);
       for (const index of spreadPages(start, total, spreadOffset, spread)) targets.add(index);
+    }
+    if (book.remote) {
+      void api.sources.prefetch(book.id, [...targets]).catch(() => {});
+      return () => { void api.sources.prefetch(book.id, []).catch(() => {}); };
     }
     for (const index of targets) {
       const page = pages[index];

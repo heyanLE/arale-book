@@ -64,6 +64,11 @@ export const IPC = {
   sourcesRemove: 'remote:remove',
   sourcesScan: 'remote:scan',
   sourcesPoll: 'remote:poll',
+  sourcesSync: 'remote:sync',
+  sourcesStatus: 'remote:status',
+  sourcesAutoSync: 'remote:autoSync',
+  sourcesPrefetch: 'remote:prefetch',
+  sourcesReaderClosed: 'remote:readerClosed',
   sourcesResolve: 'remote:resolve',
 
   appBuildInfo: 'app:buildInfo',
@@ -196,6 +201,11 @@ export interface AraleApi {
     remove(id: string): Promise<ServerConnections>;
     scan(id: string): Promise<void>;
     poll(): Promise<ServerPoll>;
+    status(): Promise<ServerPoll>;
+    sync(id?: string): Promise<ServerPoll>;
+    autoSync(id: string, enabled: boolean): Promise<ServerConnections>;
+    prefetch(bookId: string, pages: number[]): Promise<void>;
+    readerClosed(bookId: string): Promise<void>;
     resolve(bookId: string, choice: 'local' | 'remote' | 'restart'): Promise<void>;
   };
   app: {

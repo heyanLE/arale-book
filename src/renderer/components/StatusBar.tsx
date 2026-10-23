@@ -26,6 +26,7 @@ export interface StatusBarProps {
    * 现在识别是排队的，必须能点开看「排到第几个了」。
    */
   ocrSlot?: React.ReactNode;
+  syncSlot?: React.ReactNode;
   statusMessage: string;
   busy: boolean;
   theme: ThemeMode;
@@ -67,6 +68,7 @@ export function StatusBar(props: StatusBarProps): JSX.Element {
           {shown === total ? `${total} 本` : `${shown} / ${total} 本`}
         </span>
         {selectionCount > 0 && <span className="statusbar-stat">已选 {selectionCount}</span>}
+        {props.syncSlot}
         {ocrSlot}
         <span className="statusbar-stat">{THEME_TEXT[theme]}</span>
       </div>

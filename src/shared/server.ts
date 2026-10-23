@@ -24,6 +24,7 @@ export interface ServerInfo {
         ocr: boolean;
         engine: string;
         engineVersion: string;
+        catalog?: boolean;
     };
 }
 export interface ServerConnection {
@@ -33,6 +34,7 @@ export interface ServerConnection {
     name: string;
     url: string;
     hasToken: boolean;
+    autoSync?: boolean;
 }
 export interface ServerConnections {
     activeId: string | null;
@@ -86,4 +88,16 @@ export interface ServerPoll {
     jobs: ServerJob[];
     conflicts: ProgressConflict[];
     offline: string[];
+    connections?: ServerSyncStatus[];
+}
+export interface ServerSyncStatus {
+    connectionId: string;
+    autoSync: boolean;
+    phase: 'idle' | 'syncing' | 'offline' | 'auth-error' | 'error';
+    lastSyncedAt: number | null;
+    lastAttemptAt: number | null;
+    pending: number;
+    conflicts: number;
+    catalogRevision: string;
+    error: string | null;
 }
