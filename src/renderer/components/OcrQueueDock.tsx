@@ -257,6 +257,8 @@ function StudyTaskRow(props: {
 
 function stageLabel(progress: OcrProgress): string {
   switch (progress.stage) {
+    case 'downloading':
+      return '缓存原图';
     case 'loading-model':
       return '准备模型';
     case 'detecting':

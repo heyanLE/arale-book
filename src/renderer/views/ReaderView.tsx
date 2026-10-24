@@ -102,6 +102,8 @@ export function ReaderView({
   const { autoHideChrome: immersive } = useSettings();
   const comicMode = readerModeOf(book) === 'comic';
   const [immersiveToolsHost, setImmersiveToolsHost] = useState<HTMLDivElement | null>(null);
+  const [toolsPinned, setToolsPinned] = useState(false);
+  const [toolsHovered, setToolsHovered] = useState(false);
 
   const handleProgress = useCallback((label: string) => setProgress(label), []);
 
@@ -111,7 +113,10 @@ export function ReaderView({
 
   return (
     <div className="reader">
-      {immersive && <div className={`immersive-exit-zone${wordCards.panelOpen ? ' is-sidebar-open' : ''}`} aria-label="沉浸阅读工具">
+      {immersive && <div className={`immersive-exit-zone${wordCards.panelOpen ? ' is-sidebar-open' : ''}${toolsPinned || toolsHovered ? ' is-revealed' : ''}`} aria-label="沉浸阅读工具"
+        onPointerEnter={() => setToolsHovered(true)} onPointerMove={() => setToolsHovered(true)} onPointerLeave={() => setToolsHovered(false)}>
+        <button type="button" className="immersive-tools-toggle" aria-label="固定或取消固定阅读工具" aria-pressed={toolsPinned} aria-expanded={toolsPinned || toolsHovered}
+          title={toolsPinned ? "取消固定，移开鼠标后收起" : "固定显示阅读工具"} onClick={() => setToolsPinned(value => !value)}>⋯</button>
         <div className="immersive-reader-actions">
           {journalTools}
           {comicMode && <div ref={setImmersiveToolsHost} />}

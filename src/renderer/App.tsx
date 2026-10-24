@@ -44,6 +44,7 @@ import {
 } from './lib/api';
 import { updateSettings, useApplyTheme, useSettings } from './lib/reader-settings';
 import { Toolbar } from './components/Toolbar';
+import { DownloadDock } from './components/RemoteDownloads';
 import { ServerSync } from './components/ServerSync';
 import { StatusBar } from './components/StatusBar';
 import { OcrQueueDock } from './components/OcrQueueDock';
@@ -294,8 +295,8 @@ export function App(): JSX.Element {
   }, [segmentBookId]);
 
   const loadOcrCapability = useCallback(async () => {
-    const capability = await call('探测 OCR 引擎', () => api.ocr.capability());
-    if (capability) setOcrCapability(capability);
+    // Background capability loading is passive; only explicit actions report failures.
+    try { setOcrCapability(await api.ocr.capability()); } catch { /* retry from settings or source change */ }
   }, []);
 
   // 启动时探一次，设置页/阅读器就不必各自再探。
@@ -466,10 +467,18 @@ export function App(): JSX.Element {
     if (next) setOcrCapability(next);
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    const id=open.book.id;
+    let alive=true;
+    void api.ocr.status(id).then(value=>{if(alive && value)setOcrResult(previous=>({...previous,[id]:value}));}).catch(()=>{});
+    return ()=>{alive=false;};
+  }, [open?.book.id]);
+
   const startOcr = useCallback(async (bookId: string, force = false, provider?: OcrProviderId) => {
     const outcome = await call('文字识别', () => api.ocr.start(bookId, { force, provider }));
     if (!outcome) return;
-    if (outcome.skipped) setStatus('这本已经有文字层了');
+    if (outcome.skipped) { setOcrResult(previous=>({...previous,[bookId]:outcome})); setStatus('这本已经有文字层了，可以点击重新识别'); }
     else if (outcome.error) setStatus(`文字识别：${outcome.error}`);
     else if (outcome.queued && (outcome.queuePosition ?? 1) > 1) {
       // 队列里已经有活 → 明确告诉用户排在第几位，否则「点了没反应」很像卡住了。
@@ -835,7 +844,7 @@ export function App(): JSX.Element {
         shown={counts.shown}
         total={counts.total}
         selectionCount={counts.selected}
-        syncSlot={<ServerSync sources={sources} state={serverStatus} onResolved={async (id,choice)=>{await api.sources.resolve(id,choice);setServerStatus(await api.sources.status());if(open?.book.id===id && choice!=='local'){setOpen(null);setView('library');setStatus('位置已更新，请重新打开书籍');}}} />}
+        syncSlot={<>{sources.connections.length>0 && <DownloadDock />}<ServerSync sources={sources} state={serverStatus} onResolved={async (id,choice)=>{await api.sources.resolve(id,choice);setServerStatus(await api.sources.status());if(open?.book.id===id && choice!=='local'){setOpen(null);setView('library');setStatus('位置已更新，请重新打开书籍');}}} /></>}
         ocrSlot={
           <OcrQueueDock
             queue={ocrQueue}

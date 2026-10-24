@@ -26,7 +26,7 @@ export function ServersCard(): JSX.Element {
     } }
     return <section className="settings-card" id="settings-servers">
     <div className="settings-card-head"><h2 className="settings-card-title">服务器与书源</h2></div>
-    <p className="settings-hint">本地书库与服务器书库独立保留。远程原图按需缓存，进度同步到服务器，OCR 在服务器后台执行。词典、书签、笔记、批注和制卡资料仍保存在本机。</p>
+    <p className="settings-hint">本地书库与服务器书库独立保留。远程原图按需缓存，进度同步到服务器，OCR 可选本机或服务器执行；本机 OCR 结果暂存本机。词典、书签、笔记、批注和制卡资料仍保存在本机。</p>
     <div className="settings-row"><span className="settings-label">本地书库</span><button className="btn btn-sm" disabled={busy || !sources.activeId} onClick={() => void action(() => api.sources.activate(null), '已切换到本地书库')}>{sources.activeId ? '使用本地书库' : '当前书源'}</button></div>
     {sources.connections.map(c => <div key={c.id} className="server-connection">
       <strong>{c.name}{sources.activeId === c.id ? ' · 当前书源' : ''}</strong><span className="mono">{c.url}</span>

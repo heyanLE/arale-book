@@ -101,3 +101,18 @@ export interface ServerSyncStatus {
     catalogRevision: string;
     error: string | null;
 }
+
+export interface RemoteDownload {
+    bookId: string;
+    title: string;
+    revision: string;
+    status: 'queued' | 'downloading' | 'waiting' | 'paused' | 'failed' | 'complete';
+    stage: 'checking' | 'pages' | 'text' | 'done';
+    done: number;
+    total: number;
+    bytesDone: number;
+    bytesTotal: number;
+    error: string | null;
+    updatedAt: number;
+    outdated?: boolean;
+}

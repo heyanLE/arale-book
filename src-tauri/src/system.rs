@@ -17,6 +17,26 @@ pub struct ImmersiveWindow {
     restore: Mutex<Option<WindowRestore>>,
 }
 
+/// Refresh native mouse tracking after Cocoa style/frame transitions.
+pub fn refresh_pointer_tracking(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let target = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            let Ok(pointer) = target.ns_window() else { return; };
+            let native = unsafe { &*pointer.cast::<objc2_app_kit::NSWindow>() };
+            native.setAcceptsMouseMovedEvents(true);
+            fn refresh(view: &objc2_app_kit::NSView) {
+                view.updateTrackingAreas();
+                for child in view.subviews().iter() { refresh(&child); }
+            }
+            if let Some(view) = native.contentView() { refresh(&view); }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 struct WindowRestore {
     #[cfg(not(target_os = "macos"))]
     decorated: bool,
@@ -179,6 +199,7 @@ fn set_immersive_inner(app: &tauri::AppHandle, enabled: bool, bars_visible: bool
         *restore = None;
         mode.enabled.store(false, Ordering::Relaxed);
     }
+    refresh_pointer_tracking(&window);
     Ok(())
 }
 

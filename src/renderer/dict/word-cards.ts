@@ -350,10 +350,10 @@ export function useWordCards(bookId: string): UseWordCardsResult {
   const analyzeWord = useCallback(
     (id: string, target: string) => {
       const popup = popups.find((item) => item.id === id);
-      if (popup === undefined) return;
+      if (popup === undefined || popup.analyzingWord !== null) return;
       // 「重新分析」就得真的重跑：不清缓存的话，关掉再打开会又回到那份旧的。
       analysisCache.delete(analysisKey(target, popup.context));
-      patchPopup(id, { analyzingWord: target });
+      patchPopup(id, { analyzingWord: target, lastError: null });
       void (async () => {
         const result = await call('LLM 分析', () =>
           api.llm.analyze({
@@ -363,10 +363,16 @@ export function useWordCards(bookId: string): UseWordCardsResult {
             ...(popup.llmProfileId !== null ? { profileId: popup.llmProfileId } : {}),
           }),
         );
-        patchPopup(id, { analyzingWord: null });
         // 失败**不写缓存也不写词卡**：一条「上次分析失败」的记录下次打开显示一段错误，
         // 既没用又像坏了。界面上把原因显示在这次操作上就够了。
-        if (result === null || !result.ok) return;
+        if (result === null || !result.ok) {
+          patchPopup(id, {
+            analyzingWord: null,
+            lastError: result?.error || 'LLM 请求失败，请检查服务配置或网络后重试。',
+          });
+          return;
+        }
+        patchPopup(id, { analyzingWord: null });
         const stored: WordCardAnalysis = {
           word: target,
           text: result.text,
@@ -399,8 +405,7 @@ export function useWordCards(bookId: string): UseWordCardsResult {
             return {
               ...item,
               analyses: sortAnalyses([...others, stored], item.word),
-              // 记住这次用的配置与失败原文：界面上要显示「上一次为什么失败」。
-              lastError: result.ok ? null : (result.error ?? '分析失败'),
+              lastError: null,
               llmProfileName: result.profileName,
             };
           }),

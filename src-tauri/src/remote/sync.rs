@@ -220,14 +220,24 @@ impl Remote {
         storage::write(&self.progress_path(id)?, &state)?;
         Ok(Value::Null)
     }
-    pub(super) async fn open_book(
+    pub(super) async fn ensure_manifest(
         &self,
         backend: &Mutex<Backend>,
         id: &str,
-        defer: bool,
+        persist_catalog: bool,
     ) -> Result<Value> {
         let mut book = self.snapshot(backend, id)?;
-        if !Self::has_manifest(&book) {
+        if Self::has_manifest(&book) {
+            return Ok(book);
+        }
+        let old_revision = book["remote"]["revision"].clone();
+        let cached = storage::read(&self.dir(id)?.join("book.json"), Value::Null)?;
+        if cached["id"] == book["id"]
+            && cached["remote"]["revision"] == old_revision
+            && Self::has_manifest(&cached)
+        {
+            book["pages"] = cached["pages"].clone();
+        } else {
             let c = self.connection(text(&book["remote"], "connectionId")?)?;
             self.info(&c).await?;
             let row = self
@@ -242,20 +252,34 @@ impl Remote {
             if fresh["id"] != book["id"] {
                 bail!("服务端返回了其他书籍");
             }
-            self.cache_book(&fresh)?;
-            let mut b = lock(backend)?;
-            let entry = b
-                .remote_books
-                .iter_mut()
-                .find(|b| b["id"] == id)
-                .context("书籍已移除")?;
-            *entry = fresh.clone();
+            book = fresh;
+        }
+        let mut b = lock(backend)?;
+        let entry = b
+            .remote_books
+            .iter_mut()
+            .find(|b| b["id"] == id)
+            .context("书籍已移除")?;
+        if entry["remote"]["revision"] != old_revision {
+            bail!("内容版本已变化，请重新打开");
+        }
+        self.cache_book(&book)?;
+        *entry = book.clone();
+        if persist_catalog {
             storage::write(
                 &self.root.join("remote/catalog.json"),
                 &json!(b.remote_books),
             )?;
-            book = fresh;
         }
+        Ok(book)
+    }
+    pub(super) async fn open_book(
+        &self,
+        backend: &Mutex<Backend>,
+        id: &str,
+        defer: bool,
+    ) -> Result<Value> {
+        let book = self.ensure_manifest(backend, id, true).await?;
         if !defer {
             if let Ok(c) = self.connection(text(&book["remote"], "connectionId")?) {
                 self.layer(&book, &c).await?;
@@ -534,6 +558,90 @@ mod tests {
         let reopened = r.open_book(&b, id, true).await?;
         assert_eq!(reopened["position"]["pageIndex"], 1);
         assert_eq!(r.sync_snapshot(&b)?["connections"][0]["pending"], 0);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn local_ocr_is_used_offline_and_survives_server_cache_refresh() -> Result<()> {
+        let (_root, r, b, book, _) = fixture("http://127.0.0.1:1/")?;
+        let id = text(&book, "id")?;
+        let cached = json!({"pages":[{"url":book["pages"][0]["url"],"blocks":[]}]});
+        storage::write(&r.dir(id)?.join("content/manga.json"), &cached)?;
+        let local = json!({"_araleLocal":{"contentRevision":book["remote"]["revision"],"provider":"system"},"pages":[{"url":book["pages"][0]["url"],"blocks":[{"box":[1,1,8,15],"lines":["日本語"],"font_size":10}]}]});
+        storage::write(&r.dir(id)?.join("local-ocr.json"), &local)?;
+        assert!(r.layer_current(&book)?);
+        assert_eq!(r.open_book(&b, id, true).await?["textLayerPending"], false);
+        assert_eq!(
+            crate::page_text(&*lock(&b)?, id, 0)?["blocks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        storage::write(&r.dir(id)?.join("content/manga.json"), &json!({"pages":[]}))?;
+        assert_eq!(lock(&b)?.text_layer(id, Value::Null)?, local);
+        storage::write(
+            &r.dir(id)?.join("server-ocr-request.json"),
+            &json!({"jobId":"requested","contentRevision":book["remote"]["revision"],"localCreatedAt":local["_araleLocal"]["createdAt"]}),
+        )?;
+        r.select_requested_server_layer(&book, Some("historical"))?;
+        assert_eq!(lock(&b)?.text_layer(id, Value::Null)?, local);
+        r.select_requested_server_layer(&book, Some("requested"))?;
+        assert_eq!(lock(&b)?.text_layer(id, Value::Null)?["pages"], json!([]));
+        storage::write(&r.dir(id)?.join("local-ocr.json"), &local)?;
+        lock(&b)?.remote_books[0]["remote"]["revision"] = json!("c".repeat(64));
+        assert_eq!(lock(&b)?.text_layer(id, Value::Null)?["pages"], json!([]));
+        assert_eq!(
+            storage::read(&r.dir(id)?.join("local-ocr.json"), Value::Null)?,
+            local
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn full_download_resumes_and_repairs_bad_cache_without_touching_progress() -> Result<()> {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let (_root, r, b, mut book, _) = fixture(&format!("http://{}/", listener.local_addr()?))?;
+        let id = text(&book, "id")?.to_owned();
+        for page in book["pages"].as_array_mut().unwrap() {
+            page["sha256"] = json!(format!("{:x}", Sha256::digest(b"ok")));
+        }
+        lock(&b)?.remote_books[0] = book.clone();
+        r.cache_book(&book)?;
+        for (index, page) in book["pages"].as_array().unwrap().iter().enumerate() {
+            let path = r.dir(&id)?.join("content").join(text(page, "url")?);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, if index == 0 { b"ok" } else { b"no" })?;
+        }
+        let before = fs::read(r.progress_path(&id)?)?;
+        r.enqueue_downloads(&b, &json!([id]))?;
+        r.pause_download(&b, &id)?;
+        r.run_download_queue(&b).await?;
+        assert_eq!(r.download_status(&b)?[0]["status"], "paused");
+        r.enqueue_downloads(&b, &json!([id]))?;
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut bytes = [0; 4096];
+            socket.read(&mut bytes).unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+        });
+        r.run_download_queue(&b).await?;
+        server.join().unwrap();
+        let state = r.download_status(&b)?;
+        assert_eq!(state[0]["status"], "complete");
+        assert_eq!(state[0]["done"], 2);
+        assert_eq!(state[0]["bytesDone"], 4);
+        assert_eq!(fs::read(r.progress_path(&id)?)?, before);
+        assert!(r.dir(&id)?.join("offline-complete.json").is_file());
+        lock(&b)?.remote_books[0]["pages"] = Value::Null;
+        let _busy = r.gate.lock().await;
+        let opened = tokio::time::timeout(
+            Duration::from_millis(500),
+            r.handle(&b, "remote:open", &[json!(id), json!(true)]),
+        )
+        .await??;
+        assert_eq!(opened["book"]["pages"].as_array().unwrap().len(), 2);
         Ok(())
     }
     #[tokio::test]

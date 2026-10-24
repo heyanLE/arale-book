@@ -312,7 +312,7 @@ fn snapshot(backend: &Backend, id: &str) -> Result<Value> {
     let segments = segments::read(backend, id)?;
     let mut dicts = dictionaries::list(backend)?;
     dicts.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    let manga = storage::read(&backend.dir(id)?.join("content/manga.json"), Value::Null)?;
+    let manga = backend.text_layer(id, Value::Null)?;
     Ok(
         json!({"book":book,"segments":segments,"list":list,"revision":hash(&list)?,
         "source":hash(&json!([book["pages"],book["direction"],manga,segments]))?,"dictionary":hash(&json!(dicts))?}),
@@ -402,7 +402,7 @@ fn image(backend: &Backend, id: &str, occurrence: &Value, mode: &str, group: Opt
         .iter()
         .position(|p| p["url"] == url)
         .context("原文页已变化")?;
-    let raw = storage::read(&backend.dir(id)?.join("content/manga.json"), Value::Null)?;
+    let raw = backend.text_layer(id, Value::Null)?;
     let text = crate::page_text_from_raw(book, page, &raw)?;
     let block = text["blocks"].get(index).context("原文文字框已变化")?;
     let joined: String = block["lines"]

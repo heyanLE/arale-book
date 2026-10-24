@@ -1,4 +1,4 @@
-import type { OcrQueueState, OcrJobResult } from '../shared/types';
+import type { OcrQueueState, OcrJobResult, OcrCapability } from '../shared/types';
 import type { ServerConnections, ServerPoll } from '../shared/server';
 type Invoke = (channel: string, ...args: any[]) => Promise<any>;
 /** Book operations route by identity; switching libraries cannot redirect an open book. */
@@ -52,7 +52,7 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
                 if (j.state === 'succeeded') {
                     // Retry publication after a transient disconnect; don't announce text before it is readable.
                     try {
-                        const layer=await invoke('remote:refreshLayer', j.bookId);
+                        const layer=await invoke('remote:refreshLayer', j.bookId, undefined, j.id);
                         blocks=layer?.blocks??blocks;
                     }
                     catch {
@@ -69,6 +69,15 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
         return state;
     };
     const poll = (): Promise<ServerPoll> => polling ??= invoke('remote:poll').then(acceptState).finally(() => { polling = null; });
+    const localQueued = (id: string) => local.active?.bookId === id || local.pending.some(job => job.bookId === id);
+    const capabilities = async (): Promise<OcrCapability> => {
+        // Listing choices must not probe the NAS. The explicit start action checks it.
+        const native = await invoke('ocr:capability') as OcrCapability;
+        return { ...native, available: true, selected: 'server', reason: null, providers: [
+            ...native.providers.map(provider => ({ ...provider, label: `本机 · ${provider.label}` })),
+            { id: 'server', label: '服务器 OCR', available: true, ready: true, reason: null, requirement: '开始识别时连接服务器', downloadSizeMb: 0, extension: null },
+        ] };
+    };
     return {
         poll,
         localQueue(value: OcrQueueState) { local = value; deliver('ocr:queue', queue()); },
@@ -87,6 +96,10 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
                 return invoke(channel, ...args);
             if (['library:list', 'library:info', 'ocr:capability', 'ocr:selectProvider'].includes(channel)) {
                 sources ??= await invoke('remote:connections');
+                if (sources!.activeId && ['ocr:capability', 'ocr:selectProvider'].includes(channel)) {
+                    if (channel === 'ocr:selectProvider' && args[0] !== 'server') await invoke(channel, ...args);
+                    return capabilities();
+                }
                 if (sources!.activeId)
                     return invoke({ 'library:list': 'remote:list', 'library:info': 'remote:info', 'ocr:capability': 'remote:capability', 'ocr:selectProvider': 'remote:capability' }[channel]!, ...args);
             }
@@ -100,6 +113,16 @@ export function createSourceTransport(invoke: Invoke, deliver: (channel: string,
                 }
                 if (channel.startsWith('segment:') || channel.startsWith('study:'))
                     await textLoads.get(id);
+                if (channel === 'ocr:start' && args[1]?.provider && args[1].provider !== 'server') {
+                    const result = await invoke(channel, ...args);
+                    local = await invoke('ocr:queue'); deliver('ocr:queue', queue());
+                    return result;
+                }
+                if (channel === 'ocr:cancel' && localQueued(id)) return invoke(channel, ...args);
+                if (channel === 'ocr:status') {
+                    const result = await invoke(channel, ...args);
+                    if (result) return result;
+                }
                 const route: Record<string, string> = { 'library:savePosition': 'remote:savePosition', 'ocr:start': 'remote:ocrStart', 'ocr:cancel': 'remote:ocrCancel', 'ocr:status': 'remote:ocrStatus' };
                 if (route[channel]) {
                     const routedArgs = channel === 'library:savePosition' && openedRevisions.has(id) ? [{ ...args[0], contentRevision: openedRevisions.get(id) }] : args;

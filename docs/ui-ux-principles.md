@@ -1,6 +1,24 @@
 # 页面结构与 UI/UX 原则
 
-核对日期：2026-10-19。适用于当前 Tauri 桌面阅读、查词及制卡流程；后续界面改动应据此检查，不按历史截图恢复旧入口。
+核对日期：2026-10-23。适用于当前 Tauri 桌面阅读、查词及制卡流程；后续界面改动应据此检查，不按历史截图恢复旧入口。
+
+## 沉浸悬停与工具入口（2026-10-23）
+
+用户报告 macOS 沉浸时右上角按钮与 OCR 框线都不响应悬停，点击查词仍有效，退出沉浸后恢复。处理集中在窗口过渡与指针反馈：进入／退出沉浸、窗口尺寸变化和重新获得焦点后，在主线程启用鼠标移动事件并刷新原生视图的 tracking areas；OCR 命中块补充 `pointerenter`／`pointermove`／`pointerleave`，保留既有 Mouse 事件与选择几何。
+
+右上角增加常驻「⋯」按钮，可固定显示阅读工具；移入区域、键盘焦点、已打开侧栏和正在编辑仍可展开原工具。未显示的工具不接收鼠标点击。该入口使工具栏可通过明确点击打开，不完全依赖悬停。
+
+2026-10-23 / macOS arm64：类型、前端和 Rust 构建通过；真实 App／ReaderView／ComicReader 浏览器夹具验证进入沉浸、固定工具、点击对白出现框线与词卡，截图见下方。用户反馈确定了问题发生在沉浸状态；隔离原生 QA 进程能启动，但 CUA 多次绑定窗口超时，**尚未目视验证原生 macOS 的无按键悬停恢复**，浏览器点击触发的指针事件不能替代该验收。退出沉浸、重新进入、多显示器与 Windows 原生运行仍需目标窗口复核。
+
+![隔离组件中的沉浸工具、对白框与词卡](images/reader-regressions-2026-10-23/immersive.png)
+
+## 漫画文字光标方向（2026-10-23）
+
+OCR 命中块按 `TextBlock.vertical` 显式选择光标：竖排使用 `cursor: vertical-text`，横排使用 `cursor: text`。此前 CSS 将所有命中块固定为 `text`，即使设置了竖排 `writing-mode`，macOS 上也可能仍显示普通文字光标。这里仅调整光标，不改变点词、拖选或原图坐标计算。
+
+macOS 提供 [NSCursor.iBeamCursorForVerticalLayout](https://developer.apple.com/documentation/appkit/nscursor/ibeamcursorforverticallayout)，[WebKit 的 macOS 实现](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/platform/mac/CursorMac.mm)将 `VerticalText` 映射到这个系统光标，因此不需要自绘光标或修改系统设置。
+
+2026-10-23 / macOS arm64 / Node 22.22.2：`npm run typecheck`、`npm run build:renderer` 通过；内置浏览器加载真实 `ComicTextLayer` 组件，最终计算样式分别为 `vertical-rl / vertical-text` 与 `horizontal-tb / text`。未目视验收独立 Tauri 原生窗口的系统指针，也未在 Windows 重测；普通浏览器截图不作为系统指针外观证明。
 
 ## 页面职责与导航
 

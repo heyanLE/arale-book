@@ -51,7 +51,11 @@ async fn arale_invoke(
     args: Vec<Value>,
 ) -> Result<Value, String> {
     if channel.starts_with("remote:") {
-        return app.state::<remote::Remote>().handle(app.state::<State>().inner(), &channel, &args).await.map_err(|e| format!("{e:#}"));
+        let service=app.state::<remote::Remote>();
+        if channel=="remote:poll" { service.pump_downloads(&app); }
+        let result=service.handle(app.state::<State>().inner(),&channel,&args).await.map_err(|e|format!("{e:#}"));
+        if channel=="remote:downloadStart" && result.is_ok() {service.pump_downloads(&app);}
+        return result;
     }
     if channel == "app:checkUpdate" {
         return updates::check(&updates::build_info(&app))
@@ -476,10 +480,7 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
 
 pub fn page_text(backend: &Backend, id: &str, index: usize) -> Result<Value> {
     let book = backend.book(id)?;
-    let raw = storage::read(
-        &backend.dir(id)?.join("content/manga.json"),
-        json!({"pages":[]}),
-    )?;
+    let raw = backend.text_layer(id, json!({"pages":[]}))?;
     page_text_from_raw(book, index, &raw)
 }
 pub fn page_text_from_raw(book: &Value, index: usize, raw: &Value) -> Result<Value> {
@@ -762,6 +763,13 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(true)) {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    system::refresh_pointer_tracking(&webview);
+                }
+            }
+        })
         .on_menu_event(|app, event| {
             // Predefined editing items are handled by the platform menu implementation.
             let id = event.id().as_ref();
@@ -816,6 +824,7 @@ pub fn run() {
                 paths: system::argument_paths(std::env::args(), &std::env::current_dir()?),
             }));
             system::install(app.handle())?;
+            if let Some(window) = app.get_webview_window("main") { system::refresh_pointer_tracking(&window); }
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("arale", |context, request, responder| {

@@ -27,6 +27,14 @@ pub fn read(path: &Path, fallback: Value) -> Result<Value> {
     }
 }
 
+/// A local result for a remote book is independent of the disposable server cache.
+pub fn local_text_layer(dir: &Path, book: &Value) -> Result<Option<Value>> {
+    if book["remote"].is_null() { return Ok(None); }
+    let layer = read(&dir.join("local-ocr.json"), Value::Null)?;
+    Ok((layer["_araleLocal"]["contentRevision"] == book["remote"]["revision"]
+        && layer["_araleLocal"]["active"] != false && layer["pages"].is_array()).then_some(layer))
+}
+
 pub fn write(path: &Path, value: &Value) -> Result<()> {
     let parent = path.parent().context("没有父目录")?;
     fs::create_dir_all(parent)?;
@@ -176,6 +184,11 @@ impl Backend {
             .chain(self.remote_books.iter())
             .find(|book| book["id"] == id)
             .context("书不存在（可能已删除）")
+    }
+    pub fn text_layer(&self, id: &str, fallback: Value) -> Result<Value> {
+        let dir = self.dir(id)?;
+        if let Some(layer) = local_text_layer(&dir, self.book(id)?)? { return Ok(layer); }
+        read(&dir.join("content/manga.json"), fallback)
     }
     pub fn persist_books(&self, next: &[Value]) -> Result<()> {
         write(

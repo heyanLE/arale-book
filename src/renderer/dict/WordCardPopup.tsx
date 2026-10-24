@@ -579,7 +579,7 @@ export function WordCardPopup(props: WordCardPopupProps): JSX.Element {
             </div>
           )}
 
-          {lastError !== null && <div className="wordcard-llm-error">{lastError}</div>}
+          {lastError !== null && <div className="wordcard-llm-error" role="alert">{lastError}</div>}
           </>}
         </section>
 

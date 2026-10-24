@@ -24,10 +24,7 @@ pub fn input(backend: &Backend, id: &str) -> Result<Value> {
     }
     let mut units = vec![];
     // Load the text layer once per job, rather than reparse the entire book for every page.
-    let raw = storage::read(
-        &backend.dir(id)?.join("content/manga.json"),
-        json!({"pages":[]}),
-    )?;
+    let raw = backend.text_layer(id, json!({"pages":[]}))?;
     for (page_index, page) in book["pages"]
         .as_array()
         .context("缺少漫画页")?

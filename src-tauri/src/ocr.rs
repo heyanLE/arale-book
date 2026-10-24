@@ -235,7 +235,7 @@ impl Ocr {
             return Ok(value);
         }
         if options["force"] != true {
-            let raw = storage::read(&backend.dir(id)?.join("content/manga.json"), json!({}))?;
+            let raw = backend.text_layer(id, json!({}))?;
             let blocks = count_blocks(&raw);
             if blocks > 0 {
                 let mut value = result(id, &provider, None);
@@ -328,13 +328,23 @@ impl Ocr {
             let backend = state.lock().unwrap();
             let book = backend.book(&item.book_id)?.clone();
             let content = backend.dir(&item.book_id)?.join("content");
-            let old = storage::read(&content.join("manga.json"), json!({}))?;
+            let old = backend.text_layer(&item.book_id, json!({}))?;
             let source = fingerprint(&book, &old);
             (book, content, old, source)
         };
         let pages = book["pages"].as_array().context("书籍页图列表无效")?;
         let mut inputs = Vec::new();
-        for page in pages {
+        for (index, page) in pages.iter().enumerate() {
+            if item.book_id.starts_with("rs_") {
+                emit(app,"ocr:progress",json!({"bookId":item.book_id,"provider":item.provider,"done":index,"total":pages.len(),"pageIndex":index,"stage":"downloading","message":"正在缓存本机识别所需原图"}));
+                let remote=app.state::<crate::remote::Remote>();
+                let backend=app.state::<State>();
+                let cancelled=async { while !cancel.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(50)).await; } };
+                tokio::select! {
+                    value=remote.ensure_asset(backend.inner(),&item.book_id,text(page,"url")) => value?,
+                    _=cancelled => bail!("已取消缓存原图，已下载页面保留"),
+                }
+            }
             let path = storage::inside(&content, text(page, "url"))?;
             inputs.push(json!({"rel":page["url"],"absPath":process_path(&path),"width":page["width"],"height":page["height"]}));
         }
@@ -513,13 +523,19 @@ impl Ocr {
             }
             let book = backend.book(id)?;
             let content = backend.dir(id)?.join("content");
-            let existing = storage::read(&content.join("manga.json"), json!({}))?;
+            let existing = backend.text_layer(id, json!({}))?;
             if fingerprint(book, &existing) != pending.source {
                 bail!("OCR 期间页图列表、阅读方向或文字层已变化，保留原文件");
             }
             let layer = &payload["layer"];
             validate_layer(book, layer)?;
-            storage::write(&content.join("manga.json"), layer)?;
+            if id.starts_with("rs_") {
+                let mut local = layer.clone();
+                local["_araleLocal"] = json!({"contentRevision":book["remote"]["revision"],"baseOcrRevision":book["remote"]["ocrRevision"],"provider":provider,"createdAt":storage::now()});
+                storage::write(&backend.dir(id)?.join("local-ocr.json"),&local)?;
+            } else {
+                storage::write(&content.join("manga.json"), layer)?;
+            }
             #[cfg(debug_assertions)]
             if std::env::var("ARALE_TAURI_SMOKE").as_deref() == Ok("1") {
                 storage::write(

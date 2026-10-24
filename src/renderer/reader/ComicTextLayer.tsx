@@ -413,7 +413,12 @@ export function ComicTextLayer(props: ComicTextLayerProps): JSX.Element | null {
               )
             }
             onPointerDown={handlePointerDown(block, index)}
-            onPointerMove={handlePointerMove(block)}
+            onPointerEnter={() => setHoveredGroup(groupByBlock.get(index)?.id ?? null)}
+            onPointerLeave={() => setHoveredGroup(current => current === groupByBlock.get(index)?.id ? null : current)}
+            onPointerMove={event => {
+              if (event.pointerType !== 'touch') setHoveredGroup(groupByBlock.get(index)?.id ?? null);
+              handlePointerMove(block)(event);
+            }}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onClick={handleClick(block, index)}
@@ -481,6 +486,8 @@ function boxToStyle(block: TextBlock, scaleX: number, scaleY: number): React.CSS
     height: `${Math.max(0, y2 - y1) * scaleY}px`,
     fontSize: `${Math.max(1, block.fontSize * scaleY)}px`,
     writingMode: block.vertical ? 'vertical-rl' : 'horizontal-tb',
+    // OCR hit regions have no text nodes; match the cursor explicitly to the block direction.
+    cursor: block.vertical ? 'vertical-text' : 'text',
   };
 }
 

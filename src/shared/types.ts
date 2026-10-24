@@ -518,7 +518,7 @@ export interface OcrProgress {
   /** 当前页序号（0 基）。 */
   pageIndex: number;
   /** 阶段，UI 据此显示不同文案。 */
-  stage: 'loading-model' | 'detecting' | 'recognizing' | 'writing' | 'done' | 'failed';
+  stage: 'downloading' | 'loading-model' | 'detecting' | 'recognizing' | 'writing' | 'done' | 'failed';
   message?: string;
 }
 

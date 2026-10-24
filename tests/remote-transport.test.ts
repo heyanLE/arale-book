@@ -49,12 +49,35 @@ test('remote OCR is polled independently, merged with local queue, and published
     await router.poll();
     assert.equal(events.filter(e => e[0] === 'ocr:done').length, 1);
 });
-test('source capability follows server while dictionaries, learning data and local import remain native', async () => {
+test('remote OCR choices load locally without probing the NAS', async () => {
     const calls: string[] = [];
-    const router = createSourceTransport(async (c) => { calls.push(c); return c === 'remote:connections' ? { activeId: 'nas', connections: [] } : null; }, () => { });
-    for (const c of ['ocr:capability', 'ocr:selectProvider', 'dict:lookup', 'annotations:read', 'reading:save', 'study:read', 'library:importQueue'])
-        await router.invoke(c, 'bk_local');
-    assert.deepEqual(calls, ['remote:connections', 'remote:capability', 'remote:capability', 'dict:lookup', 'annotations:read', 'reading:save', 'study:read', 'library:importQueue']);
+    const router = createSourceTransport(async c => {
+        calls.push(c);
+        if(c==='remote:connections')return {activeId:'nas',connections:[]};
+        if(c==='ocr:capability')return {available:true,selected:'system',providers:[{id:'system',label:'系统 OCR',available:true,ready:true}]};
+        if(c.startsWith('remote:'))throw new Error('offline');
+    },()=>{});
+    const capability=await router.invoke('ocr:capability');
+    assert.deepEqual(capability.providers.map((p:any)=>p.id),['system','server']);
+    assert.equal(capability.selected,'server');
+    await router.invoke('ocr:selectProvider','server');
+    for(const c of ['dict:lookup','annotations:read','reading:save','study:read','library:importQueue'])await router.invoke(c,'bk_local');
+    assert.deepEqual(calls,['remote:connections','ocr:capability','ocr:capability','dict:lookup','annotations:read','reading:save','study:read','library:importQueue']);
+});
+
+test('remote books can start and cancel native OCR while server start reports its own connection failure',async()=>{
+    const calls:any[]=[];const id='rs_server_book';
+    const router=createSourceTransport(async(c,...args)=>{
+        calls.push([c,...args]);
+        if(c==='ocr:start')return {ok:true,queued:true};
+        if(c==='ocr:queue')return {active:{bookId:id,provider:'system'},pending:[]};
+        if(c==='remote:ocrStart')throw new Error('服务器连接失败');
+    },()=>{});
+    assert.equal((await router.invoke('ocr:start',id,{provider:'system'})).queued,true);
+    await router.invoke('ocr:cancel',id);
+    assert.ok(calls.some(c=>c[0]==='ocr:cancel'));
+    assert.equal(calls.some(c=>c[0]==='remote:ocrCancel'),false);
+    await assert.rejects(()=>router.invoke('ocr:start',id,{provider:'server'}),/服务器连接失败/);
 });
 
 test('remote reading direction stays a per-client preference while server metadata stays read-only',async()=>{

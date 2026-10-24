@@ -1113,6 +1113,7 @@ export function ComicReader({
           文字层
         </button>
 
+        {book.remote && effectiveProvider !== 'server' && <span className="comic-text-hint">本机识别：先补齐原图，文字层保存在本机</span>}
         {textLayerOn && textLayerLoading && <span className="comic-text-hint" role="status">正在载入文字层…</span>}
         {textLayerOn && noOcrData && !textLayerLoading && <span className="comic-text-hint">本页无 OCR 数据</span>}
       </div>

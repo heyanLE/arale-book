@@ -25,6 +25,9 @@ export function createAraleApi(transport: ApiTransport): AraleApi {
       prefetch: (id, pages) => transport.invoke(IPC.sourcesPrefetch, id, pages),
       readerClosed: id => transport.invoke(IPC.sourcesReaderClosed, id),
       resolve: (bookId, choice) => transport.invoke(IPC.sourcesResolve, bookId, choice),
+      downloads: () => transport.invoke(IPC.sourcesDownloads),
+      download: ids => transport.invoke(IPC.sourcesDownloadStart, ids),
+      pauseDownload: id => transport.invoke(IPC.sourcesDownloadPause, id),
     },
     app: {
       buildInfo: () => transport.invoke(IPC.appBuildInfo),

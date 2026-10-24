@@ -8,6 +8,7 @@ import { bookDisplay } from '@core/books/display';
 
 import { useEffect, useState } from 'react';
 import { readerModeOf, type BookRecord } from '@shared/types';
+import { BookDownload, DownloadSelected } from './RemoteDownloads';
 import { assetUrl } from '../lib/api';
 
 /** `library.updateMeta` 接受的补丁形状（从冻结契约里派生，别手写第二份）。 */
@@ -56,6 +57,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
         <div className="detail-body">
           <p className="detail-hint">多选状态下不显示单本字段。</p>
           <div className="detail-actions">
+            <DownloadSelected ids={selectedIds} />
             <button
               type="button"
               className="btn btn-danger btn-block"
@@ -115,6 +117,7 @@ export function BookDetail(props: BookDetailProps): JSX.Element {
 
       <div className="detail-primary-actions"><button type="button" className="btn btn-primary btn-block" disabled={!!props.openingBookId} aria-busy={props.openingBookId === book.id} onClick={() => onOpen(book.id)}>{props.openingBookId === book.id ? '打开中…' : book.lastOpenedAt ? '继续阅读' : '开始阅读'}</button>
         <button type="button" className="btn btn-block" disabled={!!book.remote} onClick={beginEdit}>编辑元数据</button></div>
+      {book.remote && <BookDownload book={book} />}
       <div className="detail-body">
         <div className="detail-cover-wrap">
           {cover ? (

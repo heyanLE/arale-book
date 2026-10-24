@@ -1,12 +1,30 @@
 use super::*;
 impl Remote {
+    pub(super) fn cached_page_valid(&self, id: &str, page: &Value) -> Result<bool> {
+        let dir = self.dir(id)?.join("content");
+        let relative = text(page,"url")?;
+        let target = dir.join(relative);
+        if !target.is_file() { return Ok(false); }
+        storage::inside(&dir,relative)?;
+        if target.metadata()?.len() != page["bytes"].as_u64().unwrap_or(0) {return Ok(false);}
+        Ok(format!("{:x}",Sha256::digest(fs::read(target)?)) == text(page,"sha256")?)
+    }
+    pub(super) async fn verify_and_cache_asset(
+        &self,
+        backend: &Mutex<Backend>,
+        id: &str,
+        relative: &str,
+    ) -> Result<()> {
+        self.asset(backend, id, relative, None, true).await
+    }
+
     pub async fn ensure_asset(
         &self,
         backend: &Mutex<Backend>,
         id: &str,
         relative: &str,
     ) -> Result<()> {
-        self.asset(backend, id, relative, None).await
+        self.asset(backend, id, relative, None, false).await
     }
     async fn asset(
         &self,
@@ -14,6 +32,7 @@ impl Remote {
         id: &str,
         relative: &str,
         epoch: Option<u64>,
+        verify_cache: bool,
     ) -> Result<()> {
         if !id.starts_with("rs_") {
             return Ok(());
@@ -46,8 +65,19 @@ impl Remote {
             .clone();
         let dir = self.dir(id)?.join("content");
         let target = dir.join(relative);
-        if target.is_file() {
+        let cached = || -> Result<bool> {
+            if !target.is_file() {
+                return Ok(false);
+            }
             storage::inside(&dir, relative)?;
+            if !verify_cache {
+                return Ok(true);
+            }
+            let bytes = fs::read(&target)?;
+            Ok(bytes.len() as u64 == page["bytes"].as_u64().unwrap_or(0)
+                && format!("{:x}", Sha256::digest(&bytes)) == text(&page, "sha256")?)
+        };
+        if cached()? {
             return Ok(());
         }
         let key = format!("{id}/{relative}");
@@ -73,8 +103,7 @@ impl Remote {
         }
         // A queued cover/prefetch must not hold the per-page lock ahead of a reader.
         let _same = gate.lock().await;
-        if target.is_file() {
-            storage::inside(&dir, relative)?;
+        if cached()? {
             return Ok(());
         }
         if epoch.is_some_and(|e| self.prefetch_epochs.lock().unwrap().get(id) != Some(&e)) {
@@ -139,7 +168,7 @@ impl Remote {
             let page = book["pages"]
                 .get(index.as_u64().context("无效预读页码")? as usize)
                 .context("预读页码越界")?;
-            self.asset(backend, id, text(page, "url")?, Some(epoch))
+            self.asset(backend, id, text(page, "url")?, Some(epoch), false)
                 .await?;
         }
         Ok(Value::Null)

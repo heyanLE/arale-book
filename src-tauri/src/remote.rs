@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 mod assets;
+mod downloads;
 mod sync;
 
 pub struct Remote {
@@ -28,6 +29,7 @@ pub struct Remote {
     cover_slots: tokio::sync::Semaphore,
     prefetch_slots: tokio::sync::Semaphore,
     prefetch_epochs: Mutex<HashMap<String, u64>>,
+    download_pumping: std::sync::atomic::AtomicBool,
 }
 fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().with_context(|| format!("服务端数据缺少 {k}"))
@@ -111,6 +113,7 @@ impl Remote {
             cover_slots: tokio::sync::Semaphore::new(2),
             prefetch_slots: tokio::sync::Semaphore::new(1),
             prefetch_epochs: Mutex::new(HashMap::new()),
+            download_pumping: std::sync::atomic::AtomicBool::new(false),
         };
         if !this.config_path().exists() {
             storage::write(
@@ -370,15 +373,35 @@ impl Remote {
     }
     fn layer_current(&self, book: &Value) -> Result<bool> {
         let dir = self.dir(text(book, "id")?)?;
+        Ok(storage::local_text_layer(&dir, book)?.is_some() || self.server_layer_current(book)?)
+    }
+    fn server_layer_current(&self, book: &Value) -> Result<bool> {
+        let dir = self.dir(text(book, "id")?)?;
         Ok(dir.join("content/manga.json").is_file()
             && storage::read(&dir.join("layer-version.json"), Value::Null)?
                 == json!([book["remote"]["revision"], book["remote"]["ocrRevision"]]))
+    }
+    fn select_requested_server_layer(&self, book: &Value, job: Option<&str>) -> Result<()> {
+        let Some(job) = job else {
+            return Ok(());
+        };
+        let dir = self.dir(text(book, "id")?)?;
+        let requested = storage::read(&dir.join("server-ocr-request.json"), Value::Null)?;
+        if requested["jobId"] != job || requested["contentRevision"] != book["remote"]["revision"] {
+            return Ok(());
+        }
+        let mut local = storage::read(&dir.join("local-ocr.json"), Value::Null)?;
+        if local.is_object() && local["_araleLocal"]["createdAt"] == requested["localCreatedAt"] {
+            local["_araleLocal"]["active"] = json!(false);
+            storage::write(&dir.join("local-ocr.json"), &local)?;
+        }
+        Ok(())
     }
     async fn layer(&self, book: &Value, c: &Value) -> Result<()> {
         let id = text(book, "id")?;
         let origin = &book["remote"];
         let path = self.dir(id)?.join("content/manga.json");
-        if self.layer_current(book)? {
+        if self.server_layer_current(book)? {
             return Ok(());
         }
         if origin["ocrRevision"].as_u64() == Some(0) {
@@ -547,6 +570,15 @@ impl Remote {
         args: &[Value],
     ) -> Result<Value> {
         let first = args.first().unwrap_or(&Value::Null);
+        if channel == "remote:downloads" {
+            return self.download_status(backend);
+        }
+        if channel == "remote:downloadStart" {
+            return self.enqueue_downloads(backend, first);
+        }
+        if channel == "remote:downloadPause" {
+            return self.pause_download(backend, first.as_str().context("缺少书籍 ID")?);
+        }
         if channel == "remote:connections" {
             return Ok(public_config(&self.config()?));
         }
@@ -587,10 +619,9 @@ impl Remote {
                 .await;
         }
         if channel == "remote:open" && args.get(1) == Some(&json!(true)) {
-            let book = self.snapshot(backend, first.as_str().context("缺少书籍 ID")?)?;
-            if Self::has_manifest(&book) {
-                return self.open_book(backend, first.as_str().unwrap(), true).await;
-            }
+            return self
+                .open_book(backend, first.as_str().context("缺少书籍 ID")?, true)
+                .await;
         }
         if channel == "remote:info" || channel == "remote:list" {
             let c = self.selected_connection()?;
@@ -604,6 +635,29 @@ impl Remote {
             };
             self.background_sync(backend).await;
             return self.sync_snapshot(backend);
+        }
+        if channel == "remote:ocrStatus" {
+            let book = self.snapshot(backend, first.as_str().context("缺少书籍 ID")?)?;
+            if let Some(layer) = storage::local_text_layer(
+                &self.dir(first.as_str().context("缺少书籍 ID")?)?,
+                &book,
+            )? {
+                let pages = layer["pages"].as_array().unwrap();
+                let blocks: usize = pages
+                    .iter()
+                    .map(|p| p["blocks"].as_array().map_or(0, Vec::len))
+                    .sum();
+                return Ok(
+                    json!({"bookId":book["id"],"ok":true,"provider":layer["_araleLocal"]["provider"],"pages":pages.len(),"blocks":blocks}),
+                );
+            }
+            if book["remote"]["ocrRevision"].as_u64().unwrap_or(0) > 0 {
+                return Ok(
+                    json!({"bookId":book["id"],"ok":true,"provider":"server","pages":book["pageCount"],"blocks":0}),
+                );
+            } else {
+                return Ok(Value::Null);
+            }
         }
         let _guard = self.gate.lock().await;
         let arg = || first.as_str().context("缺少服务器或书籍 ID");
@@ -853,8 +907,8 @@ impl Remote {
                 }
                 let updated = !self.layer_current(&fresh)?;
                 self.layer(&fresh, &c).await?;
-                let layer =
-                    storage::read(&self.dir(arg()?)?.join("content/manga.json"), json!({}))?;
+                self.select_requested_server_layer(&fresh, args.get(2).and_then(Value::as_str))?;
+                let layer = lock(backend)?.text_layer(arg()?, json!({}))?;
                 let blocks: usize = layer["pages"]
                     .as_array()
                     .into_iter()
@@ -875,16 +929,6 @@ impl Remote {
                     json!({"available":available,"reason":if available{Value::Null}else{json!("服务端未配置 OCR 引擎")},"extensionsDir":"由服务器管理","providers":[{"id":"server","label":"服务器 OCR","available":available,"ready":available,"requirement":"由服务器配置和运行","downloadSizeMb":0,"extension":null,"reason":null}],"selected":"server"}),
                 )
             }
-            "remote:ocrStatus" => {
-                let book = self.snapshot(backend, arg()?)?;
-                if book["remote"]["ocrRevision"].as_u64().unwrap_or(0) > 0 {
-                    Ok(
-                        json!({"bookId":book["id"],"ok":true,"provider":"server","pages":book["pageCount"],"blocks":0}),
-                    )
-                } else {
-                    Ok(Value::Null)
-                }
-            }
             "remote:ocrStart" | "remote:ocrCancel" => {
                 let id = arg()?;
                 let book = self.snapshot(backend, id)?;
@@ -892,6 +936,14 @@ impl Remote {
                 if channel == "remote:ocrStart" {
                     self.update_meta(text(&c, "id")?, json!({"retryAt":0,"lastAttemptAt":0}))?;
                     let r=self.json(&c,Method::POST,&format!("api/v1/books/{}/ocr-jobs",text(&book["remote"],"bookId")?),Some(json!({"operationId":uuid::Uuid::new_v4().to_string(),"force":args.get(1).is_some_and(|a|a["force"]==true)}))).await?;
+                    if r["job"]["id"].is_string() {
+                        let dir = self.dir(id)?;
+                        let local = storage::read(&dir.join("local-ocr.json"), Value::Null)?;
+                        storage::write(
+                            &dir.join("server-ocr-request.json"),
+                            &json!({"jobId":r["job"]["id"],"contentRevision":book["remote"]["revision"],"localCreatedAt":local["_araleLocal"]["createdAt"]}),
+                        )?;
+                    }
                     Ok(
                         json!({"bookId":id,"ok":true,"provider":"server","pages":0,"blocks":0,"queued":r["skipped"]!=true,"skipped":r["skipped"]==true}),
                     )

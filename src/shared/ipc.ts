@@ -1,4 +1,4 @@
-import type { ServerConnectionInput, ServerConnections, ServerInfo, ServerPoll } from './server';
+import type { ServerConnectionInput, ServerConnections, ServerInfo, ServerPoll, RemoteDownload } from './server';
 /**
  * Tauri 原生调用/Worker 通道名与渲染进程 API 契约。
  *
@@ -70,6 +70,9 @@ export const IPC = {
   sourcesPrefetch: 'remote:prefetch',
   sourcesReaderClosed: 'remote:readerClosed',
   sourcesResolve: 'remote:resolve',
+  sourcesDownloads: 'remote:downloads',
+  sourcesDownloadStart: 'remote:downloadStart',
+  sourcesDownloadPause: 'remote:downloadPause',
 
   appBuildInfo: 'app:buildInfo',
   appCheckUpdate: 'app:checkUpdate',
@@ -207,6 +210,9 @@ export interface AraleApi {
     prefetch(bookId: string, pages: number[]): Promise<void>;
     readerClosed(bookId: string): Promise<void>;
     resolve(bookId: string, choice: 'local' | 'remote' | 'restart'): Promise<void>;
+    downloads(): Promise<RemoteDownload[]>;
+    download(bookIds: string[]): Promise<RemoteDownload[]>;
+    pauseDownload(bookId: string): Promise<RemoteDownload[]>;
   };
   app: {
     buildInfo(): Promise<AppBuildInfo>;
