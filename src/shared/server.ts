@@ -1,5 +1,6 @@
 import type { BookRecord, ReadingPosition } from './types';
 export const SERVER_API_VERSION = 1;
+export type ServerProxyMode = 'system' | 'direct';
 export interface ServerPage {
     id: string;
     url: string;
@@ -35,6 +36,7 @@ export interface ServerConnection {
     url: string;
     hasToken: boolean;
     autoSync?: boolean;
+    proxyMode?: ServerProxyMode;
 }
 export interface ServerConnections {
     activeId: string | null;
@@ -45,6 +47,7 @@ export interface ServerConnectionInput {
     name: string;
     url: string;
     token?: string;
+    proxyMode?: ServerProxyMode;
 }
 export interface RemoteOrigin {
     connectionId: string;

@@ -19,6 +19,7 @@ mod sync;
 pub struct Remote {
     root: PathBuf,
     client: Client,
+    direct_client: Client,
     gate: tokio::sync::Mutex<()>,
     config_gate: Mutex<()>,
     state_gate: Mutex<()>,
@@ -62,6 +63,9 @@ fn public_config(config: &Value) -> Value {
     for c in value["connections"].as_array_mut().unwrap() {
         c["hasToken"] = json!(!c["token"].as_str().unwrap_or("").is_empty());
         c["autoSync"] = json!(c["autoSync"] != false);
+        if c["proxyMode"].is_null() {
+            c["proxyMode"] = json!("system");
+        }
         c.as_object_mut().unwrap().remove("token");
     }
     value.as_object_mut().unwrap().remove("deviceId");
@@ -84,6 +88,19 @@ fn normalize_url(value: &str) -> Result<String> {
     }
     Ok(url.to_string())
 }
+fn http_client_builder() -> reqwest::ClientBuilder {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(25))
+        .connect_timeout(Duration::from_secs(5))
+}
+fn proxy_mode(connection: &Value) -> Result<&str> {
+    match connection.get("proxyMode") {
+        None | Some(Value::Null) => Ok("system"),
+        Some(Value::String(mode)) if mode == "system" || mode == "direct" => Ok(mode),
+        _ => bail!("无效连接方式，请选择跟随系统代理或直连"),
+    }
+}
 impl Remote {
     pub fn new(root: PathBuf) -> Result<Self> {
         let mut sync_meta = storage::read(&root.join("remote/sync-status.json"), json!({}))?;
@@ -98,11 +115,8 @@ impl Remote {
         }
         let this = Self {
             root,
-            client: Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(25))
-                .connect_timeout(Duration::from_secs(5))
-                .build()?,
+            client: http_client_builder().build()?,
+            direct_client: http_client_builder().no_proxy().build()?,
             gate: tokio::sync::Mutex::new(()),
             config_gate: Mutex::new(()),
             state_gate: Mutex::new(()),
@@ -132,6 +146,9 @@ impl Remote {
         if !v["connections"].is_array() || !v["deviceId"].is_string() {
             bail!("服务器配置格式错误，原文件已保留");
         }
+        for connection in v["connections"].as_array().unwrap() {
+            proxy_mode(connection)?;
+        }
         Ok(v)
     }
     fn connection(&self, id: &str) -> Result<Value> {
@@ -152,8 +169,14 @@ impl Remote {
         max: usize,
     ) -> Result<(u16, Vec<u8>)> {
         let url = reqwest::Url::parse(text(c, "url")?)?.join(path)?;
-        let mut req = self
-            .client
+        // Proxy routing is an explicit per-connection preference, independent of
+        // the server's hostname or the user's network provider.
+        let client = if proxy_mode(c)? == "direct" {
+            &self.direct_client
+        } else {
+            &self.client
+        };
+        let mut req = client
             .request(method, url)
             .bearer_auth(text(c, "token")?);
         if let Some(body) = body {
@@ -683,6 +706,10 @@ impl Remote {
                     bail!("访问令牌格式错误");
                 }
                 let mut c = json!({"id":old.map(|c|c["id"].clone()).unwrap_or(json!(uuid::Uuid::new_v4().to_string())),"url":url,"token":token,"name":first["name"].as_str().filter(|s|!s.trim().is_empty()).unwrap_or("Arale Server")});
+                c["proxyMode"] = first.get("proxyMode")
+                    .or_else(|| old.and_then(|c| c.get("proxyMode")))
+                    .cloned().unwrap_or(json!("system"));
+                c["proxyMode"] = json!(proxy_mode(&c)?);
                 if let Some(old) = old {
                     c["serverId"] = old["serverId"].clone();
                 }
@@ -1000,6 +1027,80 @@ mod tests {
         let state = remote.flush(&json!({"id":"rs_idle"}), &json!({})).await?;
         assert!(state["pending"].is_null());
         assert!(state["next"].is_null());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn proxy_preference_controls_routing_and_survives_edits() -> Result<()> {
+        use std::{io::{Read, Write}, net::{SocketAddr, TcpListener}, thread, time::Instant};
+        fn serve(route: &'static str, requests: usize) -> Result<(SocketAddr, thread::JoinHandle<Result<()>>)> {
+            let body = json!({"apiVersion":1,"userId":"owner","serverId":"00000000-0000-4000-8000-000000000001","route":route}).to_string();
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let address = listener.local_addr()?;
+            listener.set_nonblocking(true)?;
+            let worker = thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                for _ in 0..requests {
+                    let mut stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+                            Err(e) => return Err(e.into()),
+                        }
+                    };
+                    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte)?;
+                        request.push(byte[0]);
+                        anyhow::ensure!(request.len() < 8192);
+                    }
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())?;
+                }
+                Ok(())
+            });
+            Ok((address, worker))
+        }
+        let (direct, direct_worker) = serve("direct", 5)?;
+        let (proxy, proxy_worker) = serve("proxy", 3)?;
+        let root = tempfile::tempdir()?;
+        let backend = Mutex::new(Backend::load(root.path().into())?);
+        let mut remote = Remote::new(root.path().into())?;
+        remote.client = http_client_builder().proxy(reqwest::Proxy::all(format!("http://{proxy}"))?).build()?;
+        remote.direct_client = http_client_builder().no_proxy()
+            .resolve("nas.test", direct).resolve("public.test", direct).build()?;
+        for (host, mode, expected) in [("nas.test", None, "proxy"), ("nas.test", Some("system"), "proxy"), ("nas.test", Some("direct"), "direct"), ("public.test", Some("direct"), "direct")] {
+            let mut c = json!({"url":format!("http://{host}:{}/", direct.port()),"token":"test-only-token"});
+            if let Some(mode) = mode { c["proxyMode"] = json!(mode); }
+            assert_eq!(remote.json(&c, Method::GET, "api/v1/info", None).await?["route"], expected);
+        }
+        let original = fs::read(remote.config_path())?;
+        let draft = json!({"name":"Test server","url":format!("http://nas.test:{}/", direct.port()),"token":"test-only-access-token","proxyMode":"direct"});
+        assert_eq!(remote.handle(&backend, "remote:probe", &[draft.clone()]).await?["route"], "direct");
+        assert_eq!(fs::read(remote.config_path())?, original);
+        let saved = remote.handle(&backend, "remote:save", &[draft]).await?;
+        let connection = &saved["connections"][0];
+        assert_eq!(connection["proxyMode"], "direct");
+        assert!(connection.get("token").is_none());
+        let mut edit = json!({"id":connection["id"],"url":connection["url"],"name":"Renamed server"});
+        let edited = remote.handle(&backend, "remote:save", &[edit.clone()]).await?;
+        assert_eq!(edited["connections"][0]["proxyMode"], "direct");
+        assert_eq!(remote.config()?["connections"][0]["token"], "test-only-access-token");
+        edit["proxyMode"] = json!("system");
+        remote.handle(&backend, "remote:save", &[edit.clone()]).await?;
+        assert_eq!(remote.config()?["connections"][0]["proxyMode"], "system");
+        let original = fs::read(remote.config_path())?;
+        edit["proxyMode"] = json!("unsupported");
+        assert!(remote.handle(&backend, "remote:save", &[edit]).await.is_err());
+        assert_eq!(fs::read(remote.config_path())?, original);
+        let mut legacy = remote.config()?;
+        legacy["connections"][0].as_object_mut().unwrap().remove("proxyMode");
+        storage::write(&remote.config_path(), &legacy)?;
+        let public = remote.handle(&backend, "remote:connections", &[]).await?;
+        assert_eq!(public["connections"][0]["proxyMode"], "system");
+        assert_eq!(remote.config()?, legacy);
+        direct_worker.join().unwrap()?;
+        proxy_worker.join().unwrap()?;
         Ok(())
     }
     #[tokio::test]

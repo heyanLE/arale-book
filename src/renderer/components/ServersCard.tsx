@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { ServerConnectionInput, ServerConnections, ServerScanStatus, ServerSyncStatus } from '@shared/server';
+import type { ServerConnectionInput, ServerConnections, ServerProxyMode, ServerScanStatus, ServerSyncStatus } from '@shared/server';
 import { api, useIpcEvent } from '../lib/api';
 import { SyncConnection } from './ServerSync';
-const empty = { name: 'Arale Server', url: 'http://127.0.0.1:3737', token: '' };
+const empty: ServerConnectionInput = { name: 'Arale Server', url: 'http://127.0.0.1:3737', token: '', proxyMode: 'system' };
 export function ServersCard(): JSX.Element {
     const [sources, setSources] = useState<ServerConnections>({ activeId: null, connections: [] });
     const [draft, setDraft] = useState<ServerConnectionInput>(empty);
@@ -30,21 +30,24 @@ export function ServersCard(): JSX.Element {
     <div className="settings-row"><span className="settings-label">本地书库</span><button className="btn btn-sm" disabled={busy || !sources.activeId} onClick={() => void action(() => api.sources.activate(null), '已切换到本地书库')}>{sources.activeId ? '使用本地书库' : '当前书源'}</button></div>
     {sources.connections.map(c => <div key={c.id} className="server-connection">
       <strong>{c.name}{sources.activeId === c.id ? ' · 当前书源' : ''}</strong><span className="mono">{c.url}</span>
+      <span className="settings-hint">{c.proxyMode === 'direct' ? '直连' : '跟随系统代理'}</span>
       {scans.find(s=>s.connectionId===c.id)?.running && <p role="status">正在扫描服务器书库…</p>}
       {scans.find(s=>s.connectionId===c.id)?.errors.map((error,index)=><p role="alert" key={index}>扫描失败：{error}</p>)}
       <SyncConnection connection={c} status={sync.find(s=>s.connectionId===c.id)} />
       <div className="settings-row">
         <button className="btn btn-sm" disabled={busy || sources.activeId === c.id} onClick={() => void action(() => api.sources.activate(c.id), '已切换服务器书库')}>使用此书库</button>
-        <button className="btn btn-sm" disabled={busy} onClick={() => setDraft({ id: c.id, name: c.name, url: c.url, token: '' })}>编辑连接</button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => setDraft({ id: c.id, name: c.name, url: c.url, token: '', proxyMode: c.proxyMode ?? 'system' })}>编辑连接</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void action(() => api.sources.scan(c.id), '已提交扫描，完成后点击同步获取新书')}>扫描服务器文件</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void action(() => api.sources.remove(c.id), '连接已移除，缓存与本机学习资料保留')}>移除连接</button>
       </div>
     </div>)}
     <form onSubmit={e => { e.preventDefault(); void action(async () => { await api.sources.save(draft); setDraft(empty); }, '连接已保存，可在书库顶部选择服务器'); }}>
       <h3>{draft.id ? '编辑服务器' : '添加服务器'}</h3>
-      <label className="settings-row"><span className="settings-label">显示名称</span><input required value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
-      <label className="settings-row"><span className="settings-label">服务器 URL</span><input required type="url" placeholder="http://nas:3737" value={draft.url} onChange={e => setDraft({ ...draft, url: e.target.value })}/></label>
-      <label className="settings-row"><span className="settings-label">访问令牌</span><input type="password" autoComplete="new-password" placeholder={draft.id ? '留空保留原令牌；修改地址需重填' : '服务端数据目录中的 access-token'} value={draft.token ?? ''} onChange={e => setDraft({ ...draft, token: e.target.value })}/></label>
+      <label className="settings-row"><span className="settings-label">显示名称</span><input className="input" required value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
+      <label className="settings-row"><span className="settings-label">服务器 URL</span><input className="input" required type="url" placeholder="http://nas:3737" value={draft.url} onChange={e => setDraft({ ...draft, url: e.target.value })}/></label>
+      <label className="settings-row"><span className="settings-label">连接方式</span><select className="select" value={draft.proxyMode ?? 'system'} onChange={e => setDraft({ ...draft, proxyMode: e.target.value as ServerProxyMode })} aria-describedby="server-proxy-hint"><option value="system">跟随系统代理</option><option value="direct">直连（不使用代理）</option></select></label>
+      <p className="settings-hint" id="server-proxy-hint">内网或 VPN 服务器可选择直连；仍需当前设备能够解析并访问服务器地址。此设置只影响这条服务器连接。</p>
+      <label className="settings-row"><span className="settings-label">访问令牌</span><input className="input" type="password" autoComplete="new-password" placeholder={draft.id ? '留空保留原令牌；修改地址需重填' : '服务端数据目录中的 access-token'} value={draft.token ?? ''} onChange={e => setDraft({ ...draft, token: e.target.value })}/></label>
       <div className="settings-row"><button type="button" className="btn" disabled={busy} onClick={() => void action(() => api.sources.probe(draft), '连接成功，服务器身份与 API 兼容')}>测试连接</button><button className="btn btn-primary" disabled={busy} type="submit">验证并保存</button>{draft.id && <button type="button" className="btn" onClick={() => setDraft(empty)}>取消编辑</button>}</div>
     </form><p role="status">{message}</p>
   </section>;
