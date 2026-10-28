@@ -21,7 +21,7 @@
     "test": "node scripts/test.mjs",
     "test:only": "node --test \"dist-test/tests/*.test.js\"",
     "smoke": "node scripts/smoke-tauri.mjs",
-    "test:all": "node scripts/test.mjs && node scripts/tauri.mjs test && node scripts/test-tauri-services.mjs && node scripts/test-tauri-ocr.mjs && node scripts/test-tauri-study.mjs && node scripts/smoke-tauri.mjs",
+    "test:all": "node scripts/test.mjs && node scripts/tauri.mjs test && node scripts/test-tauri-dictionary.mjs && node scripts/test-tauri-services.mjs && node scripts/test-tauri-ocr.mjs && node scripts/test-tauri-study.mjs && node scripts/smoke-tauri.mjs",
     "build:native": "node scripts/build-native.mjs",
     "build:all": "node scripts/tauri.mjs build",
     "native:test": "cd native/arale-native && cargo test",
@@ -41,7 +41,8 @@
     "server:docker:build": "docker compose -f server/compose.yaml build",
     "server:docker:up": "docker compose -f server/compose.yaml up -d",
     "server:docker:test": "node scripts/test-server-docker.mjs",
-    "server:lock:test": "node scripts/test-server-lock.mjs"
+    "server:lock:test": "node scripts/test-server-lock.mjs",
+    "tauri:dictionary:test": "node scripts/test-tauri-dictionary.mjs"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",

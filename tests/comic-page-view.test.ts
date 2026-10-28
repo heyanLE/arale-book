@@ -39,6 +39,20 @@ test('zooming out keeps the image reachable and zoom stays within supported boun
   assert.equal(clampComicPageView({ zoom: 0.01, pan: { x: 0, y: 0 } }, geometry).zoom, 0.2);
 });
 
+test('immersive pan margin brings every image corner near the center without losing the image', () => {
+  const bounds = { ...geometry, panMargin: { x: 240, y: 240 } };
+  for (const x of [-1, 1]) for (const y of [-1, 1]) {
+    const view = clampComicPageView({ zoom: 2, pan: { x: x * 10000, y: y * 10000 } }, bounds);
+    assert.deepEqual(view.pan, { x: x * 340, y: y * 540 });
+    const edgeX = 300 + view.pan.x - x * 400;
+    const edgeY = 300 + view.pan.y - y * 600;
+    assert.ok(Math.abs(edgeX - 300) <= 60 && Math.abs(edgeY - 300) <= 60);
+    // Only the normally bounded position is eligible for durable page memory.
+    assert.deepEqual(clampComicPageView(view, geometry).pan, { x: x * 100, y: y * 300 });
+  }
+  assert.deepEqual(clampComicPageView({ zoom: 1, pan: { x: 1000, y: 1000 } }, bounds), DEFAULT_PAGE_VIEW);
+});
+
 test('bad storage values are ignored while valid page memories remain usable', () => {
   const good = { zoom: 1.5, pan: { x: 10, y: -30 } };
   const raw = JSON.stringify({ good, missing: { zoom: 2 }, string: { zoom: '2', pan: good.pan },

@@ -310,7 +310,7 @@ fn snapshot(backend: &Backend, id: &str) -> Result<Value> {
     let book = backend.book(id)?;
     let list = storage::read(&backend.dir(id)?.join("study-list.json"), Value::Null)?;
     let segments = segments::read(backend, id)?;
-    let mut dicts = dictionaries::list(backend)?;
+    let mut dicts = dictionaries::list(&backend.root)?;
     dicts.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     let manga = backend.text_layer(id, Value::Null)?;
     Ok(

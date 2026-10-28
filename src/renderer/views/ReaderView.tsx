@@ -9,7 +9,7 @@ import type { ReadingEntry, ReadingEntryDraft } from '@shared/reading';
 import type { ReadingPosition } from '@shared/types';
 import { useReadingActivity } from '../lib/reading-activity';
 import { api, call } from '../lib/api';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   isImageNovel,
   readerModeOf,
@@ -34,6 +34,7 @@ export interface ReaderViewProps {
   onOpenJournal?: (draft?: ReadingEntryDraft) => void;
   onStatus: (message: string) => void;
   systemBarsVisible: boolean;
+  fullscreenTransitioning?: boolean;
   onSystemBarsChange: (visible: boolean) => void;
   /** 当前这本书的 OCR 进度（没有任务时为 null）。 */
   ocrProgress?: OcrProgress | null;
@@ -59,6 +60,7 @@ export function ReaderView({
   journalOpen = false, journalJump, onOpenJournal,
   onStatus,
   systemBarsVisible,
+  fullscreenTransitioning = false,
   onSystemBarsChange,
   ocrProgress = null,
   ocrResult = null,
@@ -101,9 +103,29 @@ export function ReaderView({
   const wordCards = useWordCards(book.id);
   const { autoHideChrome: immersive } = useSettings();
   const comicMode = readerModeOf(book) === 'comic';
+  const macNativeFullscreen = navigator.userAgent.includes('Mac');
   const [immersiveToolsHost, setImmersiveToolsHost] = useState<HTMLDivElement | null>(null);
   const [toolsPinned, setToolsPinned] = useState(false);
   const [toolsHovered, setToolsHovered] = useState(false);
+  const toolsZone = useRef<HTMLDivElement>(null);
+
+  // The old toolbar can disappear before pointerleave during a Space transition.
+  // Start collapsed and use fresh pointer movement after the transition settles.
+  useLayoutEffect(() => { setToolsHovered(false); }, [immersive, fullscreenTransitioning]);
+  useLayoutEffect(() => { setToolsPinned(false); }, [immersive]);
+  useEffect(() => {
+    if (!immersive || fullscreenTransitioning) return;
+    const moved = (event: PointerEvent) => setToolsHovered(
+      event.target instanceof Node && !!toolsZone.current?.contains(event.target),
+    );
+    const clear = () => setToolsHovered(false);
+    document.addEventListener('pointermove', moved, true);
+    window.addEventListener('blur', clear);
+    return () => {
+      document.removeEventListener('pointermove', moved, true);
+      window.removeEventListener('blur', clear);
+    };
+  }, [immersive, fullscreenTransitioning]);
 
   const handleProgress = useCallback((label: string) => setProgress(label), []);
 
@@ -113,23 +135,23 @@ export function ReaderView({
 
   return (
     <div className="reader">
-      {immersive && <div className={`immersive-exit-zone${wordCards.panelOpen ? ' is-sidebar-open' : ''}${toolsPinned || toolsHovered ? ' is-revealed' : ''}`} aria-label="沉浸阅读工具"
-        onPointerEnter={() => setToolsHovered(true)} onPointerMove={() => setToolsHovered(true)} onPointerLeave={() => setToolsHovered(false)}>
+      {immersive && <div ref={toolsZone} className={`immersive-exit-zone${wordCards.panelOpen ? ' is-sidebar-open' : ''}${toolsPinned || toolsHovered ? ' is-revealed' : ''}`} aria-label="沉浸阅读工具"
+        onPointerLeave={() => setToolsHovered(false)}>
         <button type="button" className="immersive-tools-toggle" aria-label="固定或取消固定阅读工具" aria-pressed={toolsPinned} aria-expanded={toolsPinned || toolsHovered}
           title={toolsPinned ? "取消固定，移开鼠标后收起" : "固定显示阅读工具"} onClick={() => setToolsPinned(value => !value)}>⋯</button>
         <div className="immersive-reader-actions">
           {journalTools}
           {comicMode && <div ref={setImmersiveToolsHost} />}
-          <button type="button" className={`btn btn-sm immersive-icon-button${systemBarsVisible ? ' btn-primary' : ''}`}
+          {!macNativeFullscreen && <button type="button" className={`btn btn-sm immersive-icon-button${systemBarsVisible ? ' btn-primary' : ''}`}
             data-testid="immersive-system-bars" aria-pressed={systemBarsVisible} aria-label="显示或隐藏系统栏"
             title={`${systemBarsVisible ? '隐藏' : '显示'}${navigator.userAgent.includes('Mac') ? '菜单栏和 Dock' : '系统任务栏'}（覆盖页图）`}
-            onPointerDown={event => event.preventDefault()} onClick={() => onSystemBarsChange(!systemBarsVisible)}><ReaderToolIcon kind="system" /></button>
+            onPointerDown={event => event.preventDefault()} onClick={() => onSystemBarsChange(!systemBarsVisible)}><ReaderToolIcon kind="system" /></button>}
           <button type="button" className={`btn btn-sm immersive-icon-button${wordCards.panelOpen ? ' btn-primary' : ''}`}
             data-testid="immersive-sidebar-toggle" aria-expanded={wordCards.panelOpen} aria-controls="reader-sidebar"
             aria-label="词卡夹"
             title={`${wordCards.panelOpen ? '收起' : '打开'}右侧栏：词卡夹`}
             onClick={() => wordCards.setPanelOpen(!wordCards.panelOpen)}><ReaderToolIcon kind="sidebar" /></button>
-          <button type="button" className="btn immersive-exit immersive-icon-button" data-testid="immersive-exit" title="退出沉浸模式" aria-label="退出沉浸模式"
+          <button type="button" className="btn immersive-exit immersive-icon-button" data-testid="immersive-exit" title="退出沉浸模式" aria-label="退出沉浸模式" disabled={fullscreenTransitioning}
             onClick={() => updateSettings({ autoHideChrome: false })}><ReaderToolIcon kind="exit" /></button>
         </div>
       </div>}
@@ -169,6 +191,7 @@ export function ReaderView({
         <button
           type="button"
           className={`btn btn-sm${immersive ? ' btn-primary' : ''}`}
+          disabled={fullscreenTransitioning}
           onClick={() => updateSettings({ autoHideChrome: !immersive })}
           title={immersive ? '沉浸模式已开：鼠标移开自动隐藏上下栏' : '沉浸模式：自动隐藏上下栏'}
           data-testid="reader-immersive-toggle"

@@ -1,4 +1,5 @@
 import type { ImportQueueState, ImportTaskEntry } from '@shared/imports';
+import type { DictionaryImportQueueState, DictionaryImportTask } from '@shared/dictionary-imports';
 
 export function createTauriDictionary(
   native: (channel: string, ...args: unknown[]) => Promise<any>,
@@ -8,6 +9,7 @@ export function createTauriDictionary(
   let nextId = 1;
   let failed: Error | null = null;
   let lastImportQueue: ImportQueueState | null = null;
+  let lastDictionaryQueue: DictionaryImportQueueState | null = null;
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   worker.onmessage = event => {
     const message = event.data;
@@ -18,6 +20,7 @@ export function createTauriDictionary(
       );
     } else if (message.kind === 'event') {
       if (message.channel === 'library:importQueue') lastImportQueue = message.payload;
+      if (message.channel === 'dict:importQueue') lastDictionaryQueue = message.payload;
       deliver(message.channel, message.payload);
     }
     else if (message.kind === 'result') {
@@ -27,6 +30,14 @@ export function createTauriDictionary(
   };
   worker.onerror = event => {
     failed = new Error(event.message || '后台 Worker 启动失败');
+    if (lastDictionaryQueue) {
+      const interrupted: DictionaryImportTask[] = [lastDictionaryQueue.active, ...lastDictionaryQueue.pending]
+        .filter((task): task is DictionaryImportTask => !!task).map(task => ({ ...task, status: 'failed', finishedAt: Date.now(),
+          error: '词典导入后台中断。已写入的词典会保留，请重启应用后检查词典列表再重试。',
+          progress: { ...task.progress, message: '词典导入后台中断' } }));
+      lastDictionaryQueue = { active: null, pending: [], recent: [...interrupted, ...lastDictionaryQueue.recent].slice(0, 20) };
+      deliver('dict:importQueue', lastDictionaryQueue);
+    }
     if (lastImportQueue) {
       const interrupted: ImportTaskEntry[] = [lastImportQueue.active, ...lastImportQueue.pending].filter((task): task is ImportTaskEntry => !!task).map(task => ({
         ...task, status: 'failed', finishedAt: Date.now(), progress: { ...task.progress, message: '导入后台中断，请检查书库后重试' },
@@ -46,6 +57,7 @@ export function createTauriDictionary(
   // Start lazily after React subscriptions mount; keep one worker across reader/settings views.
   const initialize = () => invoke('dict:initialize').catch(error => console.error('[arale] dictionary load', error));
   const request = async (channel: string, ...args: unknown[]) => {
+    if (channel === 'dict:importQueue' && failed && lastDictionaryQueue) return lastDictionaryQueue;
     if (channel === 'dict:importDialog') {
       const paths = await native('dict:select') as string[] | null;
       return paths?.length ? invoke('dict:import', paths) : null;

@@ -19,6 +19,7 @@
  */
 
 import type { ReaderJournalProps } from '@shared/reading';
+import { wheelZoomFactor } from '@core/comic/zoom';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as React from 'react';
@@ -264,12 +265,14 @@ export function ComicReader({
   const { zoom, pan, setZoom, setPan, resetView } = useComicPageView(book.id, pageViewKey, {
     width: pairWidth, height: pairHeight, baseScale,
     viewportWidth: viewport.w, viewportHeight: viewport.h,
+    panMargin: settings.autoHideChrome ? { x: viewport.w * 0.4, y: viewport.h * 0.4 } : undefined,
   });
   const scale = baseScale * zoom;
 
   const displayedPairWidth = pairWidth * scale;
   const displayedPairHeight = pairHeight * scale;
-  const canPan = displayedPairWidth > viewport.w + 1 || displayedPairHeight > viewport.h + 1;
+  const canPan = displayedPairWidth > viewport.w + 1 || displayedPairHeight > viewport.h + 1
+    || (settings.autoHideChrome && zoom > 1);
 
   // 页面直接读取自己的视图，避免新页先使用上一页的缩放闪一帧；跨页时结束旧拖动。
   useLayoutEffect(() => { dragRef.current = null; }, [pageViewKey]);
@@ -566,8 +569,10 @@ export function ComicReader({
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
+        const factor = wheelZoomFactor(event.deltaY, event.deltaMode);
+        if (factor === 1) return;
         setZoom((current) =>
-          clamp(current * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP), MIN_ZOOM, MAX_ZOOM),
+          clamp(current * factor, MIN_ZOOM, MAX_ZOOM),
         );
         return;
       }

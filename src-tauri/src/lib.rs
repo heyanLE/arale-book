@@ -113,6 +113,34 @@ async fn arale_invoke(
 }
 
 fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Value> {
+    if matches!(channel, "dict:status" | "dict:stage" | "dict:rawBank" | "dict:commit" | "dict:discard" | "dict:data" | "dict:remove" | "dict:setEnabled") {
+        // Dictionary IO does not need the library lock while unpacking or writing large banks.
+        let root = app.state::<State>().lock().map_err(|_| anyhow::anyhow!("后台存储锁不可用"))?.root.clone();
+        return match channel {
+            "dict:status" => dictionaries::status(&root),
+            "dict:stage" => dictionaries::stage_with_progress(&root, std::path::Path::new(string(args, 0)?), |mut progress| {
+                if let Some(task_id) = args.get(1).and_then(Value::as_str) {
+                    progress["taskId"] = json!(task_id); event(app, "dict:importProgress", progress);
+                }
+            }),
+            "dict:rawBank" => dictionaries::raw_bank(&root, string(args, 0)?, string(args, 1)?),
+            "dict:commit" => dictionaries::commit(&root, string(args, 0)?, string(args, 1)?, string(args, 2)?),
+            "dict:discard" => { dictionaries::discard(&root, string(args, 0)?)?; Ok(Value::Null) },
+            "dict:data" => dictionaries::data(&root, string(args, 0)?),
+            "dict:remove" => dictionaries::remove(&root, string(args, 0)?),
+            "dict:setEnabled" => dictionaries::enabled(&root, string(args, 0)?, args.get(1).and_then(Value::as_bool).context("启用参数必须是布尔值")?),
+            _ => unreachable!(),
+        };
+    }
+
+    // Fullscreen transitions wait for native completion without holding the library lock.
+    if channel == "window:setImmersive" {
+        let enabled = args.first().and_then(Value::as_bool).context("全屏参数必须是布尔值")?;
+        let bars = args.get(1).and_then(Value::as_bool).unwrap_or(false);
+        system::set_immersive(app, enabled, bars)?;
+        return Ok(json!(enabled));
+    }
+
     if channel == "app:buildInfo" {
         return Ok(serde_json::to_value(updates::build_info(app))?);
     }
@@ -436,35 +464,7 @@ fn dispatch(app: &tauri::AppHandle, channel: &str, args: &[Value]) -> Result<Val
             storage::write(&path, &raw)?;
             Ok(json!({"direction":raw["direction"]}))
         }
-        "window:setImmersive" => {
-            let enabled = first.as_bool().context("全屏参数必须是布尔值")?;
-            let system_bars_visible = args.get(1).and_then(Value::as_bool).unwrap_or(false);
-            system::set_immersive(app, enabled, system_bars_visible)?;
-            Ok(json!(enabled))
-        }
 
-        "dict:status" => dictionaries::status(&backend),
-        "dict:stage" => dictionaries::stage(&backend, std::path::Path::new(string(args, 0)?)),
-        "dict:rawBank" => dictionaries::raw_bank(&backend, string(args, 0)?, string(args, 1)?),
-        "dict:commit" => dictionaries::commit(
-            &backend,
-            string(args, 0)?,
-            string(args, 1)?,
-            string(args, 2)?,
-        ),
-        "dict:discard" => {
-            dictionaries::discard(&backend, string(args, 0)?)?;
-            Ok(Value::Null)
-        }
-        "dict:data" => dictionaries::data(&backend, string(args, 0)?),
-        "dict:remove" => dictionaries::remove(&backend, string(args, 0)?),
-        "dict:setEnabled" => dictionaries::enabled(
-            &backend,
-            string(args, 0)?,
-            args.get(1)
-                .and_then(Value::as_bool)
-                .context("启用参数必须是布尔值")?,
-        ),
         "segment:read" => segments::read(&backend, string(args, 0)?),
         "segment:input" => segments::input(&backend, string(args, 0)?),
         "segment:commit" => segments::commit(
@@ -646,7 +646,7 @@ fn arale_smoke_finish(
     let ok = !results.is_empty() && results.iter().all(|r| r["ok"] == true);
     storage::write(
         &backend.root.join("smoke-report.json"),
-        &json!({"ok":ok,"results":results,"evidence":evidence,"dictionaryId":dictionaries::list(&backend).map_err(|e| e.to_string())?.into_iter().find(|d| d["title"] == "Smoke 词典").map(|d| d["id"].clone())}),
+        &json!({"ok":ok,"results":results,"evidence":evidence,"dictionaryId":dictionaries::list(&backend.root).map_err(|e| e.to_string())?.into_iter().find(|d| d["title"] == "Smoke 词典").map(|d| d["id"].clone())}),
     )
     .map_err(|e| e.to_string())?;
     app.exit(if ok { 0 } else { 1 });
@@ -763,13 +763,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(true)) {
-                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
-                    system::refresh_pointer_tracking(&webview);
-                }
-            }
-        })
         .on_menu_event(|app, event| {
             // Predefined editing items are handled by the platform menu implementation.
             let id = event.id().as_ref();
@@ -808,7 +801,7 @@ pub fn run() {
                 app.path().app_data_dir()?
             };
             let backend = Backend::load(root)?;
-            dictionaries::clean_pending(&backend)?;
+            dictionaries::clean_pending(&backend.root)?;
             epub::clean_pending(&backend)?;
             app.manage(remote::Remote::new(backend.root.clone())?);
             app.manage(services::Services::new(backend.root.clone())?);
@@ -824,7 +817,7 @@ pub fn run() {
                 paths: system::argument_paths(std::env::args(), &std::env::current_dir()?),
             }));
             system::install(app.handle())?;
-            if let Some(window) = app.get_webview_window("main") { system::refresh_pointer_tracking(&window); }
+            system::install_window_state(app.handle())?;
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("arale", |context, request, responder| {

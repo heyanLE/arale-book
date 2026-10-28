@@ -1,13 +1,12 @@
 /**
  * 设置面板：词典管理 + 阅读器默认值。
  *
- * 词典相关的三种动作（导入 / 启用停用 / 卸载）都由主进程返回**整份新的**
- * `DictionaryStatus`，所以这里不需要第二套本地模型，直接整体替换即可 —— 也顺带保证了
- * 「后台载入完成」的 `dict:changed` 事件与按钮操作走同一条更新路径。
+ * 导入立即入队，进度与结果由全局任务队列呈现；词典列表统一通过 dict:changed 更新。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import type { DictionaryStatus, LibraryInfo, OcrCapability, OcrProviderId } from '@shared/types';
+import type { DictionaryImportQueueState } from '@shared/dictionary-imports';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { LlmProfileInput, LlmSettings, TranslationProfile, TranslationSettings } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
@@ -34,6 +33,7 @@ import {
 export interface SettingsPanelProps {
   info: LibraryInfo | null;
   onStatus: (message: string) => void;
+  onShowTasks?: () => void;
   /** 各 OCR 引擎的可用性与就绪状态（App 启动时探过一次）。 */
   ocrCapability?: OcrCapability | null;
   onRefreshOcrCapability?: () => void;
@@ -82,6 +82,7 @@ export interface SettingsPanelProps {
 export function SettingsPanel({
   info,
   onStatus,
+  onShowTasks,
   ocrCapability = null,
   onRefreshOcrCapability,
   onSelectOcrProvider,
@@ -95,10 +96,13 @@ export function SettingsPanel({
   const groups = [['servers','服务器与书源'],['version','版本与更新'],['library','书库'],['dictionary','词典'],['appearance','外观与布局'],['llm','LLM 配置与提示词'],['translation','翻译'],['wordcards','词卡弹窗'],['ocr','OCR 与扩展'],['epub','小说阅读器'],['comic','漫画阅读器']];
   const [dict, setDict] = useState<DictionaryStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dictionaryImports, setDictionaryImports] = useState<DictionaryImportQueueState | null>(null);
+  const [importMessage, setImportMessage] = useState('');
+  const importing = !!dictionaryImports?.active || !!dictionaryImports?.pending.length;
 
-  const reloadDict = useCallback(async () => {
+  const reloadDict = useCallback(async (reloadIndex = false) => {
     setBusy(true);
-    const status = await call('读取词典状态', () => api.dict.status());
+    const status = await call('读取词典状态', () => reloadIndex ? api.dict.reload() : api.dict.status());
     setBusy(false);
     if (status) setDict(status);
   }, []);
@@ -107,19 +111,23 @@ export function SettingsPanel({
     void reloadDict();
   }, [reloadDict]);
 
-  // 主进程在后台把 bank 索引进内存后会推这条事件，届时刷新计数与 loaded 标记。
+  // Worker 完成索引加载后刷新计数与 loaded 标记。
   useIpcEvent('dict:changed', (status) => setDict(status));
+  useIpcEvent('dict:importQueue', setDictionaryImports);
+  useEffect(() => { void api.dict.importQueue().then(setDictionaryImports).catch(() => undefined); }, []);
 
   const importDictionary = useCallback(async () => {
     setBusy(true);
-    const status = await call('导入词典', () => api.dict.importViaDialog());
+    setImportMessage('正在选择词典文件…');
+    const receipt = await call('导入词典', () => api.dict.importViaDialog());
     setBusy(false);
-    // 取消对话框时返回 null，此时保留原状态，不要把它当成空状态覆盖进去。
-    if (status) {
-      setDict(status);
-      onStatus(`已安装 ${status.dictionaries.length} 部词典`);
+    if (receipt?.taskIds.length) {
+      const message = `${receipt.taskIds.length} 部词典已加入任务队列，可离开设置继续阅读`;
+      setImportMessage(message); onStatus(message); onShowTasks?.();
+    } else {
+      setImportMessage('');
     }
-  }, [onStatus]);
+  }, [onStatus, onShowTasks]);
 
   const setEnabled = useCallback(
     async (dictId: string, enabled: boolean) => {
@@ -222,11 +230,17 @@ export function SettingsPanel({
               >
                 导入 Yomitan 词典…
               </button>
-              <button type="button" className="btn btn-sm" onClick={() => void reloadDict()} disabled={busy}>
-                刷新
+              <button type="button" className="btn btn-sm" onClick={() => void reloadDict(true)} disabled={busy || importing}>
+                刷新索引
               </button>
             </div>
           </div>
+
+          <p className="settings-hint">选择 ZIP 后立即加入任务队列。导入会显示解压、解析、保存与加载索引的进度；离开设置后继续处理。</p>
+          {importMessage && <p className="settings-hint" role="status">{importMessage}</p>}
+          {dictionaryImports?.active && <p className="settings-hint" role="status">正在导入「{dictionaryImports.active.title}」：{dictionaryImports.active.progress.message}{dictionaryImports.pending.length ? ` · 另有 ${dictionaryImports.pending.length} 部排队` : ''}</p>}
+          {!importing && dictionaryImports?.recent[0] && <p className="settings-hint" role="status">「{dictionaryImports.recent[0].title}」：{dictionaryImports.recent[0].error ?? dictionaryImports.recent[0].progress.message}</p>}
+          {onShowTasks && dictionaryImports && (importing || dictionaryImports.recent.length > 0) && <button type="button" className="btn btn-sm" onClick={onShowTasks}>查看词典导入任务</button>}
 
           <div className="settings-row">
             <span className="settings-label">词典目录</span>
@@ -250,7 +264,7 @@ export function SettingsPanel({
           </div>
 
           {dict !== null && dict.dictionaries.length === 0 && (
-            <p className="settings-hint">还没有安装词典。支持 Yomitan 格式的 zip（也可直接拖进窗口）。</p>
+            <p className="settings-hint">还没有安装词典。支持 Yomitan 格式的 ZIP。</p>
           )}
 
           {dict !== null && dict.dictionaries.length > 0 && (
@@ -261,7 +275,7 @@ export function SettingsPanel({
                     <input
                       type="checkbox"
                       checked={d.enabled}
-                      disabled={busy}
+                      disabled={busy || importing}
                       onChange={(e) => void setEnabled(d.id, e.target.checked)}
                     />
                   </label>
@@ -277,7 +291,7 @@ export function SettingsPanel({
                   <button
                     type="button"
                     className="btn btn-sm btn-danger"
-                    disabled={busy}
+                    disabled={busy || importing}
                     onClick={() => void removeDictionary(d.id, d.title)}
                   >
                     卸载

@@ -16,6 +16,8 @@ export interface ComicViewGeometry {
   baseScale: number;
   viewportWidth: number;
   viewportHeight: number;
+  /** Session-only space around a zoomed image, used while reading immersively. */
+  panMargin?: { x: number; y: number };
 }
 
 /** 页资源及尺寸变化后不复用旧位置；不同适配模式、单双页和跨页配对各自记忆。 */
@@ -25,8 +27,9 @@ export function comicPageViewKey(fit: string, pages: readonly ComicPage[], rtl: 
 
 export function clampComicPageView(view: ComicPageView, geometry: ComicViewGeometry): ComicPageView {
   const zoom = Math.min(MAX_COMIC_ZOOM, Math.max(MIN_COMIC_ZOOM, view.zoom));
-  const maxX = Math.max(0, (geometry.width * geometry.baseScale * zoom - geometry.viewportWidth) / 2);
-  const maxY = Math.max(0, (geometry.height * geometry.baseScale * zoom - geometry.viewportHeight) / 2);
+  const margin = zoom > 1 ? geometry.panMargin : undefined;
+  const maxX = Math.max(0, (geometry.width * geometry.baseScale * zoom - geometry.viewportWidth) / 2) + Math.max(0, margin?.x ?? 0);
+  const maxY = Math.max(0, (geometry.height * geometry.baseScale * zoom - geometry.viewportHeight) / 2) + Math.max(0, margin?.y ?? 0);
   return { zoom, pan: {
     x: maxX === 0 ? 0 : Math.min(maxX, Math.max(-maxX, view.pan.x)),
     y: maxY === 0 ? 0 : Math.min(maxY, Math.max(-maxY, view.pan.y)),

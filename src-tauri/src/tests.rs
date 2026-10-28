@@ -305,16 +305,20 @@ fn dictionary_import_is_atomic_compatible_and_excludes_archive_paths() {
             ("wrapper/../../escape.json", "not extracted"),
         ],
     );
-    let staged = crate::dictionaries::stage(&backend, &source).unwrap();
+    let progress = std::cell::RefCell::new(Vec::new());
+    let staged = crate::dictionaries::stage_with_progress(&backend.root, &source, |value| progress.borrow_mut().push(value)).unwrap();
+    assert_eq!(progress.borrow().first().unwrap()["stage"], "extracting");
+    assert_eq!(progress.borrow().last().unwrap()["done"], progress.borrow().last().unwrap()["total"]);
+
     let id = staged["id"].as_str().unwrap();
-    assert!(crate::dictionaries::list(&backend).unwrap().is_empty());
-    assert!(crate::dictionaries::raw_bank(&backend, id, "../../escape.json").is_err());
-    assert!(crate::dictionaries::commit(&backend, id, "{}", "[]").is_err());
-    assert!(crate::dictionaries::list(&backend).unwrap().is_empty());
+    assert!(crate::dictionaries::list(&backend.root).unwrap().is_empty());
+    assert!(crate::dictionaries::raw_bank(&backend.root, id, "../../escape.json").is_err());
+    assert!(crate::dictionaries::commit(&backend.root, id, "{}", "[]").is_err());
+    assert!(crate::dictionaries::list(&backend.root).unwrap().is_empty());
     let terms = r#"[{"expression":"猫","reading":"ねこ","glossary":["猫"],"dictionaryId":"spoofed","dictionaryTitle":"spoofed"}]"#;
-    let info = crate::dictionaries::commit(&backend, id, terms, "[]").unwrap();
+    let info = crate::dictionaries::commit(&backend.root, id, terms, "[]").unwrap();
     assert_eq!(info["termCount"], 1);
-    let data = crate::dictionaries::data(&backend, id).unwrap();
+    let data = crate::dictionaries::data(&backend.root, id).unwrap();
     let terms: Value = serde_json::from_str(data["terms"].as_str().unwrap()).unwrap();
     assert_eq!(terms[0]["dictionaryId"], id);
     assert_eq!(terms[0]["dictionaryTitle"], "测试词典");
@@ -326,14 +330,14 @@ fn dictionary_import_is_atomic_compatible_and_excludes_archive_paths() {
         .exists());
     assert!(source.is_file());
     let reopened = Backend::load(backend.root.clone()).unwrap();
-    assert_eq!(crate::dictionaries::list(&reopened).unwrap().len(), 1);
+    assert_eq!(crate::dictionaries::list(&reopened.root).unwrap().len(), 1);
     assert_eq!(
-        crate::dictionaries::enabled(&backend, id, false).unwrap()["termCount"],
+        crate::dictionaries::enabled(&backend.root, id, false).unwrap()["termCount"],
         0
     );
-    assert!(crate::dictionaries::remove(&backend, "../library").is_err());
+    assert!(crate::dictionaries::remove(&backend.root, "../library").is_err());
     assert!(
-        crate::dictionaries::remove(&backend, id).unwrap()["dictionaries"]
+        crate::dictionaries::remove(&backend.root, id).unwrap()["dictionaries"]
             .as_array()
             .unwrap()
             .is_empty()
@@ -350,20 +354,20 @@ fn frequency_only_and_invalid_dictionaries_do_not_publish_partial_imports() {
             ("term_meta_bank_1.json", "[]"),
         ],
     );
-    let staged = crate::dictionaries::stage(&backend, &source).unwrap();
+    let staged = crate::dictionaries::stage(&backend.root, &source).unwrap();
     let id = staged["id"].as_str().unwrap();
-    let info = crate::dictionaries::commit(&backend, id, "[]", r#"[{"expression":"猫","reading":"","frequencies":[{"value":1,"display":null,"dictionary":"频率"}]}]"#).unwrap();
+    let info = crate::dictionaries::commit(&backend.root, id, "[]", r#"[{"expression":"猫","reading":"","frequencies":[{"value":1,"display":null,"dictionary":"频率"}]}]"#).unwrap();
     assert_eq!(info["termCount"], 0);
     assert_eq!(info["freqCount"], 1);
-    let unfinished = crate::dictionaries::stage(&backend, &source).unwrap();
+    let unfinished = crate::dictionaries::stage(&backend.root, &source).unwrap();
     let pending = backend.root.join("dictionaries/.imports");
     fs::write(pending.join("unrelated.txt"), "preserve").unwrap();
-    crate::dictionaries::clean_pending(&backend).unwrap();
+    crate::dictionaries::clean_pending(&backend.root).unwrap();
     assert!(!pending.join(unfinished["id"].as_str().unwrap()).exists());
     assert!(pending.join("unrelated.txt").is_file());
     dictionary_zip(&source, &[("index.json", "{}"), ("unrelated.json", "[]")]);
-    assert!(crate::dictionaries::stage(&backend, &source).is_err());
-    assert_eq!(crate::dictionaries::list(&backend).unwrap().len(), 1);
+    assert!(crate::dictionaries::stage(&backend.root, &source).is_err());
+    assert_eq!(crate::dictionaries::list(&backend.root).unwrap().len(), 1);
 }
 #[test]
 fn segments_validate_utf16_and_source_fingerprint_and_persist_existing_schema() {

@@ -54,6 +54,7 @@ import type { ExtensionProgress, ExtensionStatus, OcrRepository } from './extens
 import type { AppDefaults } from './defaults';
 import type { AppBuildInfo, AppUpdateResult } from './releases';
 import type { ImportQueueState } from './imports';
+import type { DictionaryImportQueueState, DictionaryImportReceipt } from './dictionary-imports';
 
 /** 所有 invoke 通道名。渲染进程与主进程都从这里取，禁止写字面量。 */
 export const IPC = {
@@ -103,6 +104,10 @@ export const IPC = {
   dictStatus: 'dict:status',
   dictImport: 'dict:import',
   dictImportDialog: 'dict:importDialog',
+  dictImportQueue: 'dict:importQueue',
+  dictCancelImport: 'dict:cancelImport',
+  dictDismissImport: 'dict:dismissImport',
+  dictReload: 'dict:reload',
   dictRemove: 'dict:remove',
   dictSetEnabled: 'dict:setEnabled',
   dictLookup: 'dict:lookup',
@@ -220,7 +225,7 @@ export interface AraleApi {
     openRelease(tag?: string): Promise<void>;
   };
   window: {
-    /** 返回应用沉浸状态；系统栏只改变覆盖关系，不改变阅读区尺寸。 */
+    /** macOS 等待原生全屏完成；其系统栏由系统管理，第二个参数仅用于其他平台。 */
     setImmersive(enabled: boolean, systemBarsVisible?: boolean): Promise<boolean>;
   };
   library: {
@@ -254,8 +259,12 @@ export interface AraleApi {
   };
   dict: {
     status(): Promise<DictionaryStatus>;
-    importPaths(zipPaths: string[]): Promise<DictionaryStatus>;
-    importViaDialog(): Promise<DictionaryStatus | null>;
+    importPaths(zipPaths: string[]): Promise<DictionaryImportReceipt>;
+    importViaDialog(): Promise<DictionaryImportReceipt | null>;
+    importQueue(): Promise<DictionaryImportQueueState>;
+    cancelImport(id: string): Promise<DictionaryImportQueueState>;
+    dismissImport(id: string): Promise<DictionaryImportQueueState>;
+    reload(): Promise<DictionaryStatus>;
     remove(dictId: string): Promise<DictionaryStatus>;
     setEnabled(dictId: string, enabled: boolean): Promise<DictionaryStatus>;
     lookup(text: string, charOffset?: number): Promise<LookupResult>;
@@ -412,8 +421,11 @@ export interface AraleApi {
 
 /** 主进程推给渲染进程的事件。 */
 export interface AraleEvents {
+  /** macOS 原生通知；requested 为 false 表示系统按钮、快捷键或失败恢复。 */
+  'window:fullscreenChanged': { fullscreen: boolean; transitioning: boolean; requested: boolean };
   /** 导入进度 / 结果播报。 */
   'sources:changed': ServerConnections;
+  'dict:importQueue': DictionaryImportQueueState;
   'sources:status': ServerPoll;
   /** Remote text loads independently of opening the reader. */
   'book:textLayer': { bookId: string; state: 'loading' | 'ready' | 'failed'; error?: string };

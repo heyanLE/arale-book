@@ -13,6 +13,7 @@ import { ReadingJournal } from './components/ReadingJournal';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExtensionProgress, ExtensionStatus, OcrRepository } from '@shared/extensions';
 import type { ImportQueueState } from '@shared/imports';
+import type { DictionaryImportQueueState } from '@shared/dictionary-imports';
 import type { LlmSettings, TranslationSettings } from '@shared/types';
 import { CURRENT_SEGMENT_ENGINE } from '@shared/types';
 import type { AppDefaults } from '@shared/defaults';
@@ -109,6 +110,8 @@ export function App(): JSX.Element {
   const [ocrQueue, setOcrQueue] = useState<OcrQueueState | null>(null);
   const [studyQueue, setStudyQueue] = useState<StudyTaskQueueState | null>(null);
   const [importQueue, setImportQueue] = useState<ImportQueueState | null>(null);
+  const [dictionaryImportQueue, setDictionaryImportQueue] = useState<DictionaryImportQueueState | null>(null);
+  const [taskDockOpenRequest, setTaskDockOpenRequest] = useState(0);
 
   /**
    * 扩展状态。
@@ -137,11 +140,26 @@ export function App(): JSX.Element {
   /** 沉浸、系统栏和批注工具独立；串行窗口操作避免快速点击时乱序。 */
   const immersiveActive = settings.autoHideChrome && view === 'reader';
   const [systemBarsVisible, setSystemBarsVisible] = useState(false);
+  const [fullscreenTransitioning, setFullscreenTransitioning] = useState(false);
+  const nativeFullscreen = useRef(false);
+  const immersiveRequest = useRef(0);
   const immersiveOperations = useRef(Promise.resolve<unknown>(undefined));
+  useIpcEvent('window:fullscreenChanged', state => {
+    nativeFullscreen.current = state.fullscreen;
+    setFullscreenTransitioning(state.transitioning);
+    // System Escape/green-button actions must not leave the reader in a stale mode.
+    // Requested exits (e.g. returning to the library) retain the reading preference.
+    if (!state.transitioning && !state.requested) updateSettings({ autoHideChrome: state.fullscreen });
+  });
 
   useEffect(() => {
-    immersiveOperations.current = immersiveOperations.current.then(() =>
-      call('切换沉浸窗口', () => api.window.setImmersive(immersiveActive, systemBarsVisible)));
+    const request = ++immersiveRequest.current;
+    immersiveOperations.current = immersiveOperations.current.then(async () => {
+      const result = await call('切换沉浸窗口', () => api.window.setImmersive(immersiveActive, systemBarsVisible));
+      if (result === null && request === immersiveRequest.current && navigator.userAgent.includes('Mac')) {
+        updateSettings({ autoHideChrome: nativeFullscreen.current });
+      }
+    });
     if (!immersiveActive) setSystemBarsVisible(false);
   }, [immersiveActive, systemBarsVisible]);
 
@@ -195,6 +213,7 @@ export function App(): JSX.Element {
 
   useIpcEvent('study:queue', (state) => setStudyQueue(state));
   useIpcEvent('library:importQueue', state => setImportQueue(state));
+  useIpcEvent('dict:importQueue', setDictionaryImportQueue);
   useIpcEvent('study:done', (task) => {
     setStatus(task.status === 'completed'
       ? `${task.kind === 'filter' ? 'AI 筛选' : '释义生成'}完成：《${task.title}》`
@@ -321,6 +340,7 @@ export function App(): JSX.Element {
     void api.ocr.queue().then(setOcrQueue).catch(() => undefined);
     void api.study.taskQueue().then(setStudyQueue).catch(() => undefined);
     void api.library.importQueue().then(setImportQueue).catch(() => undefined);
+    void api.dict.importQueue().then(setDictionaryImportQueue).catch(() => undefined);
   }, []);
 
   const loadExtensions = useCallback(async () => {
@@ -761,6 +781,7 @@ export function App(): JSX.Element {
               journalJump={journalJump}
               onOpenJournal={draft => setJournal({ bookId: open.book.id, draft })}
               systemBarsVisible={systemBarsVisible}
+              fullscreenTransitioning={fullscreenTransitioning}
               onSystemBarsChange={setSystemBarsVisible}
               onStatus={setStatus}
               ocrProgress={ocrProgress[open.book.id] ?? null}
@@ -781,6 +802,7 @@ export function App(): JSX.Element {
 
         {view === 'settings' && (
           <SettingsPanel
+            onShowTasks={() => setTaskDockOpenRequest(value => value + 1)}
             info={info.data}
             onStatus={setStatus}
             ocrCapability={ocrCapability}
@@ -854,6 +876,10 @@ export function App(): JSX.Element {
             onOpenBook={(bookId) => void openBook(bookId)}
             studyQueue={studyQueue}
             importQueue={importQueue}
+            dictionaryImportQueue={dictionaryImportQueue}
+            openRequest={taskDockOpenRequest}
+            onCancelDictionaryImport={id => void call('取消词典导入排队', () => api.dict.cancelImport(id))}
+            onDismissDictionaryImport={id => void call('清除词典导入结果', () => api.dict.dismissImport(id))}
             onCancelImport={id => void call('取消导入排队', () => api.library.cancelImport(id))}
             onDismissImport={id => void call('清除导入结果', () => api.library.dismissImport(id))}
             onCancelStudy={(id) => void call('取消 AI 任务', () => api.study.cancelTask(id))}

@@ -1,10 +1,9 @@
 //! Desktop integration. Only validated library directories reach the system shell.
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
+use std::sync::Mutex;
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem as Native, Submenu},
     Manager,
@@ -13,30 +12,26 @@ use tauri_plugin_dialog::DialogExt;
 
 #[derive(Default)]
 pub struct ImmersiveWindow {
-    enabled: AtomicBool,
-    restore: Mutex<Option<WindowRestore>>,
-}
-
-/// Refresh native mouse tracking after Cocoa style/frame transitions.
-pub fn refresh_pointer_tracking(window: &tauri::WebviewWindow) {
-    #[cfg(target_os = "macos")]
-    {
-        let target = window.clone();
-        let _ = window.run_on_main_thread(move || {
-            let Ok(pointer) = target.ns_window() else { return; };
-            let native = unsafe { &*pointer.cast::<objc2_app_kit::NSWindow>() };
-            native.setAcceptsMouseMovedEvents(true);
-            fn refresh(view: &objc2_app_kit::NSView) {
-                view.updateTrackingAreas();
-                for child in view.subviews().iter() { refresh(&child); }
-            }
-            if let Some(view) = native.contentView() { refresh(&view); }
-        });
-    }
     #[cfg(not(target_os = "macos"))]
-    let _ = window;
+    enabled: AtomicBool,
+    #[cfg(not(target_os = "macos"))]
+    restore: Mutex<Option<WindowRestore>>,
+    #[cfg(target_os = "macos")]
+    native: Mutex<macos_fullscreen::Controller>,
 }
 
+#[cfg(target_os = "macos")]
+mod macos_fullscreen;
+
+pub fn install_window_state(app: &tauri::AppHandle) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    macos_fullscreen::install(app)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
 struct WindowRestore {
     #[cfg(not(target_os = "macos"))]
     decorated: bool,
@@ -56,10 +51,14 @@ struct WindowRestore {
     shadow: bool,
     #[cfg(not(target_os = "macos"))]
     menu_visible: bool,
-    #[cfg(target_os = "macos")]
-    presentation: usize,
 }
 
+#[cfg(target_os = "macos")]
+pub fn set_immersive(app: &tauri::AppHandle, enabled: bool, _bars_visible: bool) -> Result<()> {
+    macos_fullscreen::set(app, enabled)
+}
+
+#[cfg(not(target_os = "macos"))]
 /// Geometry and shell presentation change on the UI thread as one operation.
 /// Called from the blocking IPC dispatcher, never from a native UI callback.
 pub fn set_immersive(app: &tauri::AppHandle, enabled: bool, bars_visible: bool) -> Result<()> {
@@ -71,6 +70,7 @@ pub fn set_immersive(app: &tauri::AppHandle, enabled: bool, bars_visible: bool) 
     receiver.recv().context("沉浸窗口操作中断")?
 }
 
+#[cfg(not(target_os = "macos"))]
 fn set_immersive_inner(app: &tauri::AppHandle, enabled: bool, bars_visible: bool) -> Result<()> {
     let window = app.get_webview_window("main").context("主窗口不存在")?;
     let mode = app.state::<ImmersiveWindow>();
@@ -108,11 +108,7 @@ fn set_immersive_inner(app: &tauri::AppHandle, enabled: bool, bars_visible: bool
                     .unwrap_or(true),
                 #[cfg(not(target_os = "macos"))]
                 menu_visible: window.is_menu_visible()?,
-                #[cfg(target_os = "macos")]
-                presentation: mac_presentation()?.presentationOptions().bits(),
             });
-            #[cfg(target_os = "macos")]
-            window.set_simple_fullscreen(true)?;
             #[cfg(not(target_os = "macos"))]
             {
                 let monitor = window.current_monitor()?.context("无法获取当前显示器")?;
@@ -135,23 +131,11 @@ fn set_immersive_inner(app: &tauri::AppHandle, enabled: bool, bars_visible: bool
         }
         #[cfg(windows)]
         windows_system_bars(&window, bars_visible)?;
-        #[cfg(target_os = "macos")]
-        {
-            use objc2_app_kit::NSApplicationPresentationOptions as Options;
-            let options = if bars_visible {
-                Options::from_bits_retain(restore.as_ref().unwrap().presentation)
-            } else {
-                Options::AutoHideDock | Options::AutoHideMenuBar
-            };
-            mac_presentation()?.setPresentationOptions(options);
-        }
         mode.enabled.store(true, Ordering::Relaxed);
     } else {
         if let Some(previous) = restore.as_ref() {
             #[cfg(windows)]
             windows_system_bars(&window, true)?;
-            #[cfg(target_os = "macos")]
-            window.set_simple_fullscreen(false)?;
             #[cfg(not(target_os = "macos"))]
             {
                 window.set_decorations(previous.decorated)?;
@@ -199,7 +183,6 @@ fn set_immersive_inner(app: &tauri::AppHandle, enabled: bool, bars_visible: bool
         *restore = None;
         mode.enabled.store(false, Ordering::Relaxed);
     }
-    refresh_pointer_tracking(&window);
     Ok(())
 }
 
@@ -249,12 +232,6 @@ fn windows_borderless(window: &tauri::WebviewWindow, monitor: &tauri::Monitor) -
         }
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn mac_presentation() -> Result<objc2::rc::Retained<objc2_app_kit::NSApplication>> {
-    let main = objc2::MainThreadMarker::new().context("菜单栏操作必须在主线程")?;
-    Ok(objc2_app_kit::NSApplication::sharedApplication(main))
 }
 
 #[cfg(windows)]
@@ -638,6 +615,7 @@ pub fn menu_action(app: &tauri::AppHandle, id: &str) -> Result<()> {
             crate::event(app, "shell:command", serde_json::json!({"command":id}))
         }
         "fullscreen" => {
+            #[cfg(not(target_os = "macos"))]
             if app
                 .state::<ImmersiveWindow>()
                 .enabled

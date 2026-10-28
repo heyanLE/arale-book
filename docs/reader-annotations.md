@@ -1,6 +1,6 @@
 # 漫画与图片批注图层
 
-核对日期：2026-10-13。当前版本支持漫画、图片文件夹及用漫画阅读器打开的图片型 EPUB；文本 EPUB 阅读器暂不支持。
+核对日期：2026-10-26。当前版本支持漫画、图片文件夹及用漫画阅读器打开的图片型 EPUB；文本 EPUB 阅读器暂不支持。
 
 ## 使用方式
 
@@ -12,7 +12,7 @@
 - 画笔和文字各复用同类型可写存储层，不为每条文字创建新层。原有 v1 文件、顺序、隐藏/锁定标志保留；当前不再提供全书图层改名/排序/锁定管理入口。隐藏和锁定的历史层仍按原状态保护。
 - 右键页图提供“画笔／添加文字／选择批注”。翻页、单双页或偏移变化先提交草稿及进行中的笔划，再保留已选工具，便于继续批注。离开阅读器提交草稿；重新进入默认阅读。选择对象可按 Delete/Backspace 删除，删除可撤销。Esc 从局部操作依次收起画笔菜单、取消文字草稿/对象选择、退出批注，再返回来源页。
 - “阅读”恢复 OCR 查词、划词与边缘翻页；批注编辑时停用 OCR 命中和边缘翻页，中键或空格加拖动仍可平移。双页各有独立手势与原图坐标，跨接缝的笔迹夹在起始页边界内。工具栏保留撤销/重做（每书最近 50 次）、显示/隐藏全部批注及保存状态；写失败可重试或确认后重读。
-- 沉浸右上角共用工具，另有系统栏、词卡夹和退出沉浸。工具/菜单正在使用或侧栏打开时保持可见，支持键盘焦点。系统栏独立开关，覆盖漫画而不改变阅读窗口尺寸；文字输入不切换全屏/最大化，退出沉浸恢复原窗口和系统状态。
+- 沉浸右上角共用工具，另有系统栏、词卡夹和退出沉浸。工具/菜单正在使用或侧栏打开时保持可见，支持键盘焦点。Windows 系统栏独立开关，macOS 通过原生全屏边缘唤出菜单栏／Dock；文字输入不切换全屏/最大化，退出沉浸恢复原窗口和系统状态。
 
 画笔粗细、文字字号和几何使用原图像素。SVG `viewBox` 与原图尺寸一致，显示时跟随图片缩放、平移、阅读方向及双页布局；每张图捕获自己的手势，跨接缝的笔迹夹在起始页边界内。批注无需 OCR 数据。
 
@@ -23,13 +23,13 @@
 | 平台 | 沉浸窗口 | 系统栏开关 | 退出恢复 |
 |---|---|---|---|
 | Windows | 当前显示器物理范围的普通无边框窗口；去掉标题、边框、Tao 阴影内边距和调整大小能力，Win32 `SetWindowPos` 精确覆盖整屏；不置为全局置顶 | 仅标记自己的 HWND：`ITaskbarList2::MarkFullscreenWindow` 与 `NonRudeHWND`，让 Explorer 决定任务栏在上或在下；不修改全局任务栏设置 | 保存/恢复原生窗口样式和 `WINDOWPLACEMENT`（包含最大化前位置），恢复原生菜单、阴影及可调整大小状态，清理系统栏标记 |
-| macOS | Tauri `set_simple_fullscreen`，当前 Space 内覆盖当前屏幕，避免进入原生全屏新 Space | 主线程设置 `NSApplication.presentationOptions`；隐藏用 `AutoHideDock | AutoHideMenuBar`，显示恢复进入前选项；窗口范围不随按钮改变 | Tauri 恢复原窗口样式、范围、移动能力及进入前 presentation options |
+| macOS | 系统原生全屏，进入独立 Space；由 AppKit 进入／退出完成通知同步状态 | 使用系统原生全屏的菜单栏和 Dock 边缘唤出方式，不提供应用内覆盖开关 | 系统恢复原窗口；系统按钮／Esc 退出同步阅读界面，不手工改样式或抢焦点 |
 
 Windows 的“显示系统栏”是恢复系统正常展示规则；若用户已设任务栏自动隐藏，仍保留该偏好。macOS 也保留 Dock/菜单栏原有自动隐藏设置；隐藏状态允许靠近屏幕边缘临时出现。切换其他应用不永久隐藏系统栏。应用“文件／编辑／视图”菜单和系统任务栏是两个不同对象：Windows 沉浸始终隐藏应用菜单，系统栏按钮只管理任务栏覆盖。Linux 暂用无边框整屏，未接入桌面环境的系统栏控制。
 
 窗口操作在原生 UI 主线程串行执行；前端串行发送最新状态，避免快速开关请求乱序。文字焦点和草稿不触发窗口 API。批注状态只有 `read / select / pen / eraser / text`；草稿与指针手势是工具内部临时状态，切换工具、翻页或退出阅读器提交，取消新草稿不落盘。工具选择、系统栏按钮、侧栏入口和退出沉浸各有明确职责。
 
-参考：[Microsoft 的全屏标记 API](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist2-markfullscreenwindow)、[NonRudeHWND 的系统判定行为](https://devblogs.microsoft.com/oldnewthing/20250522-00/?p=111211/)、[Apple 的应用展示选项](https://developer.apple.com/documentation/appkit/nsapplication/presentationoptions)。macOS 实现已按本地 Tauri/Tao/objc2 API 核对；本机没有 macOS 运行环境，不能视为运行验收。
+参考：[Microsoft 的全屏标记 API](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist2-markfullscreenwindow)、[NonRudeHWND 的系统判定行为](https://devblogs.microsoft.com/oldnewthing/20250522-00/?p=111211/)、[Apple 的应用展示选项](https://developer.apple.com/documentation/appkit/nsapplication/presentationoptions)。macOS 已于 2026-10-26 按用户选择改为原生全屏 Space；自动测试通过，隔离原生窗口的反复进出与文字／工具悬停经用户确认正常，工具自动收起与分割线残留也已修复并确认；实现与验证边界见 [原生沉浸修复](ui-ux-principles.md#macos-原生沉浸悬停2026-10-26)。
 
 ## 保存与异常
 

@@ -6,10 +6,21 @@ void (async () => {
     results.push({ name, ok: !!condition });
     if (!condition) throw new Error(name);
   };
-  const until = async (fn, name) => {
-    const end = Date.now() + 20000;
+  const until = async (fn, name, timeoutMs = 20000) => {
+    const end = Date.now() + timeoutMs;
     while (Date.now() < end) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); }
     throw new Error(`Timeout: ${name}`);
+  };
+  const importDictionaries = async paths => {
+    const receipt = await window.arale.dict.importPaths(paths);
+    let tasks = [];
+    await until(async () => {
+      const queue = await window.arale.dict.importQueue();
+      tasks = queue.recent.filter(task => receipt.taskIds.includes(task.id));
+      return tasks.length === receipt.taskIds.length;
+    }, 'dictionary task completion', 120000);
+    if (tasks.some(task => task.status !== 'completed')) throw new Error(tasks.map(task => task.error || task.progress.message).join('; '));
+    return window.arale.dict.status();
   };
   const finish = () => window.__TAURI__.core.invoke('arale_smoke_finish', { results, evidence });
   try {
@@ -126,7 +137,7 @@ void (async () => {
     check('real Rust CBZ import', imported.length === 1 && imported[0].ok && imported[0].format === 'comic');
     const id = imported[0].bookId;
     const dataRoot = info.dir.replace(/[\\/]library$/, '');
-    const dictionary = await window.arale.dict.importPaths([`${dataRoot}/smoke-dictionary.zip`, `${dataRoot}/smoke-frequency.zip`]);
+    const dictionary = await importDictionaries([`${dataRoot}/smoke-dictionary.zip`, `${dataRoot}/smoke-frequency.zip`]);
     check('worker imports wrapped term and frequency-only dictionaries', dictionary.loaded && dictionary.dictionaries.length === 2 && dictionary.termCount === 3);
     check('shared deinflection returns dictionary form and structured glossary', (await window.arale.dict.lookup('食べました')).results[0]?.term.expression === '食べる');
     check('reading lookup and frequency attachment', (await window.arale.dict.lookup('ネコ')).results[0]?.frequencies[0]?.value === 12);
@@ -143,7 +154,7 @@ void (async () => {
     const frequencyDict = dictionary.dictionaries.find(dict => dict.title === 'Smoke 频率');
     await window.arale.dict.remove(frequencyDict.id);
     check('dictionary removal rebuilds frequency index', (await window.arale.dict.lookup('猫')).results[0]?.frequencies.length === 0);
-    check('invalid ZIP rejected and successful dictionary retained', await window.arale.dict.importPaths([`${dataRoot}/smoke-invalid.zip`]).then(() => false, async () => (await window.arale.dict.lookup('猫')).results.length > 0));
+    check('invalid ZIP rejected and successful dictionary retained', await importDictionaries([`${dataRoot}/smoke-invalid.zip`]).then(() => false, async () => (await window.arale.dict.lookup('猫')).results.length > 0));
     let segmentDone;
     const segmentSubscription = window.arale.on('segment:done', value => { if (value.bookId === id) segmentDone = value; });
     await window.arale.segment.start(id, { force: true });
@@ -164,7 +175,7 @@ void (async () => {
     const book = (await window.arale.library.open(id)).book;
     const realDictionaryPaths = await window.__TAURI__.core.invoke('arale_smoke_fixture', { kind: 'dictionaries' });
     const loadStart = performance.now();
-    const realDictionaryStatus = await window.arale.dict.importPaths(realDictionaryPaths);
+    const realDictionaryStatus = await importDictionaries(realDictionaryPaths);
     check('three real repository dictionaries import through worker', realDictionaryStatus.dictionaries.length === 4 && realDictionaryStatus.termCount > 100);
     evidence.realDictionaryImportMs = Math.round(performance.now() - loadStart);
     evidence.lookups = [];

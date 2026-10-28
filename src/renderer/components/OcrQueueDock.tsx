@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { OcrProgress, OcrProviderId, OcrQueueState, StudyTaskEntry, StudyTaskQueueState } from '@shared/types';
 import type { ImportQueueState, ImportTaskEntry } from '@shared/imports';
+import type { DictionaryImportQueueState, DictionaryImportTask } from '@shared/dictionary-imports';
 
 export interface OcrQueueDockProps {
   queue: OcrQueueState | null;
@@ -24,6 +25,10 @@ export interface OcrQueueDockProps {
   onCancel: (bookId: string) => void;
   studyQueue?: StudyTaskQueueState | null;
   importQueue?: ImportQueueState | null;
+  dictionaryImportQueue?: DictionaryImportQueueState | null;
+  onCancelDictionaryImport?: (id: string) => void;
+  onDismissDictionaryImport?: (id: string) => void;
+  openRequest?: number;
   onCancelImport?: (id: string) => void;
   onDismissImport?: (id: string) => void;
   onCancelStudy?: (id: string) => void;
@@ -44,10 +49,14 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
   const studyPending = studyQueue?.pending ?? [];
   const studyRecent = studyQueue?.recent ?? [];
   const importActive = importQueue?.active;
+  const dictionaryActive = props.dictionaryImportQueue?.active;
+  const dictionaryPending = props.dictionaryImportQueue?.pending ?? [];
+  const dictionaryRecent = props.dictionaryImportQueue?.recent ?? [];
   const importPending = importQueue?.pending ?? [], importRecent = importQueue?.recent ?? [];
-  const waiting = pending.filter(entry=>!entry.running).length + studyPending.length + importPending.length;
-  const running = pending.filter(entry=>entry.running).length + (active ? 1 : 0) + (studyActive ? 1 : 0) + (importActive ? 1 : 0);
-  const total = running + waiting + studyRecent.length + importRecent.length;
+  const waiting = pending.filter(entry=>!entry.running).length + studyPending.length + importPending.length + dictionaryPending.length;
+  const running = pending.filter(entry=>entry.running).length + (active ? 1 : 0) + (studyActive ? 1 : 0) + (importActive ? 1 : 0) + (dictionaryActive ? 1 : 0);
+  const total = running + waiting + studyRecent.length + importRecent.length + dictionaryRecent.length;
+  useEffect(() => { if (props.openRequest) setOpen(true); }, [props.openRequest]);
 
   // 点外面收起弹层。队列**跑空**时也收起：任务都没了，留一个空弹层没有意义。
   useEffect(() => {
@@ -103,6 +112,8 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
           </div>
 
           <div className="ocr-dock-list">
+            {dictionaryActive && <DictionaryTaskRow task={dictionaryActive} />}
+            {dictionaryPending.map((task, index) => <DictionaryTaskRow key={task.id} task={task} position={index + 1} onCancel={props.onCancelDictionaryImport} />)}
             {importActive && <ImportTaskRow task={importActive} />}
             {importPending.map((task, index) => <ImportTaskRow key={task.id} task={task} position={index + 1} onCancel={onCancelImport} />)}
             {active && (
@@ -173,6 +184,7 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
             {studyPending.map((task, index) => <StudyTaskRow key={task.id} task={task} position={index + 1} onCancel={onCancelStudy} onOpen={openStudy} />)}
             {studyRecent.map((task) => <StudyTaskRow key={task.id} task={task} onDismiss={onDismissStudy} onOpen={openStudy} />)}
             {importRecent.map(task => <ImportTaskRow key={task.id} task={task} onDismiss={onDismissImport} onOpen={onOpenBook ? id => { setOpen(false); onOpenBook(id); } : undefined} />)}
+            {dictionaryRecent.map(task => <DictionaryTaskRow key={task.id} task={task} onDismiss={props.onDismissDictionaryImport} />)}
           </div>
         </div>
       )}
@@ -186,14 +198,15 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
       >
         <span className="ocr-dock-spinner" aria-hidden="true" />
         <span className="ocr-dock-label" role="status" aria-live="polite">
-          {importActive ? '导入中' : active ? '识别中' : studyActive ? 'AI 任务中' : waiting > 0 ? '排队中' : '任务结果'}
-          {pages > 0 && active && !importActive ? (
+          {dictionaryActive ? '词典导入' : importActive ? '导入中' : active ? '识别中' : studyActive ? 'AI 任务中' : waiting > 0 ? '排队中' : '任务结果'}
+          {dictionaryActive && <span className="ocr-dock-progress cell-ellipsis" title={dictionaryActive.title}>{dictionaryActive.progress.message}</span>}
+          {pages > 0 && active && !importActive && !dictionaryActive ? (
             <span className="mono ocr-dock-progress">
               {Math.min(done + (activeProgress ? 1 : 0), pages)}/{pages}
             </span>
           ) : null}
-          {!active && !importActive && studyActive && studyActive.total > 0 && <span className="mono ocr-dock-progress">{studyActive.done}/{studyActive.total}</span>}
-          {importActive && <span className="ocr-dock-progress cell-ellipsis" title={importActive.title}>{importActive.progress.message}</span>}
+          {!active && !importActive && !dictionaryActive && studyActive && studyActive.total > 0 && <span className="mono ocr-dock-progress">{studyActive.done}/{studyActive.total}</span>}
+          {importActive && !dictionaryActive && <span className="ocr-dock-progress cell-ellipsis" title={importActive.title}>{importActive.progress.message}</span>}
           {total > 1 ? (
             <span className="ocr-dock-pending mono">+{total - 1}</span>
           ) : null}
@@ -204,6 +217,27 @@ export function OcrQueueDock(props: OcrQueueDockProps): JSX.Element | null {
       </button>
     </div>
   );
+}
+
+function DictionaryTaskRow({ task, position, onCancel, onDismiss }: {
+  task: DictionaryImportTask; position?: number; onCancel?: (id: string) => void; onDismiss?: (id: string) => void;
+}): JSX.Element {
+  const label = task.status === 'queued' ? `排队 ${position ?? ''}` : task.status === 'running' ? '导入中'
+    : task.status === 'completed' ? '已完成' : task.status === 'partial' ? '索引待加载' : task.status === 'cancelled' ? '已取消' : '导入失败';
+  const { done, total, message, unit } = task.progress;
+  const unitLabel = unit === 'files' ? '个数据文件' : unit === 'entries' ? '条' : '部词典';
+  return <div className={`ocr-queue-item import-task-item${task.status === 'running' ? ' is-active' : ''}`} data-testid="dictionary-import-task" data-status={task.status}>
+    <div className="ocr-queue-row"><span className="ocr-queue-badge">词典 · {label}</span><span className="ocr-queue-title cell-ellipsis" title={task.source}>{task.title}</span></div>
+    <div className="ocr-queue-meta" role="status">{message}{task.status === 'running' && total > 0 ? ` · ${done}/${total} ${unitLabel}` : ''}</div>
+    {task.status === 'running' && <div className={`ocr-queue-bar${total === 0 ? ' is-indeterminate' : ''}`} aria-hidden="true"><div className="ocr-queue-bar-fill" style={{ width: total > 0 ? `${Math.min(100, Math.round(done / total * 100))}%` : '35%' }} /></div>}
+    {task.result && <p className="ocr-queue-meta">已保存 {task.result.dictionary.termCount} 个词条、{task.result.dictionary.freqCount} 项词频</p>}
+    {task.error && <p className="ocr-queue-meta" role="alert">{task.error}</p>}
+    {task.result?.warnings.map((warning, index) => <p className="ocr-queue-meta" key={index}>{warning}</p>)}
+    <div className="ocr-queue-actions">
+      {task.status === 'queued' && onCancel && <button type="button" className="btn btn-sm" onClick={() => onCancel(task.id)}>取消排队</button>}
+      {task.finishedAt && onDismiss && <button type="button" className="btn btn-sm" onClick={() => onDismiss(task.id)}>清除</button>}
+    </div>
+  </div>;
 }
 
 function ImportTaskRow({ task, position, onCancel, onDismiss, onOpen }: {

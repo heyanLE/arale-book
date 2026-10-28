@@ -1,22 +1,22 @@
 //! Rust owns files; the shared browser-safe TypeScript parser owns Yomitan semantics.
-use crate::storage::{self, Backend};
+use crate::storage;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::{fs, io::Read, path::Path};
 
-fn root(backend: &Backend) -> std::path::PathBuf {
-    backend.root.join("dictionaries")
+fn root(data_root: &Path) -> std::path::PathBuf {
+    data_root.join("dictionaries")
 }
-fn directory(backend: &Backend, id: &str, pending: bool) -> Result<std::path::PathBuf> {
+fn directory(data_root: &Path, id: &str, pending: bool) -> Result<std::path::PathBuf> {
     let base = if pending {
-        root(backend).join(".imports")
+        root(data_root).join(".imports")
     } else {
-        root(backend)
+        root(data_root)
     };
     storage::inside(&base, storage::valid_id(id)?)
 }
-pub fn list(backend: &Backend) -> Result<Vec<Value>> {
-    let base = root(backend);
+pub fn list(data_root: &Path) -> Result<Vec<Value>> {
+    let base = root(data_root);
     fs::create_dir_all(&base)?;
     let mut out = vec![];
     for entry in fs::read_dir(&base)? {
@@ -35,19 +35,19 @@ pub fn list(backend: &Backend) -> Result<Vec<Value>> {
     }
     Ok(out)
 }
-pub fn status(backend: &Backend) -> Result<Value> {
-    let dictionaries = list(backend)?;
+pub fn status(data_root: &Path) -> Result<Value> {
+    let dictionaries = list(data_root)?;
     let count: u64 = dictionaries
         .iter()
         .filter(|d| d["enabled"] != false)
         .map(|d| d["termCount"].as_u64().unwrap_or(0))
         .sum();
     Ok(
-        json!({"dir":root(backend).to_string_lossy(),"dictionaries":dictionaries,"termCount":count,"loaded":false}),
+        json!({"dir":root(data_root).to_string_lossy(),"dictionaries":dictionaries,"termCount":count,"loaded":false}),
     )
 }
-pub fn clean_pending(backend: &Backend) -> Result<()> {
-    let base = root(backend).join(".imports");
+pub fn clean_pending(data_root: &Path) -> Result<()> {
+    let base = root(data_root).join(".imports");
     if !base.exists() {
         return Ok(());
     }
@@ -69,7 +69,11 @@ fn bank(name: &str) -> bool {
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
     })
 }
-pub fn stage(backend: &Backend, source: &Path) -> Result<Value> {
+#[cfg(test)]
+pub fn stage(data_root: &Path, source: &Path) -> Result<Value> {
+    stage_with_progress(data_root, source, |_| {})
+}
+pub fn stage_with_progress(data_root: &Path, source: &Path, report: impl Fn(Value)) -> Result<Value> {
     let file = fs::File::open(source).context("无法打开词典 ZIP")?;
     let mut archive = zip::ZipArchive::new(file).context("不是可读取的 ZIP")?;
     let names: Vec<String> = archive.file_names().map(String::from).collect();
@@ -91,7 +95,7 @@ pub fn stage(backend: &Backend, source: &Path) -> Result<Value> {
     if banks.is_empty() {
         bail!("不是 Yomitan 词典：缺少 term_bank / term_meta_bank");
     }
-    let base = root(backend).join(".imports");
+    let base = root(data_root).join(".imports");
     fs::create_dir_all(&base)?;
     let id = format!("dict_{}", uuid::Uuid::new_v4().simple());
     let target = base.join(&id);
@@ -126,25 +130,27 @@ pub fn stage(backend: &Backend, source: &Path) -> Result<Value> {
                     .to_string_lossy()
                     .into_owned()
             });
-        for name in &banks {
+        report(json!({"stage":"extracting","message":"正在解压词典数据…","done":0,"total":banks.len(),"unit":"files","title":title}));
+        for (index, name) in banks.iter().enumerate() {
             fs::write(target.join(name), extract(&format!("{prefix}{name}"))?)?;
+            report(json!({"stage":"extracting","message":"正在解压词典数据…","done":index+1,"total":banks.len(),"unit":"files","title":title}));
         }
         let manifest = json!({"id":id,"title":title,"format":parsed["format"],"banks":banks});
         storage::write(&target.join("manifest.json"), &manifest)?;
         Ok(manifest)
     })();
     if result.is_err() {
-        discard(backend, &id)?;
+        discard(data_root, &id)?;
     }
     result
 }
-pub fn discard(backend: &Backend, id: &str) -> Result<()> {
-    let target = directory(backend, id, true)?;
+pub fn discard(data_root: &Path, id: &str) -> Result<()> {
+    let target = directory(data_root, id, true)?;
     fs::remove_dir_all(target)?;
     Ok(())
 }
-pub fn raw_bank(backend: &Backend, id: &str, name: &str) -> Result<Value> {
-    let dir = directory(backend, id, true)?;
+pub fn raw_bank(data_root: &Path, id: &str, name: &str) -> Result<Value> {
+    let dir = directory(data_root, id, true)?;
     let manifest = storage::read(&dir.join("manifest.json"), Value::Null)?;
     if !bank(name)
         || !manifest["banks"]
@@ -155,8 +161,8 @@ pub fn raw_bank(backend: &Backend, id: &str, name: &str) -> Result<Value> {
     }
     Ok(json!(fs::read_to_string(storage::inside(&dir, name)?)?))
 }
-pub fn commit(backend: &Backend, id: &str, terms: &str, frequencies: &str) -> Result<Value> {
-    let pending = directory(backend, id, true)?;
+pub fn commit(data_root: &Path, id: &str, terms: &str, frequencies: &str) -> Result<Value> {
+    let pending = directory(data_root, id, true)?;
     let manifest = storage::read(&pending.join("manifest.json"), Value::Null)?;
     let mut terms: Value = serde_json::from_str(terms)?;
     let frequencies: Value = serde_json::from_str(frequencies)?;
@@ -182,34 +188,34 @@ pub fn commit(backend: &Backend, id: &str, terms: &str, frequencies: &str) -> Re
     }
     fs::remove_file(pending.join("manifest.json"))?;
     storage::write(&pending.join("meta.json"), &info)?;
-    fs::rename(&pending, root(backend).join(id))?;
+    fs::rename(&pending, root(data_root).join(id))?;
     Ok(info)
 }
-pub fn data(backend: &Backend, id: &str) -> Result<Value> {
-    if !list(backend)?.iter().any(|d| d["id"] == id) {
+pub fn data(data_root: &Path, id: &str) -> Result<Value> {
+    if !list(data_root)?.iter().any(|d| d["id"] == id) {
         bail!("词典不存在");
     }
-    let dir = directory(backend, id, false)?;
+    let dir = directory(data_root, id, false)?;
     let read = |name| -> Result<String> {
         let path = storage::inside(&dir, name)?;
         Ok(fs::read_to_string(path)?)
     };
     Ok(json!({"terms":read("terms.json")?,"frequencies":read("freq.json")?}))
 }
-pub fn remove(backend: &Backend, id: &str) -> Result<Value> {
-    if !list(backend)?.iter().any(|d| d["id"] == id) {
+pub fn remove(data_root: &Path, id: &str) -> Result<Value> {
+    if !list(data_root)?.iter().any(|d| d["id"] == id) {
         bail!("词典不存在");
     }
-    fs::remove_dir_all(directory(backend, id, false)?)?;
-    status(backend)
+    fs::remove_dir_all(directory(data_root, id, false)?)?;
+    status(data_root)
 }
-pub fn enabled(backend: &Backend, id: &str, enabled: bool) -> Result<Value> {
-    if !list(backend)?.iter().any(|d| d["id"] == id) {
+pub fn enabled(data_root: &Path, id: &str, enabled: bool) -> Result<Value> {
+    if !list(data_root)?.iter().any(|d| d["id"] == id) {
         bail!("词典不存在");
     }
-    let dir = directory(backend, id, false)?;
+    let dir = directory(data_root, id, false)?;
     let mut info = storage::read(&dir.join("meta.json"), Value::Null)?;
     info["enabled"] = json!(enabled);
     storage::write(&dir.join("meta.json"), &info)?;
-    status(backend)
+    status(data_root)
 }

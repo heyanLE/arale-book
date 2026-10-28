@@ -60,6 +60,7 @@ if (window.__TAURI__ && !window.arale) {
   bridgeReady = Promise.all([
     tauri.event.listen<{ channel: string; payload: unknown }>(EVENT_CHANNEL, event => {
       if (event.payload.channel === 'library:importProgress') void dictionary.invoke('library:importProgress', event.payload.payload).catch(error => console.error('[arale] import progress', error));
+      else if (event.payload.channel === 'dict:importProgress') void dictionary.invoke('dict:importProgress', event.payload.payload).catch(error => console.error('[arale] dictionary import progress', error));
       else if (event.payload.channel === 'ocr:convert') void services.invoke('ocr:finalize').catch(error => console.error('[arale] OCR conversion', error));
       else if (event.payload.channel === 'ocr:queue') sources.localQueue(event.payload.payload as import('@shared/types').OcrQueueState);
       else deliver(event.payload.channel, event.payload.payload);
